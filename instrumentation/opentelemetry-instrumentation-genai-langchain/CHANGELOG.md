@@ -15,6 +15,63 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Capture prompt template name - `gen_ai.prompt.name` and variables -
+  `gen_ai.prompt.variable.<key>` on chat
+  ([#730](https://github.com/open-telemetry/opentelemetry-python-genai/pull/730))
+
+### Changed
+
+- Require `langchain >= 0.3.22`. Context propagation across LangGraph nodes
+  requires LangGraph 0.3.18 or later.
+  ([#818](https://github.com/open-telemetry/opentelemetry-python-genai/pull/818))
+  ([#884](https://github.com/open-telemetry/opentelemetry-python-genai/pull/884))
+
+### Fixed
+
+- langchain: record `message.tool_calls` on the output message even when the
+  provider spells the stop reason differently (e.g. ChatOllama `done_reason`)
+  instead of dropping them
+  ([#771](https://github.com/open-telemetry/opentelemetry-python-genai/pull/771))
+- Set `gen_ai.conversation.id` on agents created without a name, and pass the
+  conversation id to child spans through the OTel context.
+  ([#798](https://github.com/open-telemetry/opentelemetry-python-genai/pull/798))
+- Fix context propagation to nested calls across tasks and threads, and
+  finalize chat spans when async calls are cancelled or interrupted.
+  ([#818](https://github.com/open-telemetry/opentelemetry-python-genai/pull/818))
+- Record the tool call result when a tool is invoked without a tool call id.
+  Previously the result was dropped because LangChain passes the raw return
+  value instead of a `ToolMessage`, e.g. `weather.invoke({"city": "Paris"})`
+  returning `{"temp": 20}` recorded no result, now `{"temp":20}`.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+- Stop logging `AttributeError` warnings when LangGraph dispatches interrupt
+  and resume callbacks.
+  ([#835](https://github.com/open-telemetry/opentelemetry-python-genai/pull/835))
+- Record assistant messages given as role/content dicts or `(role, content)`
+  tuples in workflow and agent `gen_ai.output.messages` instead of dropping
+  them, and keep convertible messages when another entry in the list cannot be
+  converted.
+  ([#881](https://github.com/open-telemetry/opentelemetry-python-genai/pull/881))
+- Reduce message conversion when capturing workflow and agent
+  `gen_ai.output.messages`.
+  ([#909](https://github.com/open-telemetry/opentelemetry-python-genai/pull/909))
+- Stop cached callback managers from recording new runs after uninstrumentation
+  and refresh inactive handlers on reinstrumentation, including direct callback
+  dispatch.
+  ([#924](https://github.com/open-telemetry/opentelemetry-python-genai/pull/924))
+- Record Anthropic cache-write input tokens reported by langchain-anthropic as
+  per-TTL `ephemeral_*_input_tokens` breakdowns.
+  ([#937](https://github.com/open-telemetry/opentelemetry-python-genai/pull/937))
+- Read finish reasons from response metadata when generation info does not
+  provide a finish reason
+  ([#944](https://github.com/open-telemetry/opentelemetry-python-genai/pull/944))
+- Skip input message processing for unnamed agents when content capture is
+  disabled.
+  ([#945](https://github.com/open-telemetry/opentelemetry-python-genai/pull/945))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

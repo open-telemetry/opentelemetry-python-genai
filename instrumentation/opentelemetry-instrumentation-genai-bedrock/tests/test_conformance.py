@@ -22,6 +22,7 @@ from .conformance.embedding import EmbeddingScenario
 from .conformance.inference import InferenceScenario
 from .conformance.inference_streaming import InferenceStreamingScenario
 from .conformance.invoke_agent import InvokeAgentScenario
+from .conformance.invoke_inline_agent import InvokeInlineAgentScenario
 from .conformance.invoke_model import InvokeModelScenario
 from .conformance.invoke_model_streaming import InvokeModelStreamingScenario
 from .conformance.retrieve import RetrieveScenario
@@ -42,6 +43,7 @@ from .conformance.tool_calling import ToolCallingScenario
         InvokeModelStreamingScenario(),
         EmbeddingScenario(),
         InvokeAgentScenario(),
+        InvokeInlineAgentScenario(),
         RetrieveScenario(),
         RetrieveAndGenerateScenario(),
         RetrieveAndGenerateStreamingScenario(),

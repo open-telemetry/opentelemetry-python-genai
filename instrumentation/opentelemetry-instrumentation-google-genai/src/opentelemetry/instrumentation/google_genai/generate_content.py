@@ -10,6 +10,8 @@ from typing import Any
 from google.genai.models import AsyncModels, Models
 from google.genai.models import t as transformers
 from google.genai.types import (
+    Candidate,
+    Content,
     ContentListUnion,
     ContentListUnionDict,
     GenerateContentConfig,
@@ -453,9 +455,10 @@ def _apply_response_attributes(
         invocation.thinking_tokens = thinking_tokens
         # candidates_token_count excludes thoughts; output_tokens must be the
         # full output count including reasoning tokens.
-        invocation.output_tokens = (
-            invocation.output_tokens or 0
-        ) + thinking_tokens
+        candidates_tokens = (
+            output_tokens if isinstance(output_tokens, int) else 0
+        )
+        invocation.output_tokens = candidates_tokens + thinking_tokens
     if response.usage_metadata is not None:
         invocation.set_input_tokens(
             _modality_tokens(response, "usage_metadata.prompt_tokens_details")
@@ -586,6 +589,41 @@ def _create_instrumented_generate_content(
     return instrumented_generate_content
 
 
+def _merge_streamed_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Merge the per-chunk candidates of a stream into one candidate per index.
+
+    Each streamed chunk carries a fragment of the response; adjacent text
+    fragments of the same kind are joined so a streamed response is reported
+    like the equivalent non-streamed one.
+    """
+    merged: dict[int, Candidate] = {}
+    for candidate in candidates:
+        index = candidate.index or 0
+        target = merged.get(index)
+        if target is None:
+            target = merged[index] = Candidate(index=candidate.index)
+        if candidate.finish_reason is not None:
+            target.finish_reason = candidate.finish_reason
+        if not candidate.content:
+            continue
+        if target.content is None:
+            target.content = Content(parts=[])
+        if candidate.content.role:
+            target.content.role = candidate.content.role
+        for part in candidate.content.parts or []:
+            last = target.content.parts[-1] if target.content.parts else None
+            if (
+                last is not None
+                and part.text is not None
+                and last.text is not None
+                and bool(part.thought) == bool(last.thought)
+            ):
+                last.text += part.text
+            else:
+                target.content.parts.append(part.model_copy())
+    return [merged[index] for index in sorted(merged)]
+
+
 class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
     def __init__(
         self,
@@ -614,7 +652,7 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
             and self._self_candidates
         ):
             self._self_invocation.output_messages = to_output_messages(
-                candidates=self._self_candidates
+                candidates=_merge_streamed_candidates(self._self_candidates)
             )
         self._self_invocation.stop()
 
@@ -654,7 +692,7 @@ class AsyncGenerateContentStreamWrapper(
             and self._self_candidates
         ):
             self._self_invocation.output_messages = to_output_messages(
-                candidates=self._self_candidates
+                candidates=_merge_streamed_candidates(self._self_candidates)
             )
         self._self_invocation.stop()
 
@@ -716,7 +754,7 @@ def _create_instrumented_generate_content_stream(
                             )
                         )[0]
                     )
-            return GenerateContentStreamWrapper(
+            stream = GenerateContentStreamWrapper(
                 wrapped(
                     model=model,
                     contents=contents,
@@ -727,6 +765,8 @@ def _create_instrumented_generate_content_stream(
                 invocation,
                 telemetry_handler,
             )
+            invocation.suspend()
+            return stream
 
         return _execute(*args, **kwargs)
 
@@ -871,7 +911,7 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                             )
                         )[0]
                     )
-            return AsyncGenerateContentStreamWrapper(
+            stream = AsyncGenerateContentStreamWrapper(
                 await wrapped(
                     model=model,
                     contents=contents,
@@ -882,6 +922,8 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 invocation,
                 telemetry_handler,
             )
+            invocation.suspend()
+            return stream
 
         return await _execute(*args, **kwargs)
 
@@ -897,7 +939,6 @@ def instrument_generate_content(
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
 ) -> object:
-    os.environ["OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT"] = "true"
     snapshot = _MethodsSnapshot()
     wrapped = wrap_function_wrapper(
         "google.genai.models",

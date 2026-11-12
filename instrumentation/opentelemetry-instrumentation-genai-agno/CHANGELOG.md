@@ -15,6 +15,22 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Add instrumentation for Agent, Team, and Workflow continue_run and
+  acontinue_run methods.
+  ([#731](https://github.com/open-telemetry/opentelemetry-python-genai/pull/731))
+- Capture conversation ID at span start
+  ([#868](https://github.com/open-telemetry/opentelemetry-python-genai/pull/868))
+
+### Changed
+
+- Record tool call arguments and dict results as compact JSON. Previously they
+  included spaces, e.g. `{"a": 3, "b": 4}`, now `{"a":3,"b":4}`.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

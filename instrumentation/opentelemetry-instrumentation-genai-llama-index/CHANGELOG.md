@@ -15,6 +15,22 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Changed
+
+- Record non-string tool call results as JSON strings, and convert objects
+  through `model_dump` or `__dict__`. Previously primitives were recorded as-is
+  and objects through `str()`, e.g. a result of `8` was recorded as `8`, now
+  `"8"`.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+
+### Fixed
+
+- Preserve span handler state on LlamaIndexInstrumentor singleton
+  re-instantiation.
+  ([#869](https://github.com/open-telemetry/opentelemetry-python-genai/pull/869))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

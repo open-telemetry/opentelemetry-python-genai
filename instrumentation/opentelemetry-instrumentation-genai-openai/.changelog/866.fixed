@@ -1,1 +1,0 @@
-Stop request extraction from raising on chat `messages=None` or a Responses input item whose `type` is not a string.

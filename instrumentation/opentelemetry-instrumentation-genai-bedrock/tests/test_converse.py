@@ -27,7 +27,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.types import GenericPart, TextPart
+from opentelemetry.util.genai.types import TextPart
 
 
 @pytest.mark.vcr
@@ -390,7 +390,8 @@ def test_extract_converse_response_no_content(tracer_provider) -> None:
         )
         assert not invocation.output_messages
         assert invocation.finish_reasons == ["stop"]
-        assert invocation.input_tokens == 5
+        # inputTokens (5) excludes the cached tokens: 5 + 3 read + 7 written
+        assert invocation.input_tokens == 15
         assert invocation.output_tokens == 2
         assert invocation.cache_read_input_tokens == 3
         assert invocation.cache_creation_input_tokens == 7
@@ -460,9 +461,7 @@ def test_extract_content_block_reasoning() -> None:
     part2 = extract_content_block(
         {"reasoningContent": {"redactedContent": b"redacted_bytes"}}
     )
-    assert part2 is not None
-    assert part2.type == "reasoning"
-    assert getattr(part2, "content") == ""
+    assert part2 is None
 
 
 def test_extract_content_block_document() -> None:
@@ -514,7 +513,7 @@ def test_extract_converse_response_reasoning(tracer_provider) -> None:
     assert getattr(out_msg.parts[1], "content") == "The answer is 42."
 
 
-def test_extract_content_block_generic_parts() -> None:
+def test_extract_content_block_unmapped_blocks_dropped() -> None:
     for key in (
         "video",
         "audio",
@@ -525,9 +524,7 @@ def test_extract_content_block_generic_parts() -> None:
         "toolAddition",
         "toolRemoval",
     ):
-        part = extract_content_block({key: {"foo": "bar"}})
-        assert part is not None
-        assert part.type == key
+        assert extract_content_block({key: {"foo": "bar"}}) is None
 
 
 def test_extract_content_block_anthropic_blocks() -> None:
@@ -664,7 +661,7 @@ def test_extract_converse_request_system_instruction(tracer_provider) -> None:
         ]
 
 
-def test_extract_converse_request_system_instruction_generic(
+def test_extract_converse_request_system_instruction_drops_non_text(
     tracer_provider,
 ) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
@@ -682,6 +679,4 @@ def test_extract_converse_request_system_instruction_generic(
 
         assert invocation.system_instruction == [
             TextPart(content="Be concise"),
-            GenericPart(type="guardContent"),
-            GenericPart(type="cachePoint"),
         ]

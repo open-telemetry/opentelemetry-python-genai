@@ -131,6 +131,23 @@ class _ResponseStream(httpx.SyncByteStream, httpx.AsyncByteStream):
             yield chunk
 
 
+def _portkey_needs_response_envelope() -> bool:
+    """portkey-ai 1.x parses non-streaming HTTP bodies into a GenericResponse
+    pydantic model that requires ``success``/``data``/``warning`` fields;
+    portkey-ai 2.x switched to parsing the OpenAI-shaped body directly via
+    ``cast_to``. Wrap the mocked body in the 1.x envelope only on that major
+    version so the oldest-env and latest-env both stay green."""
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return _pkg_version("portkey-ai").split(".", 1)[0] == "1"
+    except Exception:
+        return False
+
+
+_PORTKEY_NEEDS_ENVELOPE = _portkey_needs_response_envelope()
+
+
 def _mock_http(
     monkeypatch: pytest.MonkeyPatch,
     usages: list[dict[str, object] | None],
@@ -153,26 +170,39 @@ def _mock_http(
             "usage": usages[0],
         }
         if not json.loads(request.content).get("stream"):
+            if _PORTKEY_NEEDS_ENVELOPE:
+                # portkey-ai 1.x parses non-streaming prompt completions into a
+                # GenericResponse model that requires ``success``/``data``/
+                # ``warning``. The model has ``extra="allow"``, so spread the
+                # OpenAI-shaped completion fields at top level (for ``.id`` /
+                # ``.usage`` access) while satisfying the required envelope.
+                body = {"success": True, "data": body, "warning": None, **body}
             return httpx.Response(200, json=body, request=request)
-        chunks = [
-            (
-                "data: "
-                + json.dumps(
+
+        def _sse_payload(usage):
+            payload = {
+                **body,
+                "object": "chat.completion.chunk",
+                "choices": [
                     {
-                        **body,
-                        "object": "chat.completion.chunk",
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": "reply"},
-                                "finish_reason": None,
-                            }
-                        ],
-                        "usage": usage,
+                        "index": 0,
+                        "delta": {"content": "reply"},
+                        "finish_reason": None,
                     }
-                )
-                + "\n\n"
-            ).encode()
+                ],
+                "usage": usage,
+            }
+            if _PORTKEY_NEEDS_ENVELOPE:
+                payload = {
+                    "success": True,
+                    "data": payload,
+                    "warning": None,
+                    **payload,
+                }
+            return payload
+
+        chunks = [
+            ("data: " + json.dumps(_sse_payload(usage)) + "\n\n").encode()
             for usage in usages
         ]
         return httpx.Response(

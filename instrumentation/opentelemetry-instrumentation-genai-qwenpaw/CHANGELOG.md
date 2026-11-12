@@ -14,3 +14,11 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 -->
 
 <!-- changelog start -->
+
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Initial QwenPaw instrumentation: trace `AgentRunner.query_handler` turns as
+  `invoke_agent` spans
+  ([#311](https://github.com/open-telemetry/opentelemetry-python-genai/pull/311))

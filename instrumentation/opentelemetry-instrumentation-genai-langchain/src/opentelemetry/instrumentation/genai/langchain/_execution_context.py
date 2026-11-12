@@ -14,6 +14,7 @@ from inspect import iscoroutinefunction, signature
 from typing import Any, cast
 from uuid import UUID
 
+from langchain_core.callbacks import BaseCallbackManager
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.context import attach, detach, get_current
@@ -54,10 +55,12 @@ class _ExecutionContext:
         invocations: _InvocationManager,
         on_tool_error: Callable[..., None],
         on_retriever_error: Callable[..., None],
+        refresh_handlers: Callable[[BaseCallbackManager], None],
     ) -> None:
         self._invocations = invocations
         self._on_tool_error = on_tool_error
         self._on_retriever_error = on_retriever_error
+        self._refresh_handlers = refresh_handlers
         self._patched: list[tuple[Any, str]] = []
 
     @contextmanager
@@ -327,7 +330,9 @@ class _ExecutionContext:
                     "langchain_core.callbacks.manager",
                     class_name,
                     method,
-                    lambda _original, wrapper=wrapper: wrapper,
+                    lambda _original, wrapper=wrapper: partial(
+                        wrapper, refresh_handlers=self._refresh_handlers
+                    ),
                 )
 
         for module_name, class_name, methods in (

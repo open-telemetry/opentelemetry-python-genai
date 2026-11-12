@@ -15,6 +15,31 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Add instrumentation for ``dspy.LM``.
+  ([#683](https://github.com/open-telemetry/opentelemetry-python-genai/pull/683))
+- Extend DSPy retrieval instrumentation to cover `dspy.ColBERTv2`,
+  `dspy.Embeddings`, `EmbeddingsWithScores`, and `dspy.Retrieve` subclasses
+  overriding `forward()`.
+  ([#780](https://github.com/open-telemetry/opentelemetry-python-genai/pull/780))
+
+### Changed
+
+- Record non-string tool call results as JSON strings, and convert objects
+  through `model_dump` or `__dict__`. Previously primitives were recorded as-is
+  and objects through `str()`, e.g. a result of `7` was recorded as `7`, now
+  `"7"`.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+
+### Fixed
+
+- Record `gen_ai.response.finish_reasons` on `dspy.ReAct` and `dspy.ReActV2`
+  agent spans regardless of content capture.
+  ([#885](https://github.com/open-telemetry/opentelemetry-python-genai/pull/885))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

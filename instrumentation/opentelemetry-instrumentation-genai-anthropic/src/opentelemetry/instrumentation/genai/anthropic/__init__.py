@@ -77,6 +77,37 @@ def _is_parse_supported() -> bool:
         return False
 
 
+def _is_beta_messages_supported() -> bool:
+    """Check if beta Messages classes are available on the anthropic SDK."""
+    try:
+        from anthropic.resources.beta.messages import (  # pylint: disable=import-outside-toplevel
+            AsyncMessages,
+            Messages,
+        )
+
+        return (
+            hasattr(Messages, "create")
+            and hasattr(AsyncMessages, "create")
+            and hasattr(Messages, "stream")
+            and hasattr(AsyncMessages, "stream")
+        )
+    except (ImportError, AttributeError):
+        return False
+
+
+def _is_beta_parse_supported() -> bool:
+    """Check if parse() is available on the beta Messages classes."""
+    try:
+        from anthropic.resources.beta.messages import (  # pylint: disable=import-outside-toplevel
+            AsyncMessages,
+            Messages,
+        )
+
+        return hasattr(Messages, "parse") and hasattr(AsyncMessages, "parse")
+    except (ImportError, AttributeError):
+        return False
+
+
 class AnthropicInstrumentor(BaseInstrumentor):
     """An instrumentor for the Anthropic Python SDK.
 
@@ -90,6 +121,8 @@ class AnthropicInstrumentor(BaseInstrumentor):
         self._logger = None
         self._meter = None
         self._parse_supported = _is_parse_supported()
+        self._beta_messages_supported = _is_beta_messages_supported()
+        self._beta_parse_supported = _is_beta_parse_supported()
 
     # pylint: disable=no-self-use
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -108,6 +141,10 @@ class AnthropicInstrumentor(BaseInstrumentor):
         tracer_provider = kwargs.get("tracer_provider")
         meter_provider = kwargs.get("meter_provider")
         logger_provider = kwargs.get("logger_provider")
+
+        self._parse_supported = _is_parse_supported()
+        self._beta_messages_supported = _is_beta_messages_supported()
+        self._beta_parse_supported = _is_beta_parse_supported()
 
         handler = TelemetryHandler(
             tracer_provider=tracer_provider,
@@ -150,6 +187,39 @@ class AnthropicInstrumentor(BaseInstrumentor):
             async_response_context_manager_exit,
         )
 
+        if self._beta_messages_supported:
+            wrap_function_wrapper(
+                "anthropic.resources.beta.messages",
+                "Messages.create",
+                messages_create(handler),
+            )
+            wrap_function_wrapper(
+                "anthropic.resources.beta.messages",
+                "AsyncMessages.create",
+                async_messages_create(handler),
+            )
+            wrap_function_wrapper(
+                "anthropic.resources.beta.messages",
+                "Messages.stream",
+                messages_stream(handler),
+            )
+            wrap_function_wrapper(
+                "anthropic.resources.beta.messages",
+                "AsyncMessages.stream",
+                async_messages_stream(handler),
+            )
+            if self._beta_parse_supported:
+                wrap_function_wrapper(
+                    "anthropic.resources.beta.messages",
+                    "Messages.parse",
+                    messages_create(handler),
+                )
+                wrap_function_wrapper(
+                    "anthropic.resources.beta.messages",
+                    "AsyncMessages.parse",
+                    async_messages_create(handler),
+                )
+
         # parse() wraps create() internally in the Anthropic SDK and returns a
         # parsed message whose telemetry-relevant fields match Message, so the
         # existing create() wrappers handle it correctly. It was added in a
@@ -171,37 +241,36 @@ class AnthropicInstrumentor(BaseInstrumentor):
 
         This removes all patches applied during instrumentation.
         """
-        import anthropic  # pylint: disable=import-outside-toplevel
-
-        unwrap(
-            anthropic.resources.messages.Messages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
-            "create",
-        )
-        unwrap(
-            anthropic.resources.messages.AsyncMessages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
-            "create",
-        )
-        unwrap(
-            anthropic.resources.messages.Messages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
-            "stream",
-        )
-        unwrap(
-            anthropic.resources.messages.AsyncMessages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
-            "stream",
-        )
         from anthropic._response import (  # pylint: disable=import-outside-toplevel
             AsyncResponseContextManager,
             ResponseContextManager,
         )
+        from anthropic.resources.messages import (  # pylint: disable=import-outside-toplevel
+            AsyncMessages,
+            Messages,
+        )
 
+        unwrap(Messages, "create")
+        unwrap(AsyncMessages, "create")
+        unwrap(Messages, "stream")
+        unwrap(AsyncMessages, "stream")
         unwrap(ResponseContextManager, "__exit__")
         unwrap(AsyncResponseContextManager, "__aexit__")
+        if self._beta_messages_supported:
+            from anthropic.resources.beta.messages import (  # pylint: disable=import-outside-toplevel
+                AsyncMessages as AsyncBetaMessages,
+            )
+            from anthropic.resources.beta.messages import (
+                Messages as BetaMessages,
+            )
+
+            unwrap(BetaMessages, "create")
+            unwrap(AsyncBetaMessages, "create")
+            unwrap(BetaMessages, "stream")
+            unwrap(AsyncBetaMessages, "stream")
+            if self._beta_parse_supported:
+                unwrap(BetaMessages, "parse")
+                unwrap(AsyncBetaMessages, "parse")
         if self._parse_supported:
-            unwrap(
-                anthropic.resources.messages.Messages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
-                "parse",
-            )
-            unwrap(
-                anthropic.resources.messages.AsyncMessages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
-                "parse",
-            )
+            unwrap(Messages, "parse")
+            unwrap(AsyncMessages, "parse")

@@ -216,7 +216,7 @@ async def test_sdk_consumes_and_captures_request_iterators(
                 "source": {**source, "data": "Y29udGVudA=="},
             }
         ]
-        expected_parts = [{"type": "blob"}]
+        expected_parts = []
     system = [{"type": "text", "text": "Be brief"}]
     tools = [{"name": "weather", "input_schema": {"type": "object"}}]
     messages = [{"role": "user", "content": iter(blocks)}]

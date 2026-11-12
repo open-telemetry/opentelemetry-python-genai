@@ -1,0 +1,212 @@
+interactions:
+- request:
+    body: |-
+      {
+        "context_management": [
+          {
+            "type": "compaction",
+            "compact_threshold": 1000
+          }
+        ],
+        "input": "Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Remember this sentence for later. Now say this is a test.",
+        "instructions": "You are a helpful assistant.",
+        "model": "gpt-5.4",
+        "stream": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '13784'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - AsyncOpenAI/Python 3.16.2
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.16.2
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.12
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_0e9538323135b16a006ad0118994b887d29b810a535314ed54",
+          "object": "response",
+          "created_at": 1792020873,
+          "status": "completed",
+          "access_programs": null,
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1792020877,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": "You are a helpful assistant.",
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-5.4-2026-03-05",
+          "moderation": null,
+          "output": [
+            {
+              "id": "cmp_0e9538323135b16a006ad0118b40f887d2a811194c55868974",
+              "type": "compaction",
+              "encrypted_content": "gAAAAABq0BGLyQg1NY1Wq7kH-WhQTlUYcAWH2IHpK_zcPWhCWIYZPPcRYAjscHgxaGxNPcVEJ2zpgH450tG020mk0dnF_VJsRh5Zjmp2_frxEJ---q6LqGT86FeVVDBt88mQKjc4pE3snv3QMY5hVjIbchl9axIXF7QmgL-zolK2LeajAXlQHdgMTlQ9HHxmEdjAdt0X_fd5459HJcfKKO7YHRxiPbkm10f_6uLH1x2m0fBSIDXFSn-QVRKf2W2d7nQIsK1gM1NwT5LzwN_KbpyK0fVkM6qBaRc3Akz622Avwo-1Gz7eK04z6mSegt3OXbnZT3mjYi5yGkLE9nZOuNpDPXqJjQ0Mfxisj1aMH19mXO4BYUJpDpX0-BubNEZHDdz6vNFGR1t8dUlj4rYKBGyV6oeECpZTNv4PYfxs8cHvB5ix3CNasJYNsAobmZAWzQPKhncmbLjdyt9Lfh0lK6xyV6AMhShaHXojcnO98KKkcsrjUkOrQSqxE-4GZ8h1aDZeW6AONE9gyLltZ4nkmw18mYzMylNm36dj6sw1epP_EltmDKYQLKFHYw19U1y0w831EgFxxhJ3weaNYvGwQtflsdp97yHzeIX0YY8Jm8fjsZCmuBSS8s-XmqXYBJWZhNQ_5Lra8OAAcs9XWNndGcMoFiqOhWjPDwAgA3TDh-Y771yWDORNwRcR6QSwNFzZyTTotC0nyDhGWxWaFNkc-FZeo6JJ_3ymSEI5VEECdDNDflx1ADc2mkL7hLr7sqlMiP6B04ThL2pUekJj67JkMPO4fvShYVqa0GNldVx1HwlE19kYoV3fN_FxV3hDFVceGzUDKkYeEiyYRSSCQvg7n6wb_O43zved_fBaTj7-v-OnPxQM7MvI-Hz-fVrgAIUnnovo-tEXsETZQpr24UJfO_-3KGXHdKAKOGE3lITJZK6HOa80RK_an-sZ6agDawEGW0wV-jIcAD56LMJmHl3C05s6nncjRWhE-JLJ-hlV7afjXPYMum1yTbuCSDrdrZgSusUSfCaNxztDO6zi7qYeQrGCK_DIVRvb-llIHNweZ7t8ncylrCMQw9GqDFpI6w6YPxn7zNBNKUkVVWgupyRBIvWGXzKM13uzTHNUi5qZU3AVe3c6aA7k2I0kNfASJsAlymzewcZTmOnYWss8o9kawVp2X8zG0qUrg0e7ERMds12u_wa5ooGH6rX5hvperuN0XtIpPXOUkO2nh5tsMdoWcLVRhs9SUp00hGbk2ZOGaRsy0UihF5pADlWShMGJomVDjOowgX_DfdgIHz8u6jrpyBZJrZ29rzyKi0hqFsVbSjAhPhhzIA-zjosrSvSS6AG6J2WVPNVxiiHDVP6eEUixLE4TDfbTWFtJp0uX8WuVqfRyFsiKf8LCyCWW4Y9-UTzf4wpJBib47wSr-33tzsZticoF6nmiSzhEfW6natENLU6A9TbzEUG1qReP9a7M1XQTN5oX8SNKQwn6foHs_6VKLOppHgBnUw2b_pntrVDofpISRmV47c2RJgN1AxHXLgL0aR8WT1yfebx_6N2qaKmdBgNzeb0OUQv2GOXLxJtRom35KwW1Ih2I9EiZYRFsfhkQGr04KJ0ZhJNez25gCu1bE-amNlubYoU0tmDkoZig6IKX99brBPe1ou8_xYbt-pEmuLccdZ9XEBA157IhOoT4TPDPS8o6VrnJPMrJqClijph07eIADctJQ2yv_14jFM-pv9jr27g6kUTuLApJD4gsmZiL-21TzaFZlT0J9u-0g0mC_4vdWpNq9HDzUrpdsBYxeoZfFmvj3zGId8n_yctWfeuuAIjdxJNSklv3YLiu1N0LtynRVwytZK6wLsWGG_NI9kigQDP14TulmEdx6waKTFRsF3zTHkdKKR0f-vZPjLy8s82rmhtYhdgwMAntpDIwonEJcXzFNsTm94_jv0gmieJDTOPyq5qEhL_naZH1X5NbqJoiKLuDKbxFW5qS6pAnuA-MQINnoV7LYUcsR-ZPtGGKkqZ9jgEE0FogtV_d668g02yIJDpt883thFw7HE8ezGZSilyhCL0uws4LeSQwfDyIZeN1RXfRZ9nPrkDqI_m47F0yzHU5j6l3yYh1z_H2ou12nbimS7x0pDm0YOUT41m3K7E31ES2nlQ_Y162GztKoi4KrXNB9X2c3veGT2niWu1kCz-x8xzryiLgCSELJThSKWZOwoEDPR0vwm5QODUDrHccYEGHgE_5zHUF4mWcrI-qBTvxIj0WPeLS9-YrYhMEchD_fCt6NoUHyufSSQgKs2ZefME0AIGWRJu7P4r4bv8gfL5v8QSU0vs1q1pZ20m6etRuSwb8C7SJefY2y1tQkK6bfDn-5Y4_LvBhLZg1g1FViJYruyJ6gEJBI5QQ-5LAr-rN-dNxl-1KV0VOvl8LBYOivKoJUdJPXgsO5uF2AwTmwFmFTU3NnG_LbCo-rxKWKfzmbmg3Ycz8-tJ7BzXjlidALs68L9epIAUuRKQhHkSDVDX71kKeB6ybsTO5-nW18-eESC7Iaa5R-AAm6uhbsU7tWeW09M0WVF4MWg1JmQpXojGDHdYuaw-BcXsTIDSN-aCy8-pMyGA_wbnSXa0HTVOKTQyAi2iSo_vPSqhE1sji4tx2jhEEX-IIFydfUhdx_hU7hlLc4yDZzkviyiRlkMdo-St5EvP6BM_5iIrETh0UD8zBF8VemFg6nRmW6SBT9gBOj5I7zOlqAGDwC-Lgg4XUGqpIpI-1zLOhgNDJ0Yt36x_E3vzUuBQBGkVqqnaCbmS2dKzsDySUjAa3yVQHzCQL8d5UwH81c5tFBig-wu2mzk5-riV7"
+            },
+            {
+              "id": "msg_0e9538323135b16a006ad0118bae9c87d2806c9f3346390bac",
+              "type": "message",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "This is a test."
+                }
+              ],
+              "phase": "final_answer",
+              "role": "assistant"
+            },
+            {
+              "id": "cmp_0e9538323135b16a006ad0118bb60c87d28bf5708cd04f3cf1",
+              "type": "compaction",
+              "encrypted_content": "gAAAAABq0BGMDsM4S_k3C6JNUkUOFoGgs2XFiiPRPfssSMtF9BFERRb9vpw_NihOoxfFjzSzbyNtM8RVDLr-gncsOK6TsA8Kgytrk_4uLEhpppn2EIHp3bBOKI0gRLZ7Z9prc54-mRaHfOcLnCnACiVzbe5TjfqnYdDMBfYPCa6cGRlas4WDHk11ubEphkwbWeuoHGCV8KlXoW7IMJlvgyCBYDtDstv0Ha1kol5ngJAZ933M9ss2VA8xWQB6mUQdBHtTu9VaIN42-UC2DEiiZ4RTn-0FFfnf9w_bnFoLYOjo5Ms__G_DOEy_Flhn0rAk4NYbIoRCFKGxRaV13iujVIIv56IRTuDlt801Os-9_p95BOVKSLzIz30ztVMzGhVbMUCiwqbbdVfS8ERGVwaPL1ZBb4pkkyspoekOdYsbOa9stORz3zRrqQWBippbFHoN0ysDXzeI9i6v7iDRci4OmcYGA59Lo8GjPdvHy2IFF_nsgu1GXiIr2Bqar--zxRBiA1Lh2XxfZSErJMM2uel0popN7TlO5qWKzh9safRv_Y0kRPDq0aXzytksYNFoRUmrz4vcUAv30vABfFZM39UsforCxTzeyBahiozmvZ9XfOmqWZE-Pp_g3b_NWsYtEP2LrZIqrf0jkf0wTJv8x-PLQb1iwFB8v7jBkcPgIseegAU7DkkV6FfA0iG_futTJWRuEMN6y9Fp4RTCV4UxzncOWxXNc1TOgboL-uu4mrFLrM39Gul3GDcP3VoJMTMco8T1McfCMcWjRRweDeax14ffBeV-QecrFQQqqZROjJbnBeO9VyKetPPu3v6WY2yORh_BzO9zDWDtgQHNJ0d5FGe8QH7BnTqjab6gNri7-ShGRmdtpE78i9kF8_XMlffE_HSTw-rZEn9zJaQ1UQ09rJsTRRJ91J9F1au5xvavmWEvnO4j8C-LLOwI8x5jK5hqISrKyDhURNz9IoXVu4wViqh2rVRDRJZmVslp2vaM0PAU6cSTSvK7aKoEFghZPcpD6Nt6Q02XUtXgoHVZekW3uS3knzPeU6LxesArCef2UalT-OYvcg0TP4YFOyvQg-4dfm1lXV22t83Wrc1QmGwS83DGemXkWHiZgkIaXOAtxeRMpQ6qqSqDlO2RY8akpNbyvDygv3oIOGUhGT109vKcdMtTHSwTGOMQz6fN9keqwqLGtZXqkbFnCtlH--5zEWwiV1dNW2vE3wYiY3MTBwTVxDLxwpeKzw9KaMtk1NvIErnnOT2hMMFvdnJYpmpTPyM1z_DoPNl6JvDVYVjm2GV3WpUkZe9yeABs2iLrLt4IDjWvmo95OCClQNSQonH1891sZ0EFRyAMGW4b1xBpTamzyg3V10mp29_XYqCCca5ve43X4jMg8z0hP_vuBPVGsCd67ESL2yk4GPxczPFa5dKYLpnPQ_TnbNxVMDngK9CJMY0ya0lERxo5J-rMVM9ork2nZeN3m-EJMf9dJFAVbTy2J_43mIkxih5WAxZH3o2p0uHgNJvN3lzu17oIxZJoZtDmSy7kR0a7fFO7bm4sL1QBsuuJlYNu2SpdtYWCrH9f13xmRsR6uKwrcAO2E0NPFaxA323gIHNANVAUNH4_Y94yrlVCgmI0XglH3NGKOseHbwOIw5cVRGYskQnQyMfHT4RBVB-wPSPv8cROvg5tE0d-zLkBZlh6hDjeyGDxQNhqsjHDWciwSrDcOVkf7Bnmuph94LxEnEuO94coO2We0nsPV8vCS-qKhWyDe8T7WlJELrcWhRbzP69yMK2wsxpKMXJNim19Sqhn-PkS9sdfbvBduPMo32FA2iNke0p_Zjh6EBwr84YhAKDp88Ch4wzqM-Xv7440m5W8Q_nQZl2KshhOlA_EcAQRL73kMu9mXOIS9qtICg5L1MATT0ypuquhJ1qBXEHtO1HjUsAudCAXrOWw-QmHTsgERkhNIczTiiDA7cbZSe7mPFVQWQp9hwYqx4v7Dnfyr3sJqQ0jW20sylPbA8jjRO4F43S6UZw3YeWXgd0Fn3b8FePZ_6s0x0gQOSpUYgcqikr6p33jum4H4X0sQsEGgRFu3iQnad7WyimFfasG0xN6QwganeyTFVBc5j-YxnlvkyOhN-kskI9RB06uyZjW7AAq9mcle2SHjRYiexr9eqV5QXU1q30kGOyVdW6R8wZCSTyvgB4h_5sZ0CQ5hRJTsQ-RkmU09iDClc_u2u6dP0xqghawwdA4qgjAAMpX89nxo6tHVXDyR9z8LuzlfqtKBdY_a5ngfpgNFWDIq1DW0_NsD-c9oQL0UkDTwH4srEa885GtvAoY9PzBjTfuPl8l3-LE3JK0KQZng4sc0atwYFmO8i8ivRnom44CZx0NMDEaZvadOXytul1nnZG40P_-cM5A2fG5wKKlmJZyb5BI1DXO58w-jNXbpiBZThecopi3JtOQRjHJsGtLPXoWEGCddfrCC6lVC3psj0-cKnwjpcAN0GxHoRDRM94yns3RBpGWMH3yBdmNVrJvWJg57pNuQ6e4zqd4VlezEwQCB1IzlSUsnQ_Ax8zfFsBPq_H5bYfpLJfqu2PAtLiincdm3kF5hUJNmCTzfmjPIYH8sglBo-qZzmPJlby7Do6gCp41X9dZrqaxlam7NDEwqhFQd6gCmeb8YM0t2yu2o6a6xnJH_CChsgEf1UYnBIomytl2sbK1eNupPAQn1iCVOtPs-ViskCH9_3eBBZAd-DAFyw775P5nxocFu4-z0K3ZCpmYuRQo0piGHtRHGgrvSxM9ZZT9FalfTslzrZmTWdIZUHBt9gvJ__LX7hhmnpNgPpQueLj4XSiVClfLIZRz6HCg5za8wvUBKNR_LrIHu5h5hCjp_d8oI43ivfajhQULv12qDQd1_fYtTls-o00Q2MtxJNz2u9br1z4OT95pUELbk3GWOSzNEZ_HCyJ5hDmMvgflZhOL0LVSq8d9yP9NRxHaTmYPBwrC1a3324sqmgnWEyh_AAjEcSa1_3Rab4KI8wmBhUEkgLnc7M2IqalgOSBTzJPXVGazofF82SgpPP54zgqJlFQmK324kgyie2Crt6UQH7s7oTSrUZG0Wfyh-JCzf9SVuf0ZDv5EJFOrJ6_weoc6vJvNFuH1ZNUJNH8USRLxbknC7OMyCnrcnfy8k4SmZhu_uEqCvQjuYGw0T0qqPOkoQnhVbo7eQTQMOOwitynStcgyaJ72fXnkBh0ZqYjVhJ07xu6Xey8IQyXHg1I3EpN98SjBjnQrC4DKNiqfsCBbcboNcnzRHV746tB5c_mnHJ1UF2Wk4V-ZMNL7zNFybDf4RYiiFO4T3l1pz2fXW4TjejkCcGmbDqDJ4QkJAIbVmTuYvnsIrW7LO5plcdjGw_p327CHoBLCVDNlB7j5z8di8WO1xWhMZF2jrvJfEMgCeCju7PsyCBAKCdWJzpgS7gR0t26r-haXBFnvXEec86zd17uzuxXSdle8vNJIGnLUPRTGVNYenfoVKfShUi0Cs4RPaZwGtduim82NwrQOYAserZDlFMLyaKk4nj_ug7-eS_WPaEyHy5W9T3LILu3au18YbuyGBPr9Q6mUIp0mOZhMRtDFSueor9doOXFYkLoaZdKSMIJT9MQWdkpZTrczdQfWeA-sfhvleK7ZcdI9ZJMEMwL25LZQFQ_T9wB_s8q3YECaAZMEQ4iYvVEw4b3VNJWgDmN2t81TiqX8n2PuCkaG70462QzlmjNjKMfAZ20e3de5XpRAZOu2B17sju07v0hR8IoU6f-qdsDmNHcIaZN0th2sEFZEmWxoVANkkzVAtVrb6JuEBg25kr1uPkHy-NpMJyqUNh8M3nrVRHHgATWY-54HJm7TmKQJxCi0rFduT9EE3nM_BxAH3F6kTR3OSiJpicjSQ3Q6aibioo6lP6Q1hdW-3uPE7dYDKq4P3oxlmqK6BfDYua1E9HxqRER366_WOc8mbzt8yiOv8o0bAWR8QfT-N1Zbz2WEsGKV2XER0GnOqAHuxXYucgMK-cGhT_XKZ_7MQ9dOFwCSDb1ZzDd5wOkZ7n7XT2oOsM9hnhrGcdrLBb-VXA1swKHcedtdNAGM2HL_hMKAOmLdRH0KhT-6539iYbO4MlEoy3f7F-Jwk1qHfcf1J7f5PQquvA5LRwGmjDWzaLnTQBq22QfDOAm-DRfMimgaNdKtpTFgbrifobvsUSR18Rt2OpcxeYA8XSOtK_MRVtsjWHKY3_UXp3SPQYCyhvAc4OHIQoVJm9W6_Hl2J-QS0-5L9lwLbzgPgxyHxjQPqGIGw3YqeKECRJUBe8C3_2CLxDp8O6QrUq5UN-pDB7lp9fTGD8QZa4DVUZOL2LhGfB4S6C4nYWBsTJeYYsV5ZrUNZS-hG6gDlteNPHry78BFTsJn-q6DspgTeNAhBQ5qB-M5jldDAjceVxJ4YRnhE3aDtE6oriu5CocK-uFL80pef9QlmuUueuchV8uRjkC8NPwaLRDYpNltb46B_kcuk0fqdEJafCGw"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": "24h",
+          "reasoning": {
+            "context": "current_turn",
+            "effort": "none",
+            "mode": "standard",
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          },
+          "tools": [],
+          "top_logprobs": 0,
+          "top_p": 0.98,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 2495,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 152,
+            "output_tokens_details": {
+              "reasoning_tokens": 143
+            },
+            "total_tokens": 2647
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a4aa653a6f836837-EWR
+      connection:
+      - keep-alive
+      content-length:
+      - '9705'
+      content-type:
+      - application/json
+      date:
+      - Wed, 14 Oct 2026 23:34:37 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '3564'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '1000000'
+      x-ratelimit-remaining-requests:
+      - '4997'
+      x-ratelimit-remaining-tokens:
+      - '1000000'
+      x-ratelimit-reset-requests:
+      - 36ms
+      x-ratelimit-reset-tokens:
+      - 0s
+      x-request-id:
+      - req_61d7b8553d734c70bbb5920a3043c7c4
+    status:
+      code: 200
+      message: OK
+version: 1

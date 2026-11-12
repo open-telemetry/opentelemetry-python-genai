@@ -6,15 +6,19 @@
 
 import inspect
 import json
+from collections import UserList
 from unittest.mock import patch
 
 import pytest
 from qwen_agent.agent import Agent
 from qwen_agent.agents import Assistant
 from qwen_agent.llm import base as qwen_llm_base
-from qwen_agent.llm.schema import FunctionCall, Message
+from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
 from qwen_agent.tools.base import BaseTool, register_tool
 
+from opentelemetry.instrumentation.genai.qwen_agent.utils import (
+    convert_to_input_messages,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -395,3 +399,166 @@ def test_nested_agent_runs_produce_nested_spans(
     assert len(child_spans) == 1
     assert child_spans[0].parent is not None
     assert child_spans[0].parent.span_id == parent_spans[0].context.span_id
+
+
+def test_convert_to_input_messages_handles_tuples():
+    """convert_to_input_messages accepts tuples of messages and tuple content items."""
+    messages = (
+        Message(
+            role="user",
+            content=(ContentItem(text="Hello"), ContentItem(text="world")),
+        ),
+        Message(
+            role="assistant",
+            content="",
+            function_call=FunctionCall(
+                name="get_weather", arguments='{"city": "Paris"}'
+            ),
+        ),
+        Message(
+            role="function",
+            name="get_weather",
+            content="Sunny, 20C",
+            extra={"function_id": "call_1"},
+        ),
+        {
+            "role": "user",
+            "content": "Final note",
+        },
+    )
+    result = convert_to_input_messages(messages)
+    assert len(result) == 4
+    assert result[0].role == "user"
+    assert len(result[0].parts) == 1
+    assert result[0].parts[0].content == "Hello\nworld"
+    assert result[1].role == "assistant"
+    assert result[1].parts[0].name == "get_weather"
+    assert result[1].parts[0].arguments == {"city": "Paris"}
+    assert result[2].role == "function"
+    assert result[2].parts[0].response == "Sunny, 20C"
+    assert result[3].role == "user"
+    assert result[3].parts[0].content == "Final note"
+
+
+def test_agent_run_with_tuple_messages(span_exporter, instrument_with_content):
+    """Agent.run() handles messages and content provided as tuples."""
+    agent = _StubAgent.create(name="TupleAgentBot", llm=_StubLLM())
+
+    input_messages = (
+        {
+            "role": "user",
+            "content": (
+                {"text": "Hello"},
+                {"text": "from tuple"},
+            ),
+        },
+    )
+    response_messages = [
+        Message(role="assistant", content="Answer from tuple"),
+    ]
+
+    def fake_run(messages, **kwargs):
+        yield response_messages
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        list(agent.run(input_messages))
+
+    agent_spans = _spans_named(span_exporter, "invoke_agent TupleAgentBot")
+    assert len(agent_spans) == 1
+    attrs = dict(agent_spans[0].attributes or {})
+
+    input_data = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    assert len(input_data) == 1
+    assert input_data[0]["role"] == "user"
+    assert input_data[0]["parts"] == [
+        {"content": "Hello\nfrom tuple", "type": "text"}
+    ]
+
+    output_data = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    assert len(output_data) == 1
+    assert output_data[0]["role"] == "assistant"
+    assert output_data[0]["parts"] == [
+        {"content": "Answer from tuple", "type": "text"}
+    ]
+
+
+def test_convert_to_input_messages_handles_raw_dict_tuple_content():
+    """convert_to_input_messages extracts text from raw dictionary content items in a tuple."""
+    messages = (
+        {
+            "role": "user",
+            "content": ({"text": "Hello"}, {"text": "raw dict world"}),
+        },
+        Message(role="user", content=({"text": "Second question"},)),
+    )
+    result = convert_to_input_messages(messages)
+    assert len(result) == 2
+    assert result[0].role == "user"
+    assert result[0].parts[0].content == "Hello\nraw dict world"
+    assert result[1].role == "user"
+    assert result[1].parts[0].content == "Second question"
+
+
+def test_convert_to_input_messages_handles_user_list():
+    """convert_to_input_messages handles general Sequence implementations like UserList."""
+    input_msgs = UserList(
+        [
+            {
+                "role": "user",
+                "content": UserList(
+                    [{"text": "Hello"}, {"text": "from UserList"}]
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": "Response text",
+            },
+        ]
+    )
+    converted_input = convert_to_input_messages(input_msgs)
+    assert len(converted_input) == 2
+    assert converted_input[0].role == "user"
+    assert converted_input[0].parts[0].content == "Hello\nfrom UserList"
+    assert converted_input[1].role == "assistant"
+    assert converted_input[1].parts[0].content == "Response text"
+
+
+def test_agent_run_with_user_list_messages(
+    span_exporter, instrument_with_content
+):
+    """Agent.run() handles messages provided as general Sequence like UserList."""
+    agent = _StubAgent.create(name="UserListAgentBot", llm=_StubLLM())
+
+    input_messages = UserList(
+        [
+            {
+                "role": "user",
+                "content": UserList([{"text": "Hello UserList"}]),
+            },
+        ]
+    )
+    response_messages = [
+        Message(role="assistant", content="Answer from UserList"),
+    ]
+
+    def fake_run(messages, **kwargs):
+        yield response_messages
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        list(agent.run(input_messages))
+
+    agent_spans = _spans_named(span_exporter, "invoke_agent UserListAgentBot")
+    assert len(agent_spans) == 1
+    attrs = dict(agent_spans[0].attributes or {})
+
+    input_data = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    assert len(input_data) == 1
+    assert input_data[0]["parts"] == [
+        {"content": "Hello UserList", "type": "text"}
+    ]
+
+    output_data = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    assert len(output_data) == 1
+    assert output_data[0]["parts"] == [
+        {"content": "Answer from UserList", "type": "text"}
+    ]

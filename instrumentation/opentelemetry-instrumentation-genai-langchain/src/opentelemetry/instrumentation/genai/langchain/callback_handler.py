@@ -272,6 +272,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         invocation_manager: _InvocationManager | None = None,
     ) -> None:
         super().__init__()
+        self._enabled = True
         self._telemetry_handler = telemetry_handler
         self._invocation_manager = (
             invocation_manager
@@ -290,6 +291,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        if not self._enabled:
+            return
         serialized = serialized or {}
         parent_agent_name, ancestor_agent_names = self._find_agent_context(
             parent_run_id
@@ -376,7 +379,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 else:
                     # We create invoke_agent span for the initial chain for agent. All follow-up chains invoked for agent invocation will not create agent span.
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, None
+                        run_id,
+                        parent_run_id,
+                        None,
                     )
             elif agent_announcement is not None:
                 agent = self._telemetry_handler.invoke_local_agent(
@@ -385,7 +390,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     conversation_id=conversation_id,
                     _attach_to_context=False,
                 )
-                agent.input_messages = make_input_message(inputs)
+                if capture_content:
+                    agent.input_messages = make_input_message(inputs)
                 self._invocation_manager.add_invocation_state(
                     run_id, parent_run_id, agent
                 )
@@ -394,13 +400,26 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 # parent-child traversal through _find_agent_context is not broken for
                 # any children of this node.
                 self._invocation_manager.add_invocation_state(
-                    run_id, parent_run_id, None
+                    run_id,
+                    parent_run_id,
+                    None,
                 )
         else:
             # For unclassified chains, we still want to track them in the invocation manager to maintain the parent-child relationships, even though we won't create spans for them.
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, None
+                run_id,
+                parent_run_id,
+                None,
             )
+
+        invocation = self._invocation_manager.get_invocation(run_id)
+        # Only create_agent/create_react_agent graphs report every model and tool call
+        # through callbacks; other agents may call models directly, so their counts are unknown.
+        if agent_announcement is not None and isinstance(
+            invocation, LocalAgentInvocation
+        ):
+            invocation.inference_calls = 0
+            invocation.tool_calls = 0
 
         if prompt_context := _extract_prompt_context(
             serialized,
@@ -463,6 +482,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        if not self._enabled:
+            return
         if "invocation_params" in kwargs:
             params = (
                 kwargs["invocation_params"].get("params")
@@ -581,6 +602,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             parent_run_id=parent_run_id,
             invocation=llm_invocation,
         )
+        self._invocation_manager.record_agent_call(parent_run_id)
 
     def on_llm_new_token(
         self,
@@ -685,6 +707,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     ):
                         finish_reason = (
                             chat_generation.message.response_metadata.get(
+                                "finish_reason"
+                            )
+                            or chat_generation.message.response_metadata.get(
                                 "stopReason"
                             )
                             or chat_generation.message.response_metadata.get(
@@ -822,6 +847,11 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        if not self._enabled:
+            return
+        self._invocation_manager.record_agent_call(
+            parent_run_id, tool_call=True
+        )
         name = "unknown"
         description = None
         if serialized is not None:
@@ -898,6 +928,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        if not self._enabled:
+            return
         meta = metadata or {}
         provider = meta.get("ls_vector_store_provider") or None
         request_model = meta.get("ls_embedding_model") or None

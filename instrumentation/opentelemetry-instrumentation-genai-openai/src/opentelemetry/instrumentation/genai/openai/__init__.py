@@ -104,10 +104,23 @@ def _is_parse_supported():
         return False
 
 
+def _is_responses_parse_supported() -> bool:
+    """Check if parse() is available on the Responses class."""
+    try:
+        from openai.resources.responses.responses import (  # pylint: disable=import-outside-toplevel
+            Responses,
+        )
+
+        return hasattr(Responses, "parse")
+    except ImportError:
+        return False
+
+
 class OpenAIInstrumentor(BaseInstrumentor):
     # BaseInstrumentor is a singleton and __init__ re-runs on the existing
-    # instance, so this default lives on the class instead of in __init__.
+    # instance, so these defaults live on the class instead of in __init__.
     _parse_supported: bool = False
+    _responses_parse_supported: bool = False
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -228,6 +241,20 @@ class OpenAIInstrumentor(BaseInstrumentor):
                 self._active(async_responses_retrieve(handler)),
             )
 
+            # parse() does not go through the instrumented create().
+            self._responses_parse_supported = _is_responses_parse_supported()
+            if self._responses_parse_supported:
+                wrap_function_wrapper(
+                    "openai.resources.responses.responses",
+                    "Responses.parse",
+                    self._active(responses_create(handler)),
+                )
+                wrap_function_wrapper(
+                    "openai.resources.responses.responses",
+                    "AsyncResponses.parse",
+                    self._active(async_responses_create(handler)),
+                )
+
     def _uninstrument(self, **kwargs):
         import openai  # pylint: disable=import-outside-toplevel
 
@@ -246,6 +273,9 @@ class OpenAIInstrumentor(BaseInstrumentor):
             unwrap(responses_module.AsyncResponses, "stream")
             unwrap(responses_module.Responses, "retrieve")
             unwrap(responses_module.AsyncResponses, "retrieve")
+            if self._responses_parse_supported:
+                unwrap(responses_module.Responses, "parse")
+                unwrap(responses_module.AsyncResponses, "parse")
 
 
 def _get_responses_module():

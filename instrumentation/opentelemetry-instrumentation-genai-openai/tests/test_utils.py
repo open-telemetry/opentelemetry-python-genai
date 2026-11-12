@@ -49,6 +49,10 @@ DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 REASONING_MODEL = "gpt-5.1"
 FETCH_RESPONSE_OPERATION_NAME = "fetch_response"
+# TODO: use the semconv constant once released in
+# opentelemetry-semantic-conventions. Added to the GenAI semantic conventions
+# in https://github.com/open-telemetry/semantic-conventions-genai/pull/162.
+GEN_AI_CONVERSATION_COMPACTED = "gen_ai.conversation.compacted"
 # TODO: use the semconv constants once these attributes are released in
 # opentelemetry-semantic-conventions. Added to the GenAI semantic conventions
 # in https://github.com/open-telemetry/semantic-conventions-genai/pull/353.
@@ -69,6 +73,22 @@ CACHEABLE_MESSAGES = [
     {"role": "user", "content": "Reply with OK only."},
 ]
 USER_ONLY_PROMPT = [{"role": "user", "content": "Say this is a test"}]
+COMPACTED_INPUT = [
+    *USER_ONLY_PROMPT,
+    {
+        "type": "compaction",
+        "id": "cmp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237031",
+        "encrypted_content": "gAAAAABpCompactedConversationStateOpaquePayload==",
+    },
+]
+COMPACTION_CONTEXT_MANAGEMENT = [
+    {"type": "compaction", "compact_threshold": 1000}
+]
+COMPACTION_MODEL = "gpt-5.4"
+# Well past ``compact_threshold`` so the server compacts during the request.
+COMPACTION_TRIGGER_INPUT = (
+    "Remember this sentence for later. " * 400 + "Now say this is a test."
+)
 REASONING_PROMPT = [
     {
         "role": "user",
@@ -839,6 +859,18 @@ def assert_reasoning_attributes(span, usage, *, require_reasoning=False):
             assert type(emitted) is int
 
 
+def assert_inference_event_without_content(logs):
+    (log,) = logs
+    assert (
+        log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    )
+    attributes = log.log_record.attributes or {}
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in attributes
+
+
 def assert_message_in_logs(log, event_name, expected_content, parent_span):
     assert log.log_record.event_name == event_name
     assert (
@@ -880,9 +912,17 @@ def assert_embedding_attributes(
         hasattr(span, "attributes")
         and "gen_ai.embeddings.dimension.count" in span.attributes
     ):
-        # If dimensions were specified, verify that they match the actual dimensions
-        assert span.attributes["gen_ai.embeddings.dimension.count"] == len(
-            response.data[0].embedding
+        embedding = response.data[0].embedding
+        if isinstance(embedding, str):
+            # OpenAI base64 embeddings contain four bytes per float32 value.
+            embedding_bytes = base64.b64decode(embedding, validate=True)
+            assert len(embedding_bytes) % 4 == 0
+            expected_dimensions = len(embedding_bytes) // 4
+        else:
+            expected_dimensions = len(embedding)
+        assert (
+            span.attributes["gen_ai.embeddings.dimension.count"]
+            == expected_dimensions
         )
 
 

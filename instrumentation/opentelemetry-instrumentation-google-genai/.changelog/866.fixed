@@ -1,1 +1,0 @@
-Stop request extraction from raising on `generate_content` with missing or empty `contents`, or an `interactions.create` input item whose `type` is not a string.

@@ -7,7 +7,7 @@ import os
 import unittest
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
 from pathlib import PurePosixPath
@@ -36,7 +36,6 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
-from opentelemetry.util.genai._inference_invocation import _should_emit_event
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
@@ -44,6 +43,7 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     File,
     FilePart,
+    FunctionToolDefinition,
     GenericPart,
     InputMessage,
     MessagePart,
@@ -51,10 +51,13 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     Reasoning,
     ReasoningPart,
+    RetrievalDocument,
     Role,
     SystemInstructionPart,
     Text,
     TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     Uri,
     UriPart,
 )
@@ -175,104 +178,6 @@ class TestDeprecatedMessagePartNames(unittest.TestCase):
         self.assertIsInstance(TextPart(content="hello"), Text)
 
 
-class TestShouldEmitEvent(unittest.TestCase):
-    def test_should_emit_event_against_various_env_var_combinations(
-        self,
-    ):  # pylint: disable=no-self-use
-        expected_results = {
-            ("EVENT_ONLY", "true"): True,
-            ("EVENT_ONLY", "True"): True,
-            ("EVENT_ONLY", "false"): False,
-            ("EVENT_ONLY", "False"): False,
-            ("EVENT_ONLY", ""): True,
-            ("SPAN_AND_EVENT", ""): True,
-            ("NO_CONTENT", ""): False,
-            ("SPAN_ONLY", ""): False,
-            ("", ""): False,
-        }
-
-        for (
-            content_capturing,
-            emit_event,
-        ), expected in expected_results.items():
-            with patch.dict(
-                os.environ,
-                {
-                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capturing,
-                    "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": emit_event,
-                },
-            ):
-                assert (
-                    _should_emit_event(get_content_capturing_mode())
-                    is expected
-                )
-
-    @patch.dict(
-        os.environ,
-        {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "INVALID_VALUE",
-        },
-    )
-    def test_should_emit_event_with_invalid_value_falls_back_to_default(
-        self,
-    ):  # pylint: disable=no-self-use
-        # When invalid value is set, should fall back to default based on content_capturing_mode
-        # EVENT_ONLY should default to True
-        with self.assertLogs(level="WARNING") as cm:
-            result = _should_emit_event(ContentCapturingMode.EVENT_ONLY)
-            assert result is True, (
-                f"Expected True but got {result} (EVENT_ONLY should default to True)"
-            )
-        self.assertEqual(len(cm.output), 1)
-        self.assertIn("invalid_value is not a valid option for", cm.output[0])
-        self.assertIn(
-            "Must be one of true or false (case-insensitive)", cm.output[0]
-        )
-
-    @patch.dict(
-        os.environ,
-        {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "INVALID_VALUE",
-        },
-    )
-    def test_should_emit_event_with_invalid_value_falls_back_to_false_for_span_only(
-        self,
-    ):  # pylint: disable=no-self-use
-        # When invalid value is set with SPAN_ONLY, should default to False
-        with self.assertLogs(level="WARNING") as cm:
-            result = _should_emit_event(ContentCapturingMode.SPAN_ONLY)
-            assert result is False, (
-                f"Expected False but got {result} (SPAN_ONLY should default to False)"
-            )
-        self.assertEqual(len(cm.output), 1)
-        self.assertIn("invalid_value is not a valid option for", cm.output[0])
-
-    def test_should_emit_event_with_explicit_mode(self):  # pylint: disable=no-self-use
-        assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is False
-        assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is False
-        assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is True
-        assert _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT) is True
-
-        with patch.dict(
-            os.environ,
-            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"},
-        ):
-            assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is True
-            assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is True
-
-        with patch.dict(
-            os.environ,
-            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"},
-        ):
-            assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is False
-            assert (
-                _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT)
-                is False
-            )
-
-
 class TestShouldCaptureContent(unittest.TestCase):
     def test_get_content_capturing_mode(self):  # pylint: disable=no-self-use
         for content_capture, expected_content_capturing in [
@@ -335,7 +240,6 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_llm_start_and_stop_creates_span(self):  # pylint: disable=no-self-use
@@ -423,7 +327,6 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_system_instruction_generic_part_on_span(self):
@@ -450,7 +353,6 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_llm_manual_start_and_stop_creates_span(self):
@@ -492,7 +394,6 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_inference_messages_omitted_from_span_in_event_only_mode(self):
@@ -791,11 +692,14 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_llm_log_uses_expected_schema_url(self):
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "schema-provider", request_model="schema-model"
         )
         invocation.output_messages = [_create_output_message()]
@@ -811,7 +715,6 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_parent_child_span_relationship(self):
@@ -847,22 +750,16 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_embedding_parent_child_span_relationship(self):
-        parent_invocation = self.telemetry_handler.embedding(
-            "test-provider", request_model="embed-parent-model"
-        )
-        parent_invocation.input_tokens = 10
-        assert parent_invocation.span is not None
-        child_invocation = self.telemetry_handler.embedding(
-            "test-provider", request_model="embed-child-model"
-        )
-        child_invocation.input_tokens = 5
-        assert child_invocation.span is not None
-        child_invocation.stop()
-        parent_invocation.stop()
+        with self.telemetry_handler.workflow(name="parent-workflow"):
+            child_invocation = self.telemetry_handler.embedding(
+                "test-provider", request_model="embed-child-model"
+            )
+            child_invocation.input_tokens = 5
+            assert child_invocation.span is not None
+            child_invocation.stop()
 
         spans = self.span_exporter.get_finished_spans()
         assert len(spans) == 2
@@ -870,7 +767,7 @@ class TestTelemetryHandler(unittest.TestCase):
             s for s in spans if s.name == "embeddings embed-child-model"
         )
         parent_span = next(
-            s for s in spans if s.name == "embeddings embed-parent-model"
+            s for s in spans if s.name == "invoke_workflow parent-workflow"
         )
 
         assert child_span.context.trace_id == parent_span.context.trace_id
@@ -882,7 +779,6 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_llm_parent_embedding_child_span_relationship(self):
@@ -1106,7 +1002,6 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_embedding_manual_start_and_stop_creates_span(self):
@@ -1332,7 +1227,6 @@ class TestTelemetryHandler(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_modality_content_on_spans_and_events(self) -> None:
@@ -2109,7 +2003,7 @@ class TestObjectToAnyValue(unittest.TestCase):
         class Status(Enum):
             ACTIVE = "active"
 
-        dt = datetime(2026, 9, 30, 15, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2026, 9, 30, 15, 0, 0, tzinfo=UTC)
         self.assertEqual(object_to_any_value(dt), "2026-09-30T15:00:00+00:00")
         u = UUID("12345678-1234-5678-1234-567812345678")
         self.assertEqual(
@@ -2253,6 +2147,65 @@ class TestObjectToAnyValue(unittest.TestCase):
         value = WithGenerator(name="a", items=(i for i in range(2)))
         self.assertEqual(object_to_any_value(value), {"name": "a"})
         self.assertEqual(list(cast(Any, value.items)), [0, 1])
+
+    def test_genai_types_omit_unset_optional_fields(self):
+        message = InputMessage(
+            role="user",
+            parts=[
+                TextPart(content="hi"),
+                ToolCallRequestPart(arguments=None, name="get_time", id=None),
+                BlobPart(content=b"x", mime_type=None, modality="image"),
+            ],
+        )
+        self.assertEqual(
+            object_to_any_value(message),
+            {
+                "role": "user",
+                "parts": [
+                    {"content": "hi", "type": "text"},
+                    {"name": "get_time", "type": "tool_call"},
+                    {"content": b"x", "modality": "image", "type": "blob"},
+                ],
+            },
+        )
+        self.assertEqual(
+            object_to_any_value(
+                OutputMessage(role="assistant", parts=[], finish_reason="stop")
+            ),
+            {"role": "assistant", "parts": [], "finish_reason": "stop"},
+        )
+
+    def test_genai_types_keep_set_falsy_fields(self):
+        self.assertEqual(
+            object_to_any_value(RetrievalDocument(id="", score=0.0)),
+            {"id": "", "score": 0.0},
+        )
+        self.assertEqual(object_to_any_value(RetrievalDocument()), {})
+
+    def test_genai_types_omit_unset_tool_definition_parameters(self):
+        self.assertEqual(
+            object_to_any_value(
+                FunctionToolDefinition(
+                    name="get_time", description=None, parameters=None
+                )
+            ),
+            {"name": "get_time", "type": "function"},
+        )
+
+    def test_user_dataclass_keeps_none(self):
+        @dataclass
+        class Result:
+            detail: str | None
+
+        result = Result(detail=None)
+        expected = {"detail": None}
+        self.assertEqual(object_to_any_value(result), expected)
+        self.assertEqual(
+            object_to_any_value(
+                ToolCallResponsePart(response=result, id=None)
+            ),
+            {"response": expected, "type": "tool_call_response"},
+        )
 
     def test_model_non_any_value_fields_converted(self):
         class Model:

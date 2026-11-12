@@ -28,10 +28,14 @@ class ChoiceBuffer:
         self.index: int = index
         self.finish_reason: str | None = None
         self.text_content: list[str] = []
+        self.refusal: list[str] = []
         self.tool_calls_buffers: list[ToolCallBuffer | None] = []
 
     def append_text_content(self, content: str) -> None:
         self.text_content.append(content)
+
+    def append_refusal(self, refusal: str) -> None:
+        self.refusal.append(refusal)
 
     def append_tool_call(self, tool_call: ChoiceDeltaToolCall) -> None:
         idx = tool_call.index

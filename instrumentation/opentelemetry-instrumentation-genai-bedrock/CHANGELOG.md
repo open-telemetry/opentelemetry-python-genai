@@ -15,6 +15,37 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Add support for Bedrock Agent Runtime (retrieve_and_generate and
+  retrieve_and_generate_stream) in synchronous and asynchronous calls.
+  ([#733](https://github.com/open-telemetry/opentelemetry-python-genai/pull/733))
+- Add instrumentation for ``bedrock-agent-runtime.invoke_inline_agent``.
+  ([#736](https://github.com/open-telemetry/opentelemetry-python-genai/pull/736))
+- Add support for Bedrock Embeddings (Amazon Titan, Cohere, etc.) and Bedrock
+  Agent Runtime (invoke_agent and retrieve) in synchronous and asynchronous
+  calls.
+  ([#776](https://github.com/open-telemetry/opentelemetry-python-genai/pull/776))
+
+### Changed
+
+- Drop unmapped content blocks and non-text system instruction parts instead of
+  recording them as type-only `GenericPart`.
+  ([#936](https://github.com/open-telemetry/opentelemetry-python-genai/pull/936))
+
+### Fixed
+
+- Stop request extraction from raising on a Converse `document` block whose
+  `format` is not a string.
+  ([#866](https://github.com/open-telemetry/opentelemetry-python-genai/pull/866))
+- Capture Bedrock Converse request messages provided as tuples.
+  ([#870](https://github.com/open-telemetry/opentelemetry-python-genai/pull/870))
+- Stop recording an empty reasoning part for redacted Converse reasoning
+  content.
+  ([#932](https://github.com/open-telemetry/opentelemetry-python-genai/pull/932))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

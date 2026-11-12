@@ -1,1 +1,0 @@
-Record assistant messages given as role/content dicts or `(role, content)` tuples in workflow and agent `gen_ai.output.messages` instead of dropping them, and keep convertible messages when another entry in the list cannot be converted.

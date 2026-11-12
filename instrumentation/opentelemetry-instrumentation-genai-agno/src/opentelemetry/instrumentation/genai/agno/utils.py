@@ -5,12 +5,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import os
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
+    from agno.knowledge.embedder.base import Embedder
 
+from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
+    GenAiProviderNameValues,
+)
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     RetrievalDocument,
@@ -18,21 +23,36 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     gen_ai_json_dumps,
+    get_argument,
     object_to_any_value,
 )
 
 
+def safe_int(val: Any) -> int | None:
+    """Safely convert a value to int or return None."""
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def safe_float(val: Any) -> float | None:
+    """Safely convert a value to float or return None."""
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
 def format_retrieval_document(doc: Document) -> RetrievalDocument:
     """Format an Agno Document into a RetrievalDocument."""
-    score: float | None = None
-    if doc.reranking_score is not None:
-        try:
-            score = float(doc.reranking_score)
-        except (ValueError, TypeError):
-            pass
     return RetrievalDocument(
         id=str(doc.id) if doc.id is not None else None,
-        score=score,
+        score=safe_float(doc.reranking_score),
     )
 
 
@@ -165,3 +185,101 @@ def prepare_tool_definitions(
                 )
 
     return definitions or None
+
+
+def extract_session_id(
+    instance: Any = None,
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    run_response: Any = None,
+    wrapped: Callable[..., Any] | None = None,
+    *,
+    is_continue: bool = False,
+) -> str | None:
+    """Extract session_id from call arguments, instance, or response."""
+    if is_continue:
+        if run_response is None:
+            if wrapped is not None and (args or kwargs):
+                run_response = get_argument(
+                    "run_response", wrapped, args or (), kwargs or {}
+                )
+            elif kwargs:
+                run_response = kwargs.get("run_response")
+
+        if run_response is not None:
+            if (
+                session_id := getattr(run_response, "session_id", None)
+            ) is not None:
+                return str(session_id)
+            if instance is not None and (
+                (session_id := getattr(instance, "session_id", None))
+                is not None
+            ):
+                return str(session_id)
+            return None
+
+    if wrapped is not None and (args or kwargs):
+        session_id = get_argument(
+            "session_id", wrapped, args or (), kwargs or {}
+        )
+        if session_id is not None:
+            return str(session_id)
+    else:
+        if kwargs and (session_id := kwargs.get("session_id")) is not None:
+            return str(session_id)
+        if args and len(args) > 4 and args[4] is not None:
+            return str(args[4])
+    if instance is not None and (
+        (session_id := getattr(instance, "session_id", None)) is not None
+    ):
+        return str(session_id)
+    if run_response is not None and (
+        (session_id := getattr(run_response, "session_id", None)) is not None
+    ):
+        return str(session_id)
+    return None
+
+
+_UNKNOWN_PROVIDER = "unknown"
+
+# Mapping of known embedder class names to provider values.
+_CLASS_NAME_TO_PROVIDER: dict[str, str] = {
+    "OpenAIEmbedder": GenAiProviderNameValues.OPENAI.value,
+    "AzureOpenAIEmbedder": GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "AwsBedrockEmbedder": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "CohereEmbedder": GenAiProviderNameValues.COHERE.value,
+    "MistralEmbedder": GenAiProviderNameValues.MISTRAL_AI.value,
+    "OllamaEmbedder": "ollama",
+    "FireworksEmbedder": "fireworks",
+    "TogetherEmbedder": "together",
+    "VoyageAIEmbedder": "voyageai",
+    "FastEmbedEmbedder": "fastembed",
+    "SentenceTransformerEmbedder": "sentence_transformer",
+    "HuggingfaceCustomEmbedder": "huggingface",
+    "LangDBEmbedder": "langdb",
+    "NebiusEmbedder": "nebius",
+    "VLLMEmbedder": "vllm",
+    "JinaEmbedder": "jina",
+}
+
+
+def resolve_embedder_provider(embedder: Embedder) -> str:
+    """Resolve the ``gen_ai.provider.name`` value for an Agno embedder instance."""
+    for cls in type(embedder).__mro__:
+        name = cls.__name__
+        if name in ("GeminiEmbedder", "GoogleEmbedder"):
+            vertexai = (
+                getattr(embedder, "vertexai", False)
+                or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower()
+                == "true"
+            )
+            return (
+                GenAiProviderNameValues.GCP_VERTEX_AI.value
+                if vertexai
+                else GenAiProviderNameValues.GCP_GEMINI.value
+            )
+        if name in ("OpenAILikeEmbedder", "Embedder"):
+            break
+        if name in _CLASS_NAME_TO_PROVIDER:
+            return _CLASS_NAME_TO_PROVIDER[name]
+    return _UNKNOWN_PROVIDER
