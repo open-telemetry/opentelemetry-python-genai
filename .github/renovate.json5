@@ -76,6 +76,14 @@
       "allowedVersions": "<3"
     },
     {
+      // Last openai 1.x release before `custom_tool_call` types (1.99.2).
+      "matchFileNames": [
+        "instrumentation/opentelemetry-instrumentation-genai-openai/tests/requirements.v1.txt"
+      ],
+      "matchPackageNames": ["openai"],
+      "allowedVersions": "<1.99.2"
+    },
+    {
       // Keep coverage on the last google-genai release with the legacy Interactions API.
       "matchFileNames": [
         "instrumentation/opentelemetry-instrumentation-google-genai/tests/requirements.v2.txt"
