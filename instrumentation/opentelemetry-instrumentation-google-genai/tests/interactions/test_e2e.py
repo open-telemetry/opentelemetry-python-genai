@@ -393,7 +393,7 @@ def _assert_streamed_create_output(
     )
     assert message["role"] == "assistant"
     assert message["parts"] == [{"type": "text", "content": expected_output}]
-    assert message["finish_reason"] is None
+    assert "finish_reason" not in message
     assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
 
 
@@ -466,7 +466,7 @@ def _assert_streamed_tool_call(
     [message] = get_content_attribute(
         span.attributes, "gen_ai.output.messages"
     )
-    assert message["finish_reason"] is None
+    assert "finish_reason" not in message
     assert message["parts"] == [
         {
             "type": "tool_call",
@@ -718,7 +718,7 @@ def _assert_closed_early_span(
         span.attributes, "gen_ai.output.messages"
     )
     assert message["parts"] == [{"type": "text", "content": received_text}]
-    assert message["finish_reason"] is None
+    assert "finish_reason" not in message
 
 
 @pytest.mark.vcr

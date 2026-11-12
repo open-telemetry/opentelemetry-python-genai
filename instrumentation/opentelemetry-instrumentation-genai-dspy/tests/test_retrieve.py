@@ -95,7 +95,7 @@ def test_sync_retrieve_execution(
 
     docs = attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert isinstance(docs, tuple)
-    assert list(docs) == [{"id": None, "score": None}] * k
+    assert list(docs) == [{}] * k
     assert res.passages == [
         f"Passage {i} for What is OpenTelemetry?" for i in range(k)
     ]
@@ -619,8 +619,8 @@ def test_retrieve_subclass_overriding_forward(
     assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
     docs = attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert list(docs) == [
-        {"id": "weav-0", "score": None},
-        {"id": "weav-1", "score": None},
+        {"id": "weav-0"},
+        {"id": "weav-1"},
     ]
 
     err_span = spans[1]

@@ -393,7 +393,6 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
                 {
                     "role": "user",
                     "parts": ({"type": "text", "content": "hello"},),
-                    "name": None,
                 },
             ),
         )
@@ -404,7 +403,6 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
                     "role": "assistant",
                     "parts": ({"type": "text", "content": "hi"},),
                     "finish_reason": "stop",
-                    "name": None,
                 },
             ),
         )

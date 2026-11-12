@@ -181,7 +181,6 @@ class TestCase(CommonTestCaseBase):
                 {
                     "role": "user",
                     "parts": ({"content": "Hi", "type": "text"},),
-                    "name": None,
                 },
             ),
         )
@@ -385,7 +384,6 @@ class TestCase(CommonTestCaseBase):
                     "parts": (
                         {"content": "Hello interactions!", "type": "text"},
                     ),
-                    "name": None,
                 },
             ),
         )
@@ -400,8 +398,6 @@ class TestCase(CommonTestCaseBase):
                             "type": "text",
                         },
                     ),
-                    "finish_reason": None,
-                    "name": None,
                 },
             ),
         )
@@ -458,8 +454,6 @@ class TestCase(CommonTestCaseBase):
                 {
                     "role": "assistant",
                     "parts": ({"content": "Calling a tool.", "type": "text"},),
-                    "finish_reason": None,
-                    "name": None,
                 },
             ),
         )
@@ -583,8 +577,6 @@ class TestCase(CommonTestCaseBase):
                 {
                     "role": "assistant",
                     "parts": ({"content": "Calling a tool.", "type": "text"},),
-                    "finish_reason": None,
-                    "name": None,
                 },
             ),
         )
@@ -628,8 +620,6 @@ class TestCase(CommonTestCaseBase):
                 {
                     "role": "assistant",
                     "parts": ({"content": "Partial answer.", "type": "text"},),
-                    "finish_reason": None,
-                    "name": None,
                 },
             ),
         )
@@ -780,7 +770,6 @@ class TestCase(CommonTestCaseBase):
                 {
                     "name": "dict_tool",
                     "description": "Dict tool desc",
-                    "parameters": None,
                     "type": "function",
                 },
             ),

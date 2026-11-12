@@ -79,7 +79,6 @@ def test_chat_records_a_chat_span(instrument_with_content, span_exporter, vcr):
         {
             "role": "user",
             "parts": [{"type": "text", "content": MESSAGES[0]["content"]}],
-            "name": None,
         }
     ]
     (output,) = _messages(span, GenAI.GEN_AI_OUTPUT_MESSAGES)
@@ -245,7 +244,6 @@ def test_chat_stream_records_tool_calls(
     assert output["parts"] == [
         {
             "type": "tool_call",
-            "id": None,
             "name": "get_weather",
             "arguments": {"city": "Paris"},
         }
@@ -317,7 +315,6 @@ def test_chat_records_tool_calls(
     assert output["parts"] == [
         {
             "type": "tool_call",
-            "id": None,
             "name": "get_weather",
             "arguments": {"city": "Paris"},
         }
@@ -355,17 +352,13 @@ def test_chat_records_tool_results_in_input_messages(
     assert inputs[1]["parts"] == [
         {
             "type": "tool_call",
-            "id": None,
             "name": "get_weather",
             "arguments": {"city": "Paris"},
         }
     ]
     assert inputs[2] == {
         "role": "tool",
-        "parts": [
-            {"type": "tool_call_response", "id": None, "response": "sunny"}
-        ],
-        "name": None,
+        "parts": [{"type": "tool_call_response", "response": "sunny"}],
     }
 
 

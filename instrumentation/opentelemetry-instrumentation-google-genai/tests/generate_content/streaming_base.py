@@ -55,7 +55,6 @@ class StreamingTestCase(TestCase):
                         {"content": "Hello", "type": "text"},
                         {"content": "world", "type": "text"},
                     ),
-                    "name": None,
                 },
             ),
         )
@@ -103,7 +102,6 @@ class StreamingTestCase(TestCase):
                         {"content": "Hello", "type": "text"},
                         {"content": "world", "type": "text"},
                     ),
-                    "name": None,
                 },
             ),
         )
@@ -184,7 +182,6 @@ class StreamingTestCase(TestCase):
                     "role": "assistant",
                     "parts": ({"content": "Hello, world", "type": "text"},),
                     "finish_reason": "",
-                    "name": None,
                 },
             ),
         )
@@ -209,7 +206,6 @@ class StreamingTestCase(TestCase):
                         {"content": "It is sunny.", "type": "text"},
                     ),
                     "finish_reason": "",
-                    "name": None,
                 },
             ),
         )

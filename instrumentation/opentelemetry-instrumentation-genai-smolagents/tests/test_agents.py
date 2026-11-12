@@ -129,7 +129,6 @@ def test_code_agent_non_streaming(
     assert inputs[0] == {
         "role": "user",
         "parts": [{"type": "text", "content": "Test question"}],
-        "name": None,
     }
     outputs = parse_messages(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert outputs[0]["parts"][0]["content"] == "Test result from CodeAgent"

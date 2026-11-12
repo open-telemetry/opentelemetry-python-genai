@@ -171,7 +171,6 @@ class MultimodalScenario(Scenario):
         }
         assert parts[2] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "image",
             "uri": "https://example.com/image.png",
         }
@@ -183,7 +182,6 @@ class MultimodalScenario(Scenario):
         }
         assert parts[4] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "document",
             "uri": "https://example.com/document.pdf",
         }
@@ -199,19 +197,16 @@ class MultimodalScenario(Scenario):
         }
         assert parts[7] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "image",
             "uri": "https://example.com/nested.png",
         }
         assert parts[8] == {
             "type": "file",
-            "mime_type": None,
             "modality": "image",
             "file_id": "file-image",
         }
         assert parts[9] == {
             "type": "file",
-            "mime_type": None,
             "modality": "document",
             "file_id": "file-document",
         }

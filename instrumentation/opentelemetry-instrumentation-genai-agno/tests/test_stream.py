@@ -728,8 +728,13 @@ def test_agent_stream_tool_completed_event_preserves_final_content(
     output_messages = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages is not None
-    assert output_messages[0]["parts"][0]["content"] == "final answer"
+    assert output_messages == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "final answer"},),
+            "finish_reason": "stop",
+        },
+    )
 
 
 def test_agent_stream_no_llm_client_metrics(
@@ -779,8 +784,13 @@ def test_workflow_stream_step_completed_event_preserves_final_content(
     output_messages = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages is not None
-    assert output_messages[0]["parts"][0]["content"] == "final workflow output"
+    assert output_messages == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "final workflow output"},),
+            "finish_reason": "stop",
+        },
+    )
 
 
 def test_agent_continue_run_stream_spans(

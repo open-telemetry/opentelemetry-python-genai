@@ -214,11 +214,76 @@ def _normalize_sample_value(val: Any) -> Any:
 def _enrich_attributes(
     sample_attrs: list[dict[str, Any]], attrs: Mapping[str, Any]
 ) -> None:
+    from opentelemetry.test_util_genai.content import (
+        SCHEMA_FILES,
+        validate_content_attribute,
+    )
+
     for attr_entry in sample_attrs:
         name = attr_entry.get("name")
         if name not in attrs:
             continue
-        attr_entry["value"] = _normalize_sample_value(attrs[name])
+        raw_val = attrs[name]
+        if name in SCHEMA_FILES:
+            attr_entry["value"] = validate_content_attribute(name, raw_val)
+        elif isinstance(raw_val, (dict, list, tuple, bytes)):
+            attr_entry["value"] = _normalize_sample_value(raw_val)
+
+
+def _sample_scalar_attrs(
+    sample_attrs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        a["name"]: a.get("value")
+        for a in sample_attrs
+        if "name" in a and isinstance(a.get("value"), (str, int, float, bool))
+    }
+
+
+def _match_span(
+    sample_span: dict[str, Any],
+    remaining_spans: list[ReadableSpan],
+) -> ReadableSpan | None:
+    sample_name = sample_span.get("name")
+    sample_scalars = _sample_scalar_attrs(sample_span.get("attributes", []))
+    for idx, span in enumerate(remaining_spans):
+        if span.name != sample_name:
+            continue
+        span_attrs = span.attributes or {}
+        if all(
+            span_attrs.get(k) == v
+            for k, v in sample_scalars.items()
+            if k in span_attrs
+            and isinstance(span_attrs[k], (str, int, float, bool))
+        ):
+            return remaining_spans.pop(idx)
+    for idx, span in enumerate(remaining_spans):
+        if span.name == sample_name:
+            return remaining_spans.pop(idx)
+    return remaining_spans.pop(0) if remaining_spans else None
+
+
+def _match_log(
+    sample_log: dict[str, Any],
+    remaining_logs: list[Any],
+) -> Any | None:
+    sample_span_id = sample_log.get("span_id")
+    sample_trace_id = sample_log.get("trace_id")
+    sample_event_name = sample_log.get("event_name")
+    for idx, log in enumerate(remaining_logs):
+        log_record = getattr(log, "log_record", log)
+        span_id = getattr(log_record, "span_id", None)
+        trace_id = getattr(log_record, "trace_id", None)
+        event_name = getattr(log_record, "event_name", None)
+        if (
+            isinstance(span_id, int)
+            and isinstance(trace_id, int)
+            and f"{span_id:016x}" == sample_span_id
+            and f"{trace_id:032x}" == sample_trace_id
+            and (not sample_event_name or event_name == sample_event_name)
+        ):
+            return remaining_logs.pop(idx)
+    return remaining_logs.pop(0) if remaining_logs else None
 
 
 def _enrich_report_samples(
@@ -226,26 +291,28 @@ def _enrich_report_samples(
     finished_spans: Sequence[ReadableSpan],
     finished_logs: Sequence[Any],
 ) -> None:
-    # Weaver drops KvlistValue (maps) during OTLP-to-JSON conversion, resulting in
+    # Weaver v0.26.1 drops KvlistValue (maps) during OTLP-to-JSON conversion, resulting in
     # empty lists [] or None for structured content attributes (messages, tool definitions).
-    # Re-hydrate them from the emitted spans/logs so scenario validate() checks succeed.
-    span_idx = 0
-    log_idx = 0
+    # Re-hydrate them from the emitted spans/logs matched by identity and validate
+    # structured content attributes against the pinned semconv JSON schemas.
+    remaining_spans = list(finished_spans)
+    remaining_logs = list(finished_logs)
     for entry in report.get("samples", []):
-        if "span" in entry and span_idx < len(finished_spans):
-            span = finished_spans[span_idx]
-            span_idx += 1
-            if span.attributes:
+        if "span" in entry:
+            span = _match_span(entry["span"], remaining_spans)
+            if span is not None and span.attributes:
                 _enrich_attributes(
                     entry["span"].get("attributes", []), span.attributes
                 )
-        elif "log" in entry and log_idx < len(finished_logs):
-            log = finished_logs[log_idx]
-            log_idx += 1
-            log_record = getattr(log, "log_record", log)
-            attrs = getattr(log_record, "attributes", None)
-            if attrs:
-                _enrich_attributes(entry["log"].get("attributes", []), attrs)
+        elif "log" in entry:
+            log = _match_log(entry["log"], remaining_logs)
+            if log is not None:
+                log_record = getattr(log, "log_record", log)
+                attrs = getattr(log_record, "attributes", None)
+                if attrs:
+                    _enrich_attributes(
+                        entry["log"].get("attributes", []), attrs
+                    )
 
 
 def _dump_report(scenario: Scenario, report: LiveCheckReport) -> None:

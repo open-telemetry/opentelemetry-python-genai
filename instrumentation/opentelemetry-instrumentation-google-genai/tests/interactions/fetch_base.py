@@ -582,8 +582,6 @@ class TestCase(CommonTestCaseBase):
                     "parts": (
                         {"content": "Fetched response!", "type": "text"},
                     ),
-                    "finish_reason": None,
-                    "name": None,
                 },
             ),
         )
@@ -632,7 +630,6 @@ class TestCase(CommonTestCaseBase):
                 {
                     "name": "dict_tool",
                     "description": "Dict tool desc",
-                    "parameters": None,
                     "type": "function",
                 },
             ),
@@ -772,8 +769,6 @@ class TestCase(CommonTestCaseBase):
                 {
                     "role": "assistant",
                     "parts": ({"content": "Hello there.", "type": "text"},),
-                    "finish_reason": None,
-                    "name": None,
                 },
             ),
         )
@@ -826,8 +821,6 @@ class TestCase(CommonTestCaseBase):
                 {
                     "role": "assistant",
                     "parts": ({"content": "resumed text.", "type": "text"},),
-                    "finish_reason": None,
-                    "name": None,
                 },
             ),
         )

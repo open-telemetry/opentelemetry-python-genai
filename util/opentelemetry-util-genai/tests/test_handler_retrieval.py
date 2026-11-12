@@ -284,9 +284,9 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
                     (
                         {"id": "doc-1", "score": 0.95},
                         {"id": "doc-2", "score": 0.0},
-                        {"id": "doc-3", "score": None},
-                        {"id": None, "score": 0.5},
-                        {"id": None, "score": None},
+                        {"id": "doc-3"},
+                        {"score": 0.5},
+                        {},
                     ),
                 )
                 self.assertIsInstance(documents[0]["id"], str)
@@ -319,7 +319,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         raw = self._get_finished_spans()[0].attributes[
             GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        self.assertEqual(raw, (legacy, {"id": "typed", "score": None}))
+        self.assertEqual(raw, (legacy, {"id": "typed"}))
 
     @patch.dict(
         os.environ,

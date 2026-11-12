@@ -141,8 +141,8 @@ def test_retrieval_span_attributes(
         docs_attr = attrs[gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS]
         assert isinstance(docs_attr, tuple)
         assert list(docs_attr) == [
-            {"id": "doc-1", "score": None},
-            {"id": None, "score": None},
+            {"id": "doc-1"},
+            {},
         ]
     else:
         assert gen_ai_attributes.GEN_AI_RETRIEVAL_QUERY_TEXT not in attrs
@@ -369,7 +369,7 @@ def test_document_without_id_in_span_content(
     docs_attr = spans[0].attributes[
         gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
     ]
-    assert list(docs_attr) == [{"id": None, "score": None}]
+    assert list(docs_attr) == [{}]
     instrumentor.uninstrument()
 
 
@@ -625,7 +625,7 @@ def test_retriever_documents_without_score(
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
         assert len(parsed) == 1
-        assert parsed[0]["score"] is None
+        assert "score" not in parsed[0]
     finally:
         instrumentor.uninstrument()
 
@@ -701,7 +701,7 @@ def test_retriever_documents_with_non_finite_scores(
         assert isinstance(parsed, tuple)
         assert len(parsed) == 4
         for item in parsed:
-            assert item["score"] is None
+            assert "score" not in item
     finally:
         instrumentor.uninstrument()
 
@@ -795,7 +795,11 @@ async def test_async_retriever_documents_with_scores(
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
         assert len(parsed) == 3
-        assert all(set(doc) == {"id", "score"} for doc in parsed)
+        assert [set(doc) for doc in parsed] == [
+            {"id", "score"},
+            {"id", "score"},
+            {"id"},
+        ]
 
         assert parsed[0]["id"] == "doc-kb"
         assert parsed[0]["score"] == 0.95
@@ -804,7 +808,7 @@ async def test_async_retriever_documents_with_scores(
         assert parsed[1]["score"] == 0.82
 
         assert parsed[2]["id"] == "doc-plain"
-        assert parsed[2]["score"] is None
+        assert "score" not in parsed[2]
     finally:
         instrumentor.uninstrument()
 

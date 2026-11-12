@@ -166,7 +166,12 @@ async def test_retrieval_scores_serialize_as_valid_json(
     span = _span(span_exporter)
     documents = span.attributes[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS]
     assert type(documents) is tuple
-    assert documents == ({"id": "doc-1", "score": expected},)
+    expected_doc = (
+        {"id": "doc-1"}
+        if expected is None
+        else {"id": "doc-1", "score": expected}
+    )
+    assert documents == (expected_doc,)
     if expected is not None:
         assert type(documents[0]["score"]) is float
     assert span.status.status_code == StatusCode.UNSET

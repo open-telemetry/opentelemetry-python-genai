@@ -300,7 +300,6 @@ async def test_agent_run_span(
         {
             "parts": ({"content": "What is two plus two?", "type": "text"},),
             "role": "user",
-            "name": None,
         },
     )
     output_messages = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
@@ -372,7 +371,6 @@ async def test_agent_run_captures_chat_message_input(
                 {"content": "Hello from a ChatMessage", "type": "text"},
             ),
             "role": "user",
-            "name": None,
         },
     )
 
@@ -540,7 +538,6 @@ async def test_react_agent_run_span(
         {
             "parts": ({"content": "What is two plus two?", "type": "text"},),
             "role": "user",
-            "name": None,
         },
     )
     output_messages = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
@@ -1232,7 +1229,6 @@ async def test_agent_workflow_captures_content(
         {
             "role": "user",
             "parts": ({"type": "text", "content": "Run the workflow"},),
-            "name": None,
         },
     )
     assert workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES][0][
@@ -1242,7 +1238,6 @@ async def test_agent_workflow_captures_content(
         {
             "role": "user",
             "parts": ({"type": "text", "content": "Run the workflow"},),
-            "name": None,
         },
     )
     assert agent_attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS] == (

@@ -900,7 +900,6 @@ def test_chat_anthropic_file_ref_image_llm_call(
     }
     assert input_message[0]["parts"][1] == {
         "type": "file",
-        "mime_type": None,
         "modality": "image",
         "file_id": _ANTHROPIC_FILE_ID,
     }

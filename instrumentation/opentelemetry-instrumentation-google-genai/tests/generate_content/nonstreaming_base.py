@@ -113,13 +113,11 @@ class NonStreamingTestCase(TestCase):
             {
                 "name": "_mock_callable_tool",
                 "description": "Description of some tool.",
-                "parameters": None,
                 "type": "function",
             },
             {
                 "name": "mock_tool",
                 "description": "Description of mock tool.",
-                "parameters": None,
                 "type": "function",
             },
             {
@@ -240,7 +238,6 @@ class NonStreamingTestCase(TestCase):
                         {"content": "Hello", "type": "text"},
                         {"content": "world", "type": "text"},
                     ),
-                    "name": None,
                 },
             ),
         )
@@ -283,7 +280,6 @@ class NonStreamingTestCase(TestCase):
                         {"content": "Hello", "type": "text"},
                         {"content": "world", "type": "text"},
                     ),
-                    "name": None,
                 },
             ),
         )
@@ -612,7 +608,6 @@ class NonStreamingTestCase(TestCase):
                 {
                     "role": "user",
                     "parts": ({"content": "Some input", "type": "text"},),
-                    "name": None,
                 },
             ),
         )
@@ -625,7 +620,6 @@ class NonStreamingTestCase(TestCase):
                         {"content": "Some response content", "type": "text"},
                     ),
                     "finish_reason": "",
-                    "name": None,
                 },
             ),
         )
@@ -731,7 +725,6 @@ class NonStreamingTestCase(TestCase):
                 {
                     "role": "user",
                     "parts": ({"content": "Some input", "type": "text"},),
-                    "name": None,
                 },
             ),
         )
@@ -744,7 +737,6 @@ class NonStreamingTestCase(TestCase):
                         {"content": "Some response content", "type": "text"},
                     ),
                     "finish_reason": "",
-                    "name": None,
                 },
             ),
         )
@@ -789,7 +781,6 @@ class NonStreamingTestCase(TestCase):
                         {"content": "It is sunny.", "type": "text"},
                     ),
                     "finish_reason": "",
-                    "name": None,
                 },
             ),
         )

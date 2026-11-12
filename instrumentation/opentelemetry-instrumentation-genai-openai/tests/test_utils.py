@@ -107,7 +107,6 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
                 "content": USER_ONLY_PROMPT[0]["content"],
             }
         ],
-        "name": None,
     }
 ]
 _WAV_B64 = "ZmFrZSB3YXYgYnl0ZXM="  # b"fake wav bytes"
@@ -150,7 +149,6 @@ AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
             },
             {
                 "type": "file",
-                "mime_type": None,
                 "modality": "document",
                 "file_id": "file-123",
             },
@@ -161,7 +159,6 @@ AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
                 "content": _PDF_BYTES,
             },
         ],
-        "name": None,
     }
 ]
 
@@ -194,7 +191,6 @@ MULTIMODAL_EXPECTED_INPUT_MESSAGES = [
                 "type": "blob",
             },
         ],
-        "name": None,
     }
 ]
 WEATHER_TOOL_PROMPT = [
@@ -213,7 +209,6 @@ WEATHER_TOOL_EXPECTED_INPUT_MESSAGES = [
                 "content": WEATHER_TOOL_PROMPT[0]["content"],
             }
         ],
-        "name": None,
     },
     {
         "role": "user",
@@ -223,7 +218,6 @@ WEATHER_TOOL_EXPECTED_INPUT_MESSAGES = [
                 "content": WEATHER_TOOL_PROMPT[1]["content"],
             }
         ],
-        "name": None,
     },
 ]
 
@@ -606,7 +600,6 @@ EXPECTED_TOOL_LOOP_INPUT_MESSAGES = [
     {
         "role": "user",
         "parts": [{"type": "text", "content": TOOL_LOOP_PROMPT}],
-        "name": None,
     },
     {
         "role": "assistant",
@@ -618,7 +611,6 @@ EXPECTED_TOOL_LOOP_INPUT_MESSAGES = [
                 "arguments": {"location": "Seattle, WA"},
             }
         ],
-        "name": None,
     },
     {
         "role": "tool",
@@ -629,7 +621,6 @@ EXPECTED_TOOL_LOOP_INPUT_MESSAGES = [
                 "response": TOOL_LOOP_OUTPUT,
             }
         ],
-        "name": None,
     },
 ]
 
@@ -685,7 +676,6 @@ EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES = [
                 "arguments": CUSTOM_TOOL_INPUT,
             }
         ],
-        "name": None,
     },
     {
         "role": "tool",
@@ -696,7 +686,6 @@ EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES = [
                 "response": CUSTOM_TOOL_OUTPUT,
             }
         ],
-        "name": None,
     },
 ]
 
@@ -800,7 +789,6 @@ def format_simple_expected_output_message(
                 }
             ],
             "finish_reason": finish_reason,
-            "name": None,
         }
     ]
 

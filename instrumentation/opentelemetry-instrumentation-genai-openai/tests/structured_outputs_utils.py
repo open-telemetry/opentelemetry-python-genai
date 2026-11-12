@@ -28,6 +28,5 @@ STRUCTURED_OUTPUT_EXPECTED_INPUT_MESSAGES = [
                 "content": STRUCTURED_OUTPUT_PROMPT[0]["content"],
             }
         ],
-        "name": None,
     }
 ]
