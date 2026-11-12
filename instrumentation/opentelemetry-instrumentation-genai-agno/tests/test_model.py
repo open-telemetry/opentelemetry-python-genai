@@ -250,7 +250,6 @@ def test_model_sync_response_content_capture(
     assert (
         output_messages[0]["parts"][0]["content"] == "Hello from test model!"
     )
-    assert output_messages[0]["finish_reason"] == "stop"
 
 
 def test_model_async_response(
@@ -607,9 +606,9 @@ def test_model_response_stream_early_close(
     span = spans[0]
     assert span.name == "chat early-close-model"
     assert span.status.status_code != StatusCode.ERROR
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ) == ("interrupted",)
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
 
 
 def test_model_response_stream_early_close_keeps_finish_reason(
@@ -744,9 +743,9 @@ def test_model_aresponse_stream_early_close(
     span = spans[0]
     assert span.name == "chat async-early-close-model"
     assert span.status.status_code != StatusCode.ERROR
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ) == ("interrupted",)
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
 
 
 def test_model_tool_call_arguments_json_decoding_and_fallback(
@@ -845,12 +844,14 @@ def test_agent_multi_turn_tool_calling_spans(
                             },
                         }
                     ],
+                    provider_data={"finish_reason": "tool_calls"},
                     response_usage=MessageMetrics(
                         input_tokens=15, output_tokens=8
                     ),
                 )
             return ModelResponse(
                 content="The result is 42.",
+                provider_data={"finish_reason": "stop"},
                 response_usage=MessageMetrics(
                     input_tokens=28, output_tokens=12
                 ),
@@ -1277,9 +1278,9 @@ def test_model_tool_loop_does_not_reuse_previous_call_data(
     assert GenAIAttributes.GEN_AI_RESPONSE_MODEL not in second.attributes
     assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in second.attributes
     assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in second.attributes
-    assert second.attributes.get(
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ) == ("stop",)
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in second.attributes
+    )
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in second.attributes
 
 
@@ -1336,9 +1337,9 @@ def test_model_async_tool_loop_does_not_reuse_previous_call_data(
     assert GenAIAttributes.GEN_AI_RESPONSE_MODEL not in second.attributes
     assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in second.attributes
     assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in second.attributes
-    assert second.attributes.get(
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ) == ("stop",)
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in second.attributes
+    )
     output_msgs = json.loads(
         str(second.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES))
     )
@@ -1381,3 +1382,862 @@ def test_gemini_reasoning_tokens_added_to_output_tokens_and_max_output_tokens(
     )
     assert attrs.get("gen_ai.usage.audio.input_tokens") == 5
     assert attrs.get("gen_ai.usage.audio.output_tokens") == 10
+
+
+def test_model_tool_definitions_gated_by_content_capture(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    monkeypatch,
+) -> None:
+    """Test that tool definitions are only prepared and recorded when content capture is enabled."""
+    from opentelemetry.instrumentation.genai.agno import patch as agno_patch
+    from opentelemetry.test_util_genai.instrumentor import instrument
+
+    calls: list[Any] = []
+    orig_prepare = agno_patch.prepare_tool_definitions
+
+    def _spy_prepare(tools: Any) -> Any:
+        calls.append(tools)
+        return orig_prepare(tools)
+
+    monkeypatch.setattr(agno_patch, "prepare_tool_definitions", _spy_prepare)
+
+    tool_schema = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "Lookup item",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    model = _SyncModel(id="gpt-4o", provider="OpenAI")
+
+    with instrument(
+        AgnoInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="NO_CONTENT",
+    ):
+        model._process_model_response(
+            messages=[Message(role="user", content="hi")],
+            assistant_message=Message(role="assistant"),
+            model_response=ModelResponse(),
+            tools=tool_schema,
+        )
+
+    assert calls == []
+    (no_capture_span,) = span_exporter.get_finished_spans()
+    assert (
+        GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
+        not in no_capture_span.attributes
+    )
+
+    span_exporter.clear()
+    with instrument(
+        AgnoInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        model._process_model_response(
+            messages=[Message(role="user", content="hi")],
+            assistant_message=Message(role="assistant"),
+            model_response=ModelResponse(),
+            tools=tool_schema,
+        )
+
+    assert len(calls) == 1
+    (capture_span,) = span_exporter.get_finished_spans()
+    tool_defs = json.loads(
+        str(capture_span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS])
+    )
+    assert tool_defs[0]["name"] == "lookup"
+
+
+def test_model_stream_metadata_only_final_chunk(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that provider_data on a non-yielded metadata-only final chunk is recorded on both sync and async streams."""
+
+    class _MetadataFinalStreamModel(MockModel):
+        def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(content="hello")
+            yield ModelResponse(
+                content=None,
+                provider_data={
+                    "id": "resp-meta-sync",
+                    "model": "gpt-4o-meta-sync",
+                    "finish_reason": "stop",
+                },
+                response_usage=MessageMetrics(
+                    input_tokens=11, output_tokens=4
+                ),
+            )
+
+        async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(content="async hello")
+            yield ModelResponse(
+                content=None,
+                provider_data={
+                    "id": "resp-meta-async",
+                    "model": "claude-meta-async",
+                    "stop_reason": "end_turn",
+                },
+                response_usage=MessageMetrics(
+                    input_tokens=13, output_tokens=5
+                ),
+            )
+
+    model = _MetadataFinalStreamModel(id="m", provider="OpenAI")
+    chunks = list(
+        model.response_stream(messages=[Message(role="user", content="hi")])
+    )
+    assert any(c.content == "hello" for c in chunks)
+
+    (sync_span,) = span_exporter.get_finished_spans()
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp-meta-sync"
+    )
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL)
+        == "gpt-4o-meta-sync"
+    )
+    assert sync_span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
+
+    span_exporter.clear()
+
+    async def _run_async() -> list[Any]:
+        return [
+            c
+            async for c in model.aresponse_stream(
+                messages=[Message(role="user", content="hi")]
+            )
+        ]
+
+    async_chunks = asyncio.run(_run_async())
+    assert any(c.content == "async hello" for c in async_chunks)
+
+    (async_span,) = span_exporter.get_finished_spans()
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp-meta-async"
+    )
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL)
+        == "claude-meta-async"
+    )
+    assert async_span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
+
+
+def test_model_stream_early_close_and_error_preserves_media_output(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that closing or failing a sync or async stream after a media-only chunk records the buffered media output."""
+    from agno.media import Audio, Image
+
+    class _MediaStreamModel(MockModel):
+        def __init__(self, *, fail: bool = False, **kwargs: Any) -> None:
+            self.fail = fail
+            super().__init__(**kwargs)
+
+        def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                images=[
+                    Image(
+                        url="https://example.com/stream-img.png",
+                        mime_type="image/png",
+                    )
+                ],
+                audio=Audio(content=b"\x01\x02", format="mp3"),
+            )
+            if self.fail:
+                raise ConnectionError("Stream failed after media chunk")
+            yield ModelResponse(content="later text")
+
+        async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                images=[
+                    Image(
+                        url="https://example.com/async-stream-img.png",
+                        mime_type="image/png",
+                    )
+                ],
+            )
+            if self.fail:
+                raise ConnectionError("Async stream failed after media chunk")
+            yield ModelResponse(content="later async text")
+
+    # 1. Sync early close
+    sync_model = _MediaStreamModel(id="m", provider="OpenAI")
+    stream = sync_model.process_response_stream(
+        messages=[Message(role="user", content="gen image")],
+        assistant_message=Message(role="assistant"),
+        stream_data=MessageData(),
+    )
+    next(stream)
+    stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    out_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert out_msgs[0]["parts"][0]["type"] == "uri"
+    assert (
+        out_msgs[0]["parts"][0]["uri"] == "https://example.com/stream-img.png"
+    )
+    assert out_msgs[0]["parts"][1]["type"] == "blob"
+    assert out_msgs[0]["parts"][1]["modality"] == "audio"
+
+    # 2. Sync mid-stream error
+    span_exporter.clear()
+    err_model = _MediaStreamModel(id="m", provider="OpenAI", fail=True)
+    with pytest.raises(
+        ConnectionError, match="Stream failed after media chunk"
+    ):
+        for _ in err_model.response_stream(
+            messages=[Message(role="user", content="gen image")]
+        ):
+            pass
+
+    (span,) = span_exporter.get_finished_spans()
+    out_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert (
+        out_msgs[0]["parts"][0]["uri"] == "https://example.com/stream-img.png"
+    )
+
+    # 3. Async early close
+    span_exporter.clear()
+
+    async def _async_early_close() -> None:
+        astream = sync_model.aprocess_response_stream(
+            messages=[Message(role="user", content="gen image")],
+            assistant_message=Message(role="assistant"),
+            stream_data=MessageData(),
+        )
+        await astream.__anext__()
+        await astream.aclose()
+
+    asyncio.run(_async_early_close())
+    (span,) = span_exporter.get_finished_spans()
+    out_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert (
+        out_msgs[0]["parts"][0]["uri"]
+        == "https://example.com/async-stream-img.png"
+    )
+
+    # 4. Async mid-stream error
+    span_exporter.clear()
+
+    async def _async_error() -> None:
+        async for _ in err_model.aresponse_stream(
+            messages=[Message(role="user", content="gen image")]
+        ):
+            pass
+
+    with pytest.raises(
+        ConnectionError, match="Async stream failed after media chunk"
+    ):
+        asyncio.run(_async_error())
+
+    (span,) = span_exporter.get_finished_spans()
+    out_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert (
+        out_msgs[0]["parts"][0]["uri"]
+        == "https://example.com/async-stream-img.png"
+    )
+
+
+def test_anthropic_prompt_cache_tokens_normalized_in_input_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that Anthropic-family models normalize input_tokens to include cache read and write tokens."""
+
+    class _AnthropicCacheModel(MockModel):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(
+                content="Cached response",
+                response_usage=MessageMetrics(
+                    input_tokens=10,
+                    output_tokens=25,
+                    cache_read_tokens=100,
+                    cache_write_tokens=20,
+                ),
+            )
+
+        def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                content="Cached stream",
+                response_usage=MessageMetrics(
+                    input_tokens=10,
+                    output_tokens=25,
+                    cache_read_tokens=100,
+                    cache_write_tokens=20,
+                ),
+            )
+
+    model = _AnthropicCacheModel(id="claude-sonnet-4-5", provider="Anthropic")
+    model.response(messages=[Message(role="user", content="Hi")])
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 130
+    )
+    assert (
+        span.attributes.get(
+            GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 100
+    )
+    assert span.attributes.get("gen_ai.usage.cache_write.input_tokens") == 20
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 25
+    )
+
+    span_exporter.clear()
+    list(model.response_stream(messages=[Message(role="user", content="Hi")]))
+    (stream_span,) = span_exporter.get_finished_spans()
+    assert (
+        stream_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+        == 130
+    )
+
+
+def test_model_tool_result_structured_response_null_and_media(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that tool result messages preserve structured AnyValue responses, None, and attached media."""
+    from agno.media import Audio, File, Image, Video
+
+    model = _SyncModel(id="gpt-4o", provider="OpenAI")
+    messages = [
+        Message(
+            role="tool",
+            tool_call_id="call_struct",
+            content=[
+                {"item": "apple", "count": 3},
+                {"item": "pear", "count": 5},
+            ],
+            images=[
+                Image(url="https://example.com/tool-img.png", format="png")
+            ],
+            audio=[Audio(content=b"\x00\x01", format="wav")],
+            videos=[Video(filepath="/tmp/tool.mp4", format="mp4")],
+            files=[File(url="https://example.com/tool.pdf")],
+        ),
+        Message(
+            role="tool",
+            tool_call_id="call_null",
+            content=None,
+        ),
+    ]
+
+    model.response(messages=messages)
+
+    (span,) = span_exporter.get_finished_spans()
+    input_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    )
+    assert len(input_msgs) == 2
+
+    first_parts = input_msgs[0]["parts"]
+    assert first_parts[0] == {
+        "type": "tool_call_response",
+        "id": "call_struct",
+        "response": [
+            {"item": "apple", "count": 3},
+            {"item": "pear", "count": 5},
+        ],
+    }
+    part_types = [p["type"] for p in first_parts[1:]]
+    assert part_types == ["uri", "blob", "uri", "uri"]
+
+    second_parts = input_msgs[1]["parts"]
+    assert second_parts == [
+        {
+            "type": "tool_call_response",
+            "id": "call_null",
+            "response": None,
+        }
+    ]
+
+
+def test_model_input_message_content_blocks(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that a list of provider content blocks on Message.content is parsed into typed message parts."""
+    from base64 import b64encode
+
+    raw_png = b"\x89PNG\r\n\x1a\n"
+    raw_wav = b"RIFF\x00\x00\x00\x00WAVE"
+    png_b64 = b64encode(raw_png).decode()
+    wav_b64 = b64encode(raw_wav).decode()
+
+    model = _SyncModel(id="gpt-4o", provider="OpenAI")
+    messages = [
+        Message(
+            role="user",
+            content=[
+                {"type": "text", "text": "Describe this"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/cat.png"},
+                },
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": png_b64,
+                    },
+                },
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": wav_b64, "format": "wav"},
+                },
+                {
+                    "type": "file",
+                    "file": {"file_id": "file-xyz", "filename": "report.pdf"},
+                },
+            ],
+        )
+    ]
+
+    model.response(messages=messages)
+
+    (span,) = span_exporter.get_finished_spans()
+    input_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    )
+    parts = input_msgs[0]["parts"]
+    assert parts == [
+        {"type": "text", "content": "Describe this"},
+        {
+            "type": "uri",
+            "modality": "image",
+            "mime_type": None,
+            "uri": "https://example.com/cat.png",
+        },
+        {
+            "type": "blob",
+            "modality": "image",
+            "mime_type": "image/png",
+            "content": png_b64,
+        },
+        {
+            "type": "blob",
+            "modality": "audio",
+            "mime_type": "audio/wav",
+            "content": wav_b64,
+        },
+        {
+            "type": "file",
+            "modality": "document",
+            "mime_type": "application/pdf",
+            "file_id": "file-xyz",
+        },
+    ]
+
+
+def test_real_openai_chat_sync_and_async(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test sync and async inference through the real OpenAIChat provider adapter with a transport mock."""
+    import httpx
+    import openai
+    from agno.models.openai import OpenAIChat
+
+    payload = {
+        "id": "chatcmpl-real-adapter-1",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o-2024-08-06",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Response from OpenAIChat!",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 18,
+            "completion_tokens": 9,
+            "total_tokens": 27,
+            "prompt_tokens_details": {"cached_tokens": 4},
+        },
+    }
+
+    sync_client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json=payload)
+            )
+        ),
+    )
+    model = OpenAIChat(id="gpt-4o", temperature=0.5, client=sync_client)
+    resp = model.response(messages=[Message(role="user", content="Hello")])
+    assert resp.content == "Response from OpenAIChat!"
+
+    (sync_span,) = span_exporter.get_finished_spans()
+    assert sync_span.name == "chat gpt-4o"
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+        == "openai"
+    )
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+        == 18
+    )
+    assert (
+        sync_span.attributes.get(
+            GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 4
+    )
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+        == 9
+    )
+    out_msgs = json.loads(
+        str(sync_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert out_msgs[0]["parts"] == [
+        {"type": "text", "content": "Response from OpenAIChat!"}
+    ]
+
+    span_exporter.clear()
+
+    async_client = openai.AsyncOpenAI(
+        api_key="test-key",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json=payload)
+            )
+        ),
+    )
+    async_model = OpenAIChat(
+        id="gpt-4o", temperature=0.5, async_client=async_client
+    )
+    async_resp = asyncio.run(
+        async_model.aresponse(
+            messages=[Message(role="user", content="Async hello")]
+        )
+    )
+    assert async_resp.content == "Response from OpenAIChat!"
+
+    (async_span,) = span_exporter.get_finished_spans()
+    assert async_span.name == "chat gpt-4o"
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+        == "openai"
+    )
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+        == 18
+    )
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+        == 9
+    )
+
+
+def test_real_openai_chat_stream_sync_and_async(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test sync and async streaming inference through the real OpenAIChat adapter over SSE."""
+    import httpx
+    import openai
+    from agno.models.openai import OpenAIChat
+
+    sse_lines = [
+        'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello "},"finish_reason":null}]}',
+        'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"content":"world!"},"finish_reason":"stop"}]}',
+        'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}',
+        "data: [DONE]",
+    ]
+    sse_body = ("\n\n".join(sse_lines) + "\n\n").encode("utf-8")
+
+    sync_client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=sse_body,
+                )
+            )
+        ),
+    )
+    model = OpenAIChat(id="gpt-4o", client=sync_client)
+    chunks = list(
+        model.response_stream(
+            messages=[Message(role="user", content="Stream")]
+        )
+    )
+    assert "".join(c.content or "" for c in chunks) == "Hello world!"
+
+    (sync_span,) = span_exporter.get_finished_spans()
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
+    )
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+        == 11
+    )
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+        == 4
+    )
+    out_msgs = json.loads(
+        str(sync_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert out_msgs[0]["parts"] == [
+        {"type": "text", "content": "Hello world!"}
+    ]
+
+    span_exporter.clear()
+
+    async_client = openai.AsyncOpenAI(
+        api_key="test-key",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=sse_body,
+                )
+            )
+        ),
+    )
+    async_model = OpenAIChat(id="gpt-4o", async_client=async_client)
+
+    async def _consume_async() -> str:
+        parts: list[str] = []
+        async for chunk in async_model.aresponse_stream(
+            messages=[Message(role="user", content="Async stream")]
+        ):
+            if chunk.content:
+                parts.append(chunk.content)
+        return "".join(parts)
+
+    assert asyncio.run(_consume_async()) == "Hello world!"
+
+    (async_span,) = span_exporter.get_finished_spans()
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM)
+        is True
+    )
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+        == 11
+    )
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+        == 4
+    )
+
+
+def test_openai_stream_partial_tool_call_deltas_early_close_and_error(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that early close or mid-stream error on an OpenAI tool-call stream normalizes ChoiceDeltaToolCall deltas without raising AttributeError."""
+    from typing import cast
+
+    from agno.models.openai import OpenAIChat
+    from openai.types.chat.chat_completion_chunk import (
+        ChoiceDeltaToolCall,
+        ChoiceDeltaToolCallFunction,
+    )
+
+    class _DeltaToolStreamModel(OpenAIChat):
+        def __init__(self, *, fail: bool = False, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self._fail = fail
+
+        def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                tool_calls=cast(
+                    Any,
+                    [
+                        ChoiceDeltaToolCall(
+                            index=0,
+                            id="call_delta_1",
+                            type="function",
+                            function=ChoiceDeltaToolCallFunction(
+                                name="get_weather",
+                                arguments='{"city": ',
+                            ),
+                        )
+                    ],
+                )
+            )
+            yield ModelResponse(
+                tool_calls=cast(
+                    Any,
+                    [
+                        ChoiceDeltaToolCall(
+                            index=0,
+                            id=None,
+                            type=None,
+                            function=ChoiceDeltaToolCallFunction(
+                                name=None,
+                                arguments='"Paris"}',
+                            ),
+                        )
+                    ],
+                )
+            )
+            if self._fail:
+                raise ConnectionError("Tool stream interrupted")
+            yield ModelResponse(content="unreachable")
+
+        async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                tool_calls=cast(
+                    Any,
+                    [
+                        ChoiceDeltaToolCall(
+                            index=0,
+                            id="call_delta_async_1",
+                            type="function",
+                            function=ChoiceDeltaToolCallFunction(
+                                name="get_weather",
+                                arguments='{"city": "Tokyo"}',
+                            ),
+                        )
+                    ],
+                )
+            )
+            if self._fail:
+                raise ConnectionError("Async tool stream interrupted")
+            yield ModelResponse(content="unreachable")
+
+    # 1. Sync early close after partial tool-call deltas
+    model = _DeltaToolStreamModel(id="gpt-4o", api_key="test")
+    stream = model.process_response_stream(
+        messages=[Message(role="user", content="Weather?")],
+        assistant_message=Message(role="assistant"),
+        stream_data=MessageData(),
+    )
+    next(stream)
+    next(stream)
+    stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    out_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert out_msgs[0]["parts"] == [
+        {
+            "type": "tool_call",
+            "id": "call_delta_1",
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+        }
+    ]
+
+    # 2. Sync mid-stream error after partial tool-call deltas
+    span_exporter.clear()
+    err_model = _DeltaToolStreamModel(id="gpt-4o", api_key="test", fail=True)
+    with pytest.raises(ConnectionError, match="Tool stream interrupted"):
+        for _ in err_model.response_stream(
+            messages=[Message(role="user", content="Weather?")]
+        ):
+            pass
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ERROR_TYPE) == "ConnectionError"
+    out_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert out_msgs[0]["parts"] == [
+        {
+            "type": "tool_call",
+            "id": "call_delta_1",
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+        }
+    ]
+
+    # 3. Async early close after partial tool-call deltas
+    span_exporter.clear()
+
+    async def _async_close() -> None:
+        astream = model.aprocess_response_stream(
+            messages=[Message(role="user", content="Weather?")],
+            assistant_message=Message(role="assistant"),
+            stream_data=MessageData(),
+        )
+        await astream.__anext__()
+        await astream.aclose()
+
+    asyncio.run(_async_close())
+    (span,) = span_exporter.get_finished_spans()
+    out_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert out_msgs[0]["parts"] == [
+        {
+            "type": "tool_call",
+            "id": "call_delta_async_1",
+            "name": "get_weather",
+            "arguments": {"city": "Tokyo"},
+        }
+    ]
+
+    # 4. Async mid-stream error after partial tool-call deltas
+    span_exporter.clear()
+
+    async def _async_err() -> None:
+        async for _ in err_model.aresponse_stream(
+            messages=[Message(role="user", content="Weather?")]
+        ):
+            pass
+
+    with pytest.raises(ConnectionError, match="Async tool stream interrupted"):
+        asyncio.run(_async_err())
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ERROR_TYPE) == "ConnectionError"
+    out_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    assert out_msgs[0]["parts"] == [
+        {
+            "type": "tool_call",
+            "id": "call_delta_async_1",
+            "name": "get_weather",
+            "arguments": {"city": "Tokyo"},
+        }
+    ]
