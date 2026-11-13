@@ -482,6 +482,7 @@ def _resolve_provider(
     class_name_to_provider: dict[str, str],
     google_classes: tuple[str, ...],
     stop_classes: tuple[str, ...],
+    allow_provider_attr: bool = True,
 ) -> str:
     google_provider = (
         GenAiProviderNameValues.GCP_VERTEX_AI.value
@@ -513,17 +514,18 @@ def _resolve_provider(
             return class_name_to_provider[cls_name]
 
     # 2. Explicit provider attribute on the instance
-    provider_attr = getattr(instance, "provider", None)
-    if isinstance(provider_attr, str) and provider_attr.strip():
-        p_name = provider_attr.strip().lower()
-        if p_name in ("google", "gemini"):
-            return google_provider
-        p_clean = "".join(c for c in p_name if c.isalnum())
-        return (
-            _KNOWN_PROVIDERS.get(p_name)
-            or _KNOWN_PROVIDERS.get(p_clean)
-            or p_name
-        )
+    if allow_provider_attr:
+        provider_attr = getattr(instance, "provider", None)
+        if isinstance(provider_attr, str) and provider_attr.strip():
+            p_name = provider_attr.strip().lower()
+            if p_name in ("google", "gemini"):
+                return google_provider
+            p_clean = "".join(c for c in p_name if c.isalnum())
+            return (
+                _KNOWN_PROVIDERS.get(p_name)
+                or _KNOWN_PROVIDERS.get(p_clean)
+                or p_name
+            )
 
     return _UNKNOWN_PROVIDER
 
@@ -535,6 +537,7 @@ def resolve_embedder_provider(embedder: Embedder) -> str:
         class_name_to_provider=_CLASS_NAME_TO_PROVIDER,
         google_classes=("GeminiEmbedder", "GoogleEmbedder"),
         stop_classes=("OpenAILikeEmbedder", "Embedder"),
+        allow_provider_attr=False,
     )
 
 
@@ -1055,15 +1058,32 @@ def _content_block_to_part(item: Any) -> MessagePart | None:
         return None
 
     if part_type in ("file", "input_file", "document"):
-        file_obj = _get_property_value(item, "file") or item
+        file_obj = (
+            _get_property_value(item, "file")
+            or _get_property_value(item, "source")
+            or item
+        )
         filename = _get_property_value(file_obj, "filename")
-        mime_type = _get_property_value(file_obj, "mime_type")
+        mime_type = _get_property_value(
+            file_obj, "mime_type"
+        ) or _get_property_value(file_obj, "media_type")
         if not isinstance(mime_type, str):
             mime_type = (
                 mimetypes.guess_type(filename)[0]
                 if isinstance(filename, str) and filename
                 else None
             )
+        if _get_property_value(file_obj, "type") == "text":
+            text_data = _get_property_value(
+                file_obj, "data"
+            ) or _get_property_value(file_obj, "text")
+            if isinstance(text_data, str):
+                return BlobPart(
+                    mime_type=mime_type or "text/plain",
+                    modality=Modality.DOCUMENT,
+                    content=text_data.encode("utf-8"),
+                )
+            return None
         file_id = _get_property_value(
             file_obj, "file_id"
         ) or _get_property_value(file_obj, "id")
@@ -1146,19 +1166,32 @@ def _content_to_parts(
     return []
 
 
+_ROLE_ALIASES: dict[str, str] = {
+    "model": Role.ASSISTANT.value,
+    "ai": Role.ASSISTANT.value,
+    "human": Role.USER.value,
+    "function": Role.TOOL.value,
+}
+
+
 def format_model_input_messages(
     messages: Iterable[Message],
 ) -> list[InputMessage]:
     """Format an iterable of Agno Message objects into InputMessage list."""
     result: list[InputMessage] = []
     for msg in messages:
-        role_str = msg.role.lower() if msg.role else "user"
+        raw_role = str(msg.role).strip().lower() if msg.role else ""
+        normalized_role = (
+            _ROLE_ALIASES.get(raw_role, raw_role)
+            if raw_role
+            else Role.USER.value
+        )
         name_str = str(msg.name) if msg.name is not None else None
 
         parts: list[MessagePart] = []
 
         # Tool response message
-        if role_str == "tool" or msg.tool_call_id is not None:
+        if normalized_role == Role.TOOL.value or msg.tool_call_id is not None:
             parts.append(
                 ToolCallResponsePart(
                     id=str(msg.tool_call_id)
@@ -1192,12 +1225,6 @@ def format_model_input_messages(
             )
 
         parts.extend(media_parts)
-
-        # Normalize role
-        if role_str in ("system", "user", "assistant"):
-            normalized_role = role_str
-        else:
-            normalized_role = Role.USER.value
 
         if parts:
             result.append(
