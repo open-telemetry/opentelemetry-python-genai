@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import timeit
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 
@@ -184,12 +183,8 @@ class WorkflowInvocation(GenAIInvocation):
         self._record_metrics()
 
     def _record_metrics(self) -> None:
-        duration_seconds = max(
-            timeit.default_timer() - self._monotonic_start_s,
-            0.0,
-        )
         self._instruments.invoke_workflow_duration.record(
-            duration_seconds,
+            self._get_duration_seconds(),
             attributes=self._get_metric_attributes(),
             context=self._span_context,
         )

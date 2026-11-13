@@ -27,7 +27,10 @@ from opentelemetry.util.genai._invocation import (
     GenAIInvocation,
     _resolve_suppressed_content_and_hook,
 )
-from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.completion_hook import (
+    CompletionHook,
+    _NoOpCompletionHook,
+)
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
@@ -91,6 +94,18 @@ class RealtimeInferenceInvocation(InferenceInvocation):
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
             realtime_session_id=realtime_session_id,
+        )
+
+    @property
+    def should_capture_content(self) -> bool:
+        """Return True when message content should be captured for realtime_inference.
+
+        Because ``realtime_inference`` does not emit a
+        ``gen_ai.client.inference.operation.details`` event, ``EVENT_ONLY`` mode
+        captures content only when a completion hook is active.
+        """
+        return self._should_capture_content_on_span or not isinstance(
+            self._completion_hook, _NoOpCompletionHook
         )
 
     def _maybe_create_event(self) -> LogRecord | None:

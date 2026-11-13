@@ -7,6 +7,8 @@ import json
 import os
 from unittest.mock import patch
 
+import pytest
+
 from opentelemetry._logs import SeverityNumber
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
@@ -201,30 +203,67 @@ def test_realtime_session_events_respect_logger_enabled():
 
 
 def test_mark_end_preserves_observed_end_timestamp():
-    import time
+    clock_s = 100.0
+    clock_ns = 1_000_000_000
 
-    handler, span_exporter, _, metric_reader = _make_handler()
-    inv = handler.realtime_inference(
-        "gcp.gemini",
-        request_model="gemini-2.5-flash-native-audio-preview-12-2025",
-    )
-    inv.mark_end()
-    marked_end_ns = inv._end_time_ns
-    assert marked_end_ns is not None
-    time.sleep(0.05)
-    inv.stop()
+    with (
+        patch(
+            "opentelemetry.util.genai._invocation.timeit.default_timer",
+            side_effect=lambda: clock_s,
+        ),
+        patch(
+            "opentelemetry.util.genai._invocation.time.time_ns",
+            side_effect=lambda: clock_ns,
+        ),
+    ):
+        handler, span_exporter, _, metric_reader = _make_handler()
+        inv = handler.realtime_inference(
+            "gcp.gemini",
+            request_model="gemini-2.5-flash-native-audio-preview-12-2025",
+        )
+        tool_inv = handler.tool("get_weather")
+        wf_inv = handler.workflow("voice_pipeline")
+        agent_inv = handler.invoke_local_agent(agent_name="voice_agent")
 
-    (span,) = span_exporter.get_finished_spans()
-    assert span.end_time == marked_end_ns
+        clock_s = 100.25
+        clock_ns = 1_250_000_000
+        for item in (inv, tool_inv, wf_inv, agent_inv):
+            item.mark_end()
+
+        clock_s = 105.0
+        clock_ns = 6_000_000_000
+        for item in (agent_inv, wf_inv, tool_inv, inv):
+            item.stop()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 4
+    for span in spans:
+        assert span.end_time == 1_250_000_000
 
     metrics_data = metric_reader.get_metrics_data()
-    duration_dp = [
-        dp
-        for rm in metrics_data.resource_metrics
-        for sm in rm.scope_metrics
-        for m in sm.metrics
-        if m.name == "gen_ai.client.operation.duration"
-        for dp in m.data.data_points
-    ]
-    assert len(duration_dp) == 1
-    assert duration_dp[0].sum < 0.04
+    for metric_name in (
+        "gen_ai.client.operation.duration",
+        "gen_ai.execute_tool.duration",
+        "gen_ai.invoke_workflow.duration",
+        "gen_ai.invoke_agent.duration",
+    ):
+        duration_dp = [
+            dp
+            for rm in metrics_data.resource_metrics
+            for sm in rm.scope_metrics
+            for m in sm.metrics
+            if m.name == metric_name
+            for dp in m.data.data_points
+        ]
+        assert len(duration_dp) == 1
+        assert duration_dp[0].sum == pytest.approx(0.25)
+
+
+def test_realtime_inference_should_capture_content_event_only():
+    with patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+    ):
+        handler, _, _, _ = _make_handler()
+        with handler.realtime_inference("gcp.gemini") as inv:
+            assert inv.should_capture_content is False

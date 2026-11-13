@@ -201,15 +201,18 @@ To suppress these events while keeping a ``LoggerProvider`` active, configure yo
 <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
 
 When content capture is enabled, ``BlobPart.content`` carries raw ``bytes`` inside structured
-``AnyValue`` message dictionaries (on log events today, and on spans once
-`open-telemetry/opentelemetry-python-genai#1013 <https://github.com/open-telemetry/opentelemetry-python-genai/pull/1013>`_
-lands). To truncate large ``bytes`` (and ``str``) values without corrupting the surrounding message
-structure, set ``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`` (or ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` /
-``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT``), or configure ``SpanLimits(max_span_attribute_length=...)`` /
-``LogRecordLimits(max_log_record_attribute_length=...)``. Note that truncating ``bytes`` / ``bytearray``
-attribute values requires `open-telemetry/opentelemetry-python#5855
+``AnyValue`` message dictionaries on log events. To truncate large ``bytes`` (and ``str``) values
+on log events without corrupting the surrounding message structure, set
+``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`` (or ``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT``) or
+configure ``LogRecordLimits(max_log_record_attribute_length=...)``. Note that truncating ``bytes`` /
+``bytearray`` attribute values requires `open-telemetry/opentelemetry-python#5855
 <https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased
-version of ``opentelemetry-api``).
+version of ``opentelemetry-api``). On spans, message attributes are currently serialized as a
+single JSON string (with ``BlobPart.content`` base64-encoded), so setting
+``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` or ``SpanLimits(max_span_attribute_length=...)``
+truncates the serialized JSON string itself and can make it unparsable until structured span
+attributes (`open-telemetry/opentelemetry-python-genai#1013
+<https://github.com/open-telemetry/opentelemetry-python-genai/pull/1013>`_) land.
 
 When an inference, embeddings, retrieval, fetch response, agent invocation, or tool execution
 operation fails with an exception, the package also emits the operation's exception event (for
