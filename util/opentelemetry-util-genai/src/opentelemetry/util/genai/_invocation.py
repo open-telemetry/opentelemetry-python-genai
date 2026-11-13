@@ -384,18 +384,19 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             timing for inference only.
         """
 
-    def _record_client_metrics(self) -> None:
-        """Record gen_ai.client.operation.duration and gen_ai.client.token.usage."""
-        attributes = self._get_metric_attributes()
+    def _get_duration_seconds(self) -> float:
+        """Return operation duration in seconds, using the marked end time if set."""
         end_s = (
             self._monotonic_end_s
             if self._monotonic_end_s is not None
             else timeit.default_timer()
         )
-        duration_seconds = max(
-            end_s - self._monotonic_start_s,
-            0.0,
-        )
+        return max(end_s - self._monotonic_start_s, 0.0)
+
+    def _record_client_metrics(self) -> None:
+        """Record gen_ai.client.operation.duration and gen_ai.client.token.usage."""
+        attributes = self._get_metric_attributes()
+        duration_seconds = self._get_duration_seconds()
         self._instruments.operation_duration.record(
             duration_seconds,
             attributes=attributes,

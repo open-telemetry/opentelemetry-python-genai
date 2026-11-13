@@ -208,23 +208,45 @@ def test_mark_end_preserves_observed_end_timestamp():
         "gcp.gemini",
         request_model="gemini-2.5-flash-native-audio-preview-12-2025",
     )
-    inv.mark_end()
+    tool_inv = handler.tool("get_weather")
+    wf_inv = handler.workflow("voice_pipeline")
+    agent_inv = handler.invoke_local_agent(agent_name="voice_agent")
+
+    for item in (inv, tool_inv, wf_inv, agent_inv):
+        item.mark_end()
     marked_end_ns = inv._end_time_ns
     assert marked_end_ns is not None
     time.sleep(0.05)
-    inv.stop()
+    for item in (agent_inv, wf_inv, tool_inv, inv):
+        item.stop()
 
-    (span,) = span_exporter.get_finished_spans()
-    assert span.end_time == marked_end_ns
+    spans = span_exporter.get_finished_spans()
+    assert spans[-1].end_time == marked_end_ns
 
     metrics_data = metric_reader.get_metrics_data()
-    duration_dp = [
-        dp
-        for rm in metrics_data.resource_metrics
-        for sm in rm.scope_metrics
-        for m in sm.metrics
-        if m.name == "gen_ai.client.operation.duration"
-        for dp in m.data.data_points
-    ]
-    assert len(duration_dp) == 1
-    assert duration_dp[0].sum < 0.04
+    for metric_name in (
+        "gen_ai.client.operation.duration",
+        "gen_ai.execute_tool.duration",
+        "gen_ai.invoke_workflow.duration",
+        "gen_ai.invoke_agent.duration",
+    ):
+        duration_dp = [
+            dp
+            for rm in metrics_data.resource_metrics
+            for sm in rm.scope_metrics
+            for m in sm.metrics
+            if m.name == metric_name
+            for dp in m.data.data_points
+        ]
+        assert len(duration_dp) == 1
+        assert duration_dp[0].sum < 0.04
+
+
+def test_realtime_inference_should_capture_content_event_only():
+    with patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+    ):
+        handler, _, _, _ = _make_handler()
+        with handler.realtime_inference("gcp.gemini") as inv:
+            assert inv.should_capture_content is False
