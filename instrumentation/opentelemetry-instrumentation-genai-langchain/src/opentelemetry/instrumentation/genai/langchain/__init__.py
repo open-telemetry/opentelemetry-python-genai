@@ -44,6 +44,10 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
 )
+from opentelemetry.instrumentation.genai.langchain.lifecycle import (
+    instrument_checkpointers,
+    uninstrument_checkpointers,
+)
 from opentelemetry.instrumentation.genai.langchain.package import _instruments
 from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
@@ -109,6 +113,10 @@ class LangChainInstrumentor(BaseInstrumentor):
         self._execution_context.instrument()
         self._instrument_agent_entry_points()
 
+        # LangGraph only: report every checkpoint the graph's saver persists.
+        # No-op without LangGraph.
+        instrument_checkpointers(handler)
+
     @staticmethod
     def _instrument_agent_entry_points() -> None:
         """Recover the create_agent provenance the callback metadata does not carry."""
@@ -131,8 +139,8 @@ class LangChainInstrumentor(BaseInstrumentor):
             self._callback_handler._enabled = False
             self._callback_handler = None
         unwrap("langchain_core.callbacks.base.BaseCallbackManager", "__init__")
-        # The agent entry points wrap last, over the execution boundary, so
-        # they come off first.
+        # Checkpointers went on last, so they come off first.
+        uninstrument_checkpointers()
         try:
             import langgraph.pregel
 
