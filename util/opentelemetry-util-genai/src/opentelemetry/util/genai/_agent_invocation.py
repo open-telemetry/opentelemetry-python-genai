@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import timeit
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -481,13 +480,9 @@ class LocalAgentInvocation(AgentInvocation):
             )
 
     def _record_metrics(self) -> None:
-        duration_seconds = max(
-            timeit.default_timer() - self._monotonic_start_s,
-            0.0,
-        )
         attributes = self._get_metric_attributes()
         self._instruments.invoke_agent_duration.record(
-            duration_seconds,
+            self._get_duration_seconds(),
             attributes=attributes,
             context=self._span_context,
         )

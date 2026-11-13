@@ -141,6 +141,18 @@ class ReasoningPart:
 
 
 @dataclass()
+class TranscriptionPart:
+    """Represents the text transcription of an audio part in the same message.
+
+    This model is specified as part of semconv in `GenAI messages Python models - TranscriptionPart
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
+
+    content: str
+    type: Literal["transcription"] = "transcription"
+
+
+@dataclass()
 class CompactionPart:
     """Represents a server-side context compaction event.
 
@@ -318,6 +330,7 @@ MessagePart = Union[
     FilePart,
     UriPart,
     ReasoningPart,
+    TranscriptionPart,
     CompactionPart,
     GenericPart,  # Deprecated, kept for backwards compatibility.
 ]

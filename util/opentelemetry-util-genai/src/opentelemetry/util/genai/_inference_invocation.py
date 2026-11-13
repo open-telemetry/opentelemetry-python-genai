@@ -79,6 +79,7 @@ _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
 )
 _GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
 _GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
+_GEN_AI_REALTIME_SESSION_ID: Final = "gen_ai.realtime_session.id"
 
 
 CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
@@ -138,6 +139,7 @@ class InferenceData(_ContextData):
     usage_text_cache_read_input_tokens: int | None = None
     usage_text_input_tokens: int | None = None
     usage_text_output_tokens: int | None = None
+    realtime_session_id: str | None = None
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -148,6 +150,7 @@ class InferenceInvocation(GenAIInvocation):
 
     _records_stream_telemetry = True
     _exception_event_name = "gen_ai.client.inference.exception"
+    _emit_operation_details_event = True
 
     # Set once the invocation is handed to a stream wrapper.
     _request_stream: bool | None = None
@@ -172,6 +175,7 @@ class InferenceInvocation(GenAIInvocation):
         context: Context | None = None,
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
+        realtime_session_id: str | None = None,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -192,6 +196,7 @@ class InferenceInvocation(GenAIInvocation):
             server_address=server_address,
             server_port=server_port,
             conversation_id=conversation_id,
+            realtime_session_id=realtime_session_id,
             operation_name=operation_name,
             input_messages=[],
             output_messages=[],
@@ -225,10 +230,13 @@ class InferenceInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
-        self._emit_event: bool = self._logger.enabled(
-            context=self._span_context,
-            severity_number=SeverityNumber.DEBUG,
-            event_name="gen_ai.client.inference.operation.details",
+        self._emit_event: bool = (
+            self._emit_operation_details_event
+            and self._logger.enabled(
+                context=self._span_context,
+                severity_number=SeverityNumber.DEBUG,
+                event_name="gen_ai.client.inference.operation.details",
+            )
         )
 
     @property
@@ -541,6 +549,14 @@ class InferenceInvocation(GenAIInvocation):
         self.data.prompt_version = value
 
     @property
+    def realtime_session_id(self) -> str | None:
+        return self.data.realtime_session_id
+
+    @realtime_session_id.setter
+    def realtime_session_id(self, value: str | None) -> None:
+        self.data.realtime_session_id = value
+
+    @property
     def input_messages(self) -> list[InputMessage]:
         if isinstance(self.data.input_messages, list):
             return self.data.input_messages
@@ -747,6 +763,10 @@ class InferenceInvocation(GenAIInvocation):
             (
                 GenAI.GEN_AI_CONVERSATION_ID,
                 self.conversation_id or self.data.conversation_id,
+            ),
+            (
+                _GEN_AI_REALTIME_SESSION_ID,
+                self.data.realtime_session_id,
             ),
             (GenAI.GEN_AI_REQUEST_STREAM, self.request_stream),
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.data.request_temperature),
@@ -997,6 +1017,7 @@ class SuppressedInferenceInvocation(InferenceInvocation):
         context: Context | None = None,
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
+        realtime_session_id: str | None = None,
     ) -> None:
         ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY, context=context)
         (
@@ -1024,6 +1045,7 @@ class SuppressedInferenceInvocation(InferenceInvocation):
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
+            realtime_session_id=realtime_session_id,
         )
 
     def _on_stream_chunk(self, chunk_at: float) -> None:

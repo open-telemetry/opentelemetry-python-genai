@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import time
 import timeit
 from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -289,7 +290,21 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             self._attach_to_context = False
             self._context_token = None
         self._monotonic_start_s: float = timeit.default_timer()
+        self._monotonic_end_s: float | None = None
+        self._end_time_ns: int | None = None
         self._finished: bool = False
+
+    def mark_end(self) -> None:
+        """Record the operation end timestamp before finalization.
+
+        Used when a completion or interruption signal arrives before final
+        metadata (such as trailing usage), so span and metric durations
+        reflect the observed operation end rather than finalization time.
+        """
+        if self._finished or self._monotonic_end_s is not None:
+            return
+        self._monotonic_end_s = timeit.default_timer()
+        self._end_time_ns = time.time_ns()
 
     @property
     def should_capture_content(self) -> bool:
@@ -369,13 +384,19 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             timing for inference only.
         """
 
+    def _get_duration_seconds(self) -> float:
+        """Return operation duration in seconds, using the marked end time if set."""
+        end_s = (
+            self._monotonic_end_s
+            if self._monotonic_end_s is not None
+            else timeit.default_timer()
+        )
+        return max(end_s - self._monotonic_start_s, 0.0)
+
     def _record_client_metrics(self) -> None:
         """Record gen_ai.client.operation.duration and gen_ai.client.token.usage."""
         attributes = self._get_metric_attributes()
-        duration_seconds = max(
-            timeit.default_timer() - self._monotonic_start_s,
-            0.0,
-        )
+        duration_seconds = self._get_duration_seconds()
         self._instruments.operation_duration.record(
             duration_seconds,
             attributes=attributes,
@@ -442,7 +463,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 self._emit_exception_event(error)
         finally:
             self.suspend()
-            self.span.end()
+            self.span.end(end_time=self._end_time_ns)
             if self._context_key is not None:
                 self._span_context = set_value(
                     self._context_key, None, context=self._span_context
