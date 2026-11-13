@@ -3,13 +3,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from llama_index.core.instrumentation import get_dispatcher
 from llama_index.core.instrumentation.span_handlers import SimpleSpanHandler
 from llama_index.llms.openai import OpenAI
+from vcr.request import Request
 
 from opentelemetry.instrumentation.genai.llama_index import (
     LlamaIndexInstrumentor,
@@ -70,8 +73,19 @@ def vcr_config():
                 "Set-Cookie": "test_set_cookie",
             }
         ),
-        "match_on": ["method", "scheme", "host", "port", "path", "body"],
+        "match_on": ["method", "scheme", "host", "port", "path", "json_body"],
     }
+
+
+def _json_body(r1: Request, r2: Request) -> None:
+    assert json.loads(r1.body or "null") == json.loads(r2.body or "null")
+
+
+# Recorded requests carry no content-type header, so vcrpy's built-in "body"
+# matcher compares raw strings and breaks when the client reorders JSON keys.
+@pytest.fixture(scope="module", autouse=True)
+def register_json_body_matcher(vcr: Any) -> None:
+    vcr.register_matcher("json_body", _json_body)
 
 
 @pytest.fixture
