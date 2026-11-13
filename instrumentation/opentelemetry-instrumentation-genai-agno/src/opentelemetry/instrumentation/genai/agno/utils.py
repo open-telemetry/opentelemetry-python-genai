@@ -687,16 +687,30 @@ def _media_item_to_part(
 
     if media.content is not None:
         if isinstance(media.content, bytes):
+            content_bytes = media.content
+            if modality == Modality.AUDIO:
+                try:
+                    decoded = decode_base64(media.content.decode("ascii"))
+                    if decoded is not None:
+                        content_bytes = decoded
+                except UnicodeDecodeError:
+                    pass
             return BlobPart(
                 mime_type=mime_type,
                 modality=modality,
-                content=media.content,
+                content=content_bytes,
             )
         if isinstance(media.content, str):
+            content_bytes = (
+                decoded
+                if modality != Modality.DOCUMENT
+                and (decoded := decode_base64(media.content)) is not None
+                else media.content.encode("utf-8")
+            )
             return BlobPart(
                 mime_type=mime_type,
                 modality=modality,
-                content=media.content.encode("utf-8"),
+                content=content_bytes,
             )
 
     url = media.url
@@ -772,15 +786,21 @@ def _append_media_items(
 def _extract_media_parts(
     obj: Message | ModelResponse,
     stream_data: MessageData | None = None,
+    *,
+    stream_images: Sequence[Image] | None = None,
+    stream_videos: Sequence[Video] | None = None,
 ) -> list[MessagePart]:
     parts: list[MessagePart] = []
     _append_media_items(parts, obj.images, Modality.IMAGE)
-    image_output = getattr(obj, "image_output", None) or (
-        getattr(stream_data, "response_image", None)
-        if stream_data is not None
-        else None
-    )
-    _append_media_items(parts, image_output, Modality.IMAGE)
+    if stream_images:
+        _append_media_items(parts, stream_images, Modality.IMAGE)
+    else:
+        image_output = getattr(obj, "image_output", None) or (
+            getattr(stream_data, "response_image", None)
+            if stream_data is not None
+            else None
+        )
+        _append_media_items(parts, image_output, Modality.IMAGE)
 
     _append_media_items(parts, obj.audio, Modality.AUDIO)
     _append_media_items(parts, getattr(obj, "audios", None), Modality.AUDIO)
@@ -792,12 +812,15 @@ def _extract_media_parts(
     _append_media_items(parts, audio_output, Modality.AUDIO)
 
     _append_media_items(parts, obj.videos, Modality.VIDEO)
-    video_output = getattr(obj, "video_output", None) or (
-        getattr(stream_data, "response_video", None)
-        if stream_data is not None
-        else None
-    )
-    _append_media_items(parts, video_output, Modality.VIDEO)
+    if stream_videos:
+        _append_media_items(parts, stream_videos, Modality.VIDEO)
+    else:
+        video_output = getattr(obj, "video_output", None) or (
+            getattr(stream_data, "response_video", None)
+            if stream_data is not None
+            else None
+        )
+        _append_media_items(parts, video_output, Modality.VIDEO)
 
     _append_media_items(parts, obj.files, Modality.DOCUMENT)
     file_output = getattr(obj, "file_output", None) or (
@@ -1238,6 +1261,9 @@ def format_model_output_message(
     assistant_message: Message | ModelResponse,
     stream_data: MessageData | None = None,
     model: Model | None = None,
+    *,
+    stream_images: Sequence[Image] | None = None,
+    stream_videos: Sequence[Video] | None = None,
 ) -> OutputMessage:
     """Format an Agno assistant message into an OutputMessage."""
     parts: list[MessagePart] = []
@@ -1259,7 +1285,12 @@ def format_model_output_message(
         parts.extend(_content_to_parts(content))
 
     parts.extend(
-        _extract_media_parts(assistant_message, stream_data=stream_data)
+        _extract_media_parts(
+            assistant_message,
+            stream_data=stream_data,
+            stream_images=stream_images,
+            stream_videos=stream_videos,
+        )
     )
     if assistant_message.tool_calls:
         tool_calls: Sequence[Any] | None = assistant_message.tool_calls

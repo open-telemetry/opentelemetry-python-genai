@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agno.agent import RunOutput
+    from agno.media import Image, Video
     from agno.models.base import MessageData, Model
     from agno.models.message import Message
     from agno.models.response import ModelResponse
@@ -340,30 +341,49 @@ class AsyncAgnoWorkflowStreamWrapper(
 
 
 class _ModelStreamMixin:
-    _self_invocation: InferenceInvocation
+    _self_invocation: InferenceInvocation | None
+    _self_start_invocation: Callable[[], InferenceInvocation] | None
     _self_assistant_message: Message | None
     _self_stream_data: MessageData | None
     _self_model: Model | None
+    _self_stream_images: list[Image]
+    _self_stream_videos: list[Video]
+
+    def _ensure_invocation(self) -> InferenceInvocation:
+        if self._self_invocation is None:
+            assert self._self_start_invocation is not None
+            invocation = self._self_start_invocation()
+            setattr(invocation, "_request_stream", True)
+            invocation.suspend()
+            self._self_invocation = invocation
+        return self._self_invocation
 
     def _process_chunk(self, chunk: ModelResponse) -> None:
-        populate_provider_data(self._self_invocation, chunk.provider_data)
+        invocation = self._ensure_invocation()
+        populate_provider_data(invocation, chunk.provider_data)
+        if invocation.should_capture_content:
+            if chunk.images:
+                self._self_stream_images.extend(chunk.images)
+            if chunk.videos:
+                self._self_stream_videos.extend(chunk.videos)
 
     def _finalize_telemetry(self, error: BaseException | None = None) -> None:
+        invocation = self._ensure_invocation()
         if self._self_assistant_message is not None:
             populate_provider_data(
-                self._self_invocation,
+                invocation,
                 getattr(self._self_assistant_message, "provider_data", None),
             )
         if self._self_stream_data is not None:
             populate_provider_data(
-                self._self_invocation,
+                invocation,
                 self._self_stream_data.response_provider_data,
             )
 
         metrics = getattr(self._self_assistant_message, "metrics", None)
         if has_model_token_usage(metrics):
             record_model_token_usage(
-                self._self_invocation, metrics, model=self._self_model
+                invocation, metrics, model=self._self_model
             )
         elif self._self_stream_data is not None:
             sd_metrics = getattr(
@@ -371,7 +391,7 @@ class _ModelStreamMixin:
             )
             if has_model_token_usage(sd_metrics):
                 record_model_token_usage(
-                    self._self_invocation, sd_metrics, model=self._self_model
+                    invocation, sd_metrics, model=self._self_model
                 )
 
         finish_reasons = (
@@ -382,25 +402,28 @@ class _ModelStreamMixin:
             )
         )
         if finish_reasons:
-            self._self_invocation.finish_reasons = finish_reasons
+            invocation.finish_reasons = finish_reasons
 
-        if self._self_invocation.should_capture_content:
+        if invocation.should_capture_content:
             if self._self_assistant_message is not None and (
                 has_model_output_content(self._self_assistant_message)
                 or has_stream_data_content(self._self_stream_data)
+                or bool(self._self_stream_images or self._self_stream_videos)
             ):
-                self._self_invocation.output_messages = [
+                invocation.output_messages = [
                     format_model_output_message(
                         self._self_assistant_message,
                         stream_data=self._self_stream_data,
                         model=self._self_model,
+                        stream_images=self._self_stream_images,
+                        stream_videos=self._self_stream_videos,
                     )
                 ]
 
         if error is not None:
-            self._self_invocation.fail(error)
+            invocation.fail(error)
         else:
-            self._self_invocation.stop()
+            invocation.stop()
 
     def _on_stream_end(self) -> None:
         self._finalize_telemetry()
@@ -415,16 +438,26 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
     def __init__(
         self,
         stream: Any,
-        invocation: InferenceInvocation,
+        invocation: InferenceInvocation | None = None,
         assistant_message: Message | None = None,
         stream_data: MessageData | None = None,
         model: Model | None = None,
+        *,
+        start_invocation: Callable[[], InferenceInvocation] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
-        invocation.suspend()
+        if invocation is not None:
+            invocation.suspend()
+        self._self_start_invocation = start_invocation
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
         self._self_model = model
+        self._self_stream_images = []
+        self._self_stream_videos = []
+
+    def _advance(self, read: Callable[[], Any]) -> Any:
+        self._ensure_invocation()
+        return super()._advance(read)
 
 
 class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
@@ -433,13 +466,23 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
     def __init__(
         self,
         stream: Any,
-        invocation: InferenceInvocation,
+        invocation: InferenceInvocation | None = None,
         assistant_message: Message | None = None,
         stream_data: MessageData | None = None,
         model: Model | None = None,
+        *,
+        start_invocation: Callable[[], InferenceInvocation] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
-        invocation.suspend()
+        if invocation is not None:
+            invocation.suspend()
+        self._self_start_invocation = start_invocation
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
         self._self_model = model
+        self._self_stream_images = []
+        self._self_stream_videos = []
+
+    async def _advance(self, read: Callable[[], Awaitable[Any]]) -> Any:
+        self._ensure_invocation()
+        return await super()._advance(read)

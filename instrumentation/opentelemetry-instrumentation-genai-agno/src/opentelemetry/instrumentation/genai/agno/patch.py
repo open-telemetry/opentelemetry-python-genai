@@ -1750,6 +1750,19 @@ def _knowledge_asearch(
     return traced_method
 
 
+def _get_request_setting(instance: Model, *names: str) -> Any:
+    req_params = getattr(instance, "request_params", None)
+    if isinstance(req_params, Mapping):
+        typed_params = cast(Mapping[str, Any], req_params)
+        for name in names:
+            if (val := typed_params.get(name)) is not None:
+                return val
+    for name in names:
+        if (val := getattr(instance, name, None)) is not None:
+            return val
+    return None
+
+
 def _start_model_inference(
     handler: TelemetryHandler,
     instance: Model,
@@ -1808,31 +1821,34 @@ def _start_model_inference(
         conversation_id=str(session_id) if session_id is not None else None,
     )
 
-    invocation.temperature = safe_float(getattr(instance, "temperature", None))
-    invocation.top_p = safe_float(getattr(instance, "top_p", None))
-    invocation.top_k = safe_int(getattr(instance, "top_k", None))
+    invocation.temperature = safe_float(
+        _get_request_setting(instance, "temperature")
+    )
+    invocation.top_p = safe_float(_get_request_setting(instance, "top_p"))
+    invocation.top_k = safe_int(_get_request_setting(instance, "top_k"))
     invocation.max_tokens = safe_int(
-        getattr(instance, "max_tokens", None)
-        or getattr(instance, "max_completion_tokens", None)
-        or getattr(instance, "max_output_tokens", None)
+        _get_request_setting(
+            instance,
+            "max_tokens",
+            "max_completion_tokens",
+            "max_output_tokens",
+        )
     )
     invocation.frequency_penalty = safe_float(
-        getattr(instance, "frequency_penalty", None)
+        _get_request_setting(instance, "frequency_penalty")
     )
     invocation.presence_penalty = safe_float(
-        getattr(instance, "presence_penalty", None)
+        _get_request_setting(instance, "presence_penalty")
     )
 
-    stop = getattr(instance, "stop_sequences", None) or getattr(
-        instance, "stop", None
-    )
+    stop = _get_request_setting(instance, "stop_sequences", "stop")
     if isinstance(stop, str):
         invocation.stop_sequences = [stop]
     elif isinstance(stop, (list, tuple)):
         stop_seqs = cast(Sequence[object], stop)
         invocation.stop_sequences = [str(s) for s in stop_seqs]
 
-    invocation.seed = safe_int(getattr(instance, "seed", None))
+    invocation.seed = safe_int(_get_request_setting(instance, "seed"))
 
     if invocation.should_capture_content:
         if tools:
@@ -1945,18 +1961,31 @@ def _model_process_response_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation, assistant_message, stream_data = _start_model_inference(
-            handler, instance, args, kwargs, wrapped=wrapped
+        assistant_message = cast(
+            "Message | None",
+            get_argument("assistant_message", wrapped, args, kwargs),
         )
+        stream_data = cast(
+            "MessageData | None",
+            get_argument("stream_data", wrapped, args, kwargs),
+        )
+
+        def _start() -> InferenceInvocation:
+            invocation, _, _ = _start_model_inference(
+                handler, instance, args, kwargs, wrapped=wrapped
+            )
+            return invocation
+
         try:
             stream = wrapped(*args, **kwargs)
         except BaseException as error:
+            invocation = _start()
             invocation.fail(error)
             raise
 
         return AgnoModelStreamWrapper(
             stream,
-            invocation=invocation,
+            start_invocation=_start,
             assistant_message=assistant_message,
             stream_data=stream_data,
             model=instance,
@@ -1974,18 +2003,31 @@ def _model_aprocess_response_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation, assistant_message, stream_data = _start_model_inference(
-            handler, instance, args, kwargs, wrapped=wrapped
+        assistant_message = cast(
+            "Message | None",
+            get_argument("assistant_message", wrapped, args, kwargs),
         )
+        stream_data = cast(
+            "MessageData | None",
+            get_argument("stream_data", wrapped, args, kwargs),
+        )
+
+        def _start() -> InferenceInvocation:
+            invocation, _, _ = _start_model_inference(
+                handler, instance, args, kwargs, wrapped=wrapped
+            )
+            return invocation
+
         try:
             stream = wrapped(*args, **kwargs)
         except BaseException as error:
+            invocation = _start()
             invocation.fail(error)
             raise
 
         return AsyncAgnoModelStreamWrapper(
             stream,
-            invocation=invocation,
+            start_invocation=_start,
             assistant_message=assistant_message,
             stream_data=stream_data,
             model=instance,
