@@ -78,6 +78,7 @@ except ImportError:
             total_input_tokens = None
             total_output_tokens = None
             total_thought_tokens = None
+            total_cached_tokens = None
 
         class Input:
             pass
@@ -278,11 +279,15 @@ _SERVER_TOOL_RESPONSE_NAMES = {
     "url_context_result": "url_context",
 }
 
-_TOOL_STEP_TYPES = {
+_OUTPUT_TOOL_STEP_TYPES = {
     "function_call",
-    "function_result",
     *_SERVER_TOOL_CALL_NAMES,
     *_SERVER_TOOL_RESPONSE_NAMES,
+}
+
+_TOOL_STEP_TYPES = {
+    "function_result",
+    *_OUTPUT_TOOL_STEP_TYPES,
 }
 
 
@@ -297,10 +302,9 @@ def _to_server_tool_part(
     if tool_name is None and response_name is None:
         return None
 
-    if isinstance(item, dict):
-        payload = dict(item)
-    else:
-        payload = item.model_dump(exclude_none=True, mode="json")
+    payload = _as_payload(item)
+    if payload is None:
+        return None
 
     item_id = payload.pop("id", None)
     call_id = payload.pop("call_id", None)
@@ -323,7 +327,7 @@ def _to_server_tool_part(
     )
 
 
-def _interaction_item_to_part(
+def _interaction_output_item_to_part(
     item: Step | dict[str, object],
 ) -> MessagePart | None:
     if isinstance(item, dict):
@@ -331,28 +335,51 @@ def _interaction_item_to_part(
         item_id = item.get("id")
         name = item.get("name")
         arguments = item.get("arguments")
-        call_id = item.get("call_id")
-        result = item.get("result")
     else:
         item_type = item.type
         item_id = item.id if item_type == "function_call" else None
         name = item.name if item_type == "function_call" else None
         arguments = item.arguments if item_type == "function_call" else None
-        call_id = item.call_id if item_type == "function_result" else None
-        result = item.result if item_type == "function_result" else None
 
     if item_type == "function_call":
         return ToolCallRequestPart(
             id=item_id if isinstance(item_id, str) else None,
             name=name if isinstance(name, str) else "",
-            arguments=arguments,
-        )
-    if item_type == "function_result":
-        return ToolCallResponsePart(
-            id=call_id if isinstance(call_id, str) else None,
-            response=result,
+            arguments=_as_json_value(arguments),
         )
     return _to_server_tool_part(item)
+
+
+def _interaction_item_to_part(
+    item: Step | dict[str, object],
+) -> MessagePart | None:
+    item_type = item.get("type") if isinstance(item, dict) else item.type
+    if item_type == "function_result":
+        call_id = (
+            item.get("call_id") if isinstance(item, dict) else item.call_id
+        )
+        result = item.get("result") if isinstance(item, dict) else item.result
+        return ToolCallResponsePart(
+            id=call_id if isinstance(call_id, str) else None,
+            response=_as_json_value(result),
+        )
+    return _interaction_output_item_to_part(item)
+
+
+def _content_item_to_part(item: Any) -> MessagePart | None:
+    if isinstance(item, str):
+        return TextPart(content=item)
+    item_type = _get_field(item, "type")
+    if item_type == "text":
+        text = _get_field(item, "text")
+        return TextPart(content=text if isinstance(text, str) else "")
+    if item_type == "document":
+        return UriPart(
+            mime_type=_get_field(item, "mime_type"),
+            modality=Modality.DOCUMENT,
+            uri=_get_field(item, "uri") or "",
+        )
+    return None
 
 
 # Logic for parsing Input is tricky:
@@ -391,15 +418,15 @@ def _interactions_input_to_messages(
 
         if message_part is not None:
             parts.append(message_part)
-        elif item_type == "text":
-            part = TextPart(content=_get_field(item, "text") or "")
-            parts.append(part)
-        elif item_type == "document":
-            part = UriPart(
-                mime_type=_get_field(item, "mime_type"),
-                modality=Modality.DOCUMENT,
-                uri=_get_field(item, "uri") or "",
-            )
+        elif item_type == "user_input":
+            content = _get_field(item, "content")
+            if isinstance(content, Sequence) and not isinstance(
+                content, (str, bytes)
+            ):
+                for sub_item in content:
+                    if part := _content_item_to_part(sub_item):
+                        parts.append(part)
+        elif part := _content_item_to_part(item):
             parts.append(part)
 
     return [InputMessage(role=Role.USER.value, parts=parts)]
@@ -434,7 +461,7 @@ def _interactions_response_to_messages(
 ) -> list[OutputMessage]:
     parts: list[MessagePart] = []
     for step in interaction.steps or []:
-        if part := _interaction_item_to_part(step):
+        if part := _interaction_output_item_to_part(step):
             parts.append(part)
             continue
         if step.type != "model_output":
@@ -445,9 +472,10 @@ def _interactions_response_to_messages(
                 parts.append(TextPart(content=text))
 
     if not any(isinstance(part, TextPart) for part in parts):
-        parts.append(
-            TextPart(content=_get_interaction_output_text(interaction))
-        )
+        if output_text := _get_interaction_output_text(interaction):
+            parts.append(TextPart(content=output_text))
+    if not parts:
+        return []
     return [
         OutputMessage(
             role=Role.ASSISTANT.value,
@@ -500,16 +528,7 @@ def _interaction_tool_definitions(
         The tool definitions declared on the interaction, or None when it
         declares none that map to a semconv tool definition.
     """
-    tools = _get_field(interaction, "tools")
-    if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
-        return None
-    dumped: list[Any] = []
-    for tool in tools:
-        if isinstance(tool, dict):
-            dumped.append(tool)
-        elif hasattr(tool, "model_dump"):
-            dumped.append(tool.model_dump(exclude_none=True, mode="json"))
-    return _maybe_get_tool_definitions(dumped)
+    return _maybe_get_tool_definitions(_get_field(interaction, "tools"))
 
 
 def _apply_fetched_interaction_attributes(
@@ -780,8 +799,9 @@ class _StreamedContent:
         # A resumed stream picks up mid-interaction, so an index whose
         # step.start went to the dropped connection has no type yet and stays
         # eligible. A thought delta carries an opaque signature rather than
-        # text, so it contributes nothing either way.
-        if entry["type"] == "thought":
+        # text, and user_input / function_result steps are caller inputs rather
+        # than model output, so they contribute nothing either way.
+        if entry["type"] in ("thought", "user_input", "function_result"):
             return
         delta = _get_field(chunk, "delta")
         if delta is None:
@@ -795,7 +815,7 @@ class _StreamedContent:
     def _merge_delta(entry: dict[str, Any], delta: Any) -> None:
         """Fold a delta's structured fields into the step's payload."""
         delta_type = _get_field(delta, "type")
-        if entry["payload"] is None and delta_type in _TOOL_STEP_TYPES:
+        if entry["payload"] is None and delta_type in _OUTPUT_TOOL_STEP_TYPES:
             # The step.start was delivered to a connection that dropped.
             entry["payload"] = {"type": delta_type}
         payload = entry["payload"]
@@ -839,7 +859,7 @@ class _StreamedContent:
                         **payload,
                         "arguments": _maybe_json("".join(entry["arguments"])),
                     }
-                if part := _interaction_item_to_part(payload):
+                if part := _interaction_output_item_to_part(payload):
                     parts.append(part)
                     continue
             # Only a model output step carries output text. A resumed stream may
@@ -984,8 +1004,11 @@ def _maybe_get_tool_definitions(
     if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
         return None
     definitions: list[ToolDefinition] = []
-    for tool in tools:
-        # Tool must be a list of dictionaries
+    for raw_tool in tools:
+        tool = (
+            raw_tool if isinstance(raw_tool, dict) else _as_payload(raw_tool)
+        )
+        # Tool must be a dictionary or an SDK model that dumps to one
         if not isinstance(tool, dict):
             continue
         # This is currently a required field and the SDK will raise an error if it isn't present or
@@ -1024,7 +1047,7 @@ def _maybe_get_tool_definitions(
                 FunctionToolDefinition(
                     name=tool.get("name") or "function",
                     description=tool.get("description"),
-                    parameters=tool.get("parameters"),
+                    parameters=_as_json_value(tool.get("parameters")),
                 )
             )
     return definitions if definitions else None
@@ -1191,12 +1214,12 @@ def _start_interactions_invocation(
             server_address=server_address,
             error_type_resolver=resolve_error_type,
         )
-    invocation.tool_definitions = _maybe_get_tool_definitions(
-        _get_field(request, "tools")
-    )
     _apply_interaction_request_attributes(invocation, request)
 
     if telemetry_handler.should_capture_content():
+        invocation.tool_definitions = _maybe_get_tool_definitions(
+            _get_field(request, "tools")
+        )
         invocation.input_messages = _interactions_input_to_messages(
             _get_field(request, "input")
         )

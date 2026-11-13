@@ -768,3 +768,222 @@ class TestCase(CommonTestCaseBase):
             span.attributes["gen_ai.tool.definitions"],
             '[{"name":"google_search","type":"google_search"},{"name":"code_execution","type":"code_execution"}]',
         )
+
+    def test_interaction_with_sdk_tool_models_records_definitions(
+        self,
+    ) -> None:
+        from opentelemetry.instrumentation.google_genai.interactions import (
+            Interaction,
+        )
+
+        parsed = Interaction.model_validate(
+            {
+                "id": "interaction-tools",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "completed",
+                "steps": [],
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "sdk_tool",
+                        "description": "SDK tool desc",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"x": {"type": "integer"}},
+                        },
+                    },
+                    {"type": "google_search"},
+                ],
+            }
+        )
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Test SDK tool models",
+            tools=parsed.tools,
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.tool.definitions"],
+            '[{"name":"sdk_tool","description":"SDK tool desc","parameters":{"type":"object","properties":{"x":{"type":"integer"}}},"type":"function"},{"name":"google_search","type":"google_search"}]',
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_tool_call_only_response_omits_trailing_empty_text(self) -> None:
+        from opentelemetry.instrumentation.google_genai.interactions import (
+            Interaction,
+        )
+
+        self._create_and_install_mocks()
+        self._interactions.append(
+            Interaction.model_validate(
+                {
+                    "id": "interaction-tool-only",
+                    "model": "gemini-2.5-flash",
+                    "created": "2026-06-24T18:51:26Z",
+                    "updated": "2026-06-24T18:51:26Z",
+                    "status": "requires_action",
+                    "output_text": "",
+                    "steps": [
+                        {
+                            "type": "function_call",
+                            "id": "call-1",
+                            "name": "get_weather",
+                            "arguments": {"location": {"city": "Paris"}},
+                        }
+                    ],
+                }
+            )
+        )
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Weather in Paris?",
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+            '[{"role":"assistant","parts":[{"arguments":{"location":{"city":"Paris"}},"name":"get_weather","id":"call-1","type":"tool_call"}],"finish_reason":null,"name":null}]',
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_empty_in_progress_response_omits_output_messages(self) -> None:
+        from opentelemetry.instrumentation.google_genai.interactions import (
+            Interaction,
+        )
+
+        self._create_and_install_mocks()
+        self._interactions.append(
+            Interaction.model_validate(
+                {
+                    "id": "interaction-empty",
+                    "model": "gemini-2.5-flash",
+                    "created": "2026-06-24T18:51:26Z",
+                    "updated": "2026-06-24T18:51:26Z",
+                    "status": "in_progress",
+                    "output_text": "",
+                    "steps": [],
+                }
+            )
+        )
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Background task",
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertNotIn(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, span.attributes
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_user_input_and_sdk_function_result_recorded_in_input_messages(
+        self,
+    ) -> None:
+        from opentelemetry.instrumentation.google_genai.interactions import (
+            Interaction,
+        )
+
+        parsed = Interaction.model_validate(
+            {
+                "id": "interaction-func-result",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "completed",
+                "steps": [
+                    {
+                        "type": "function_result",
+                        "call_id": "call-123",
+                        "name": "get_weather",
+                        "result": [{"type": "text", "text": "22C and Sunny"}],
+                    }
+                ],
+            }
+        )
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input=[
+                {
+                    "type": "user_input",
+                    "content": [
+                        {"type": "text", "text": "Hello from user_input"},
+                        {
+                            "type": "document",
+                            "mime_type": "application/pdf",
+                            "uri": "https://example.com/doc.pdf",
+                        },
+                    ],
+                },
+                *(parsed.steps or []),
+            ],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertIn(
+            '"content":"Hello from user_input"',
+            span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        )
+        self.assertIn(
+            '"uri":"https://example.com/doc.pdf"',
+            span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        )
+        self.assertIn(
+            '"text":"22C and Sunny"',
+            span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"},
+    )
+    def test_user_input_and_sdk_function_result_omitted_without_content_capture(
+        self,
+    ) -> None:
+        from opentelemetry.instrumentation.google_genai.interactions import (
+            Interaction,
+        )
+
+        parsed = Interaction.model_validate(
+            {
+                "id": "interaction-func-result",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "completed",
+                "steps": [
+                    {
+                        "type": "function_result",
+                        "call_id": "call-123",
+                        "name": "get_weather",
+                        "result": [{"type": "text", "text": "22C and Sunny"}],
+                    }
+                ],
+            }
+        )
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input=[
+                {
+                    "type": "user_input",
+                    "content": [
+                        {"type": "text", "text": "Hello from user_input"}
+                    ],
+                },
+                *(parsed.steps or []),
+            ],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertNotIn(
+            GenAIAttributes.GEN_AI_INPUT_MESSAGES, span.attributes
+        )
+        self.assertNotIn(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, span.attributes
+        )
