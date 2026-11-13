@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from google.genai import live as genai_live
 from google.genai import types as genai_types
 from google.genai.live import AsyncLive
 
@@ -1611,3 +1612,692 @@ async def test_live_fallback_session_id_and_continuous_audio_coalescing(
     ]
     assert turn2_in[0]["parts"][0]["content"] == "AQIDBAUG"
     assert turn2_in[0]["parts"][1]["content"] == "Follow up question"
+
+
+@pytest.mark.asyncio
+async def test_live_public_client_tool_exchange_2_5_and_3_1_and_callable_tools(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    from google import genai
+
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
+    )
+
+    def get_weather(city: str) -> dict[str, Any]:
+        """Get weather for a city."""
+        return {"city": city, "temp_c": 21}
+
+    ws_25 = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Weather in Paris?"},
+                }
+            },
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-paris-1",
+                            "name": "get_weather",
+                            "args": {"city": "Paris"},
+                        }
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "It is 21C in Paris."}],
+                    },
+                    "turnComplete": True,
+                },
+                "usageMetadata": {
+                    "promptTokenCount": 40,
+                    "responseTokenCount": 12,
+                },
+            },
+        ]
+    )
+    ws_31 = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-tokyo-1",
+                            "name": "get_weather",
+                            "args": {"city": "Tokyo"},
+                        },
+                        {
+                            "id": "call-osaka-2",
+                            "name": "get_weather",
+                            "args": {"city": "Osaka"},
+                        },
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Tokyo and Osaka are both 21C."}],
+                    },
+                    "turnComplete": True,
+                },
+                "usageMetadata": {
+                    "promptTokenCount": 55,
+                    "responseTokenCount": 16,
+                },
+            },
+        ]
+    )
+    sockets = [ws_25, ws_31]
+
+    @contextlib.asynccontextmanager
+    async def _multi_ws_connect(
+        uri: str,  # pylint: disable=unused-argument
+        additional_headers: Any = None,  # pylint: disable=unused-argument
+        **kwargs: Any,  # pylint: disable=unused-argument
+    ) -> AsyncIterator[_FakeWebSocket]:
+        yield sockets.pop(0)
+
+    with patch("google.genai.live.ws_connect", _multi_ws_connect):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            client = genai.Client(api_key="test-key")
+            has_live_thinking = (
+                "thinking_config" in genai_types.LiveConnectConfig.model_fields
+                and hasattr(genai_types, "ThinkingLevel")
+            )
+            config_kwargs: dict[str, Any] = {
+                "response_modalities": [genai_types.Modality.TEXT],
+                "tools": [get_weather],
+            }
+            if has_live_thinking:
+                config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
+                    thinking_level=genai_types.ThinkingLevel.HIGH
+                )
+            config = genai_types.LiveConnectConfig(**config_kwargs)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"\x00\x01" * 64,
+                        mime_type="audio/pcm;rate=16000",
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+                async for msg in session.receive():
+                    if msg.tool_call:
+                        await session.send_tool_response(
+                            function_responses=[
+                                genai_types.FunctionResponse(
+                                    id="call-paris-1",
+                                    name="get_weather",
+                                    response={"temp_c": 21},
+                                )
+                            ]
+                        )
+
+            async with client.aio.live.connect(
+                model="gemini-3.1-flash-live-preview",
+                config=config,
+            ) as session:
+                await session.send(
+                    input="Compare Tokyo and Osaka.", end_of_turn=True
+                )
+                async for msg in session.receive():
+                    if msg.tool_call:
+                        for fc in msg.tool_call.function_calls or []:
+                            await session.send_tool_response(
+                                function_responses=[
+                                    genai_types.FunctionResponse(
+                                        id=fc.id,
+                                        name=fc.name,
+                                        response={"temp_c": 21},
+                                    )
+                                ]
+                            )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    s25_1, s25_2, s31 = spans
+
+    if has_live_thinking:
+        assert s25_1.attributes["gen_ai.request.reasoning.level"] == "HIGH"
+    assert s25_1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    tools_defs = json.loads(s25_1.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])
+    assert tools_defs[0]["name"] == "get_weather"
+
+    assert s25_2.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
+    s25_2_in = json.loads(s25_2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    assert s25_2_in[0]["parts"][0]["type"] == "tool_call_response"
+
+    if has_live_thinking:
+        assert s31.attributes["gen_ai.request.reasoning.level"] == "HIGH"
+    assert s31.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
+    s31_in = json.loads(s31.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    assert len(s31_in) == 1
+    assert s31_in[0]["parts"] == [
+        {"type": "text", "content": "Compare Tokyo and Osaka."}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_public_client_barge_in_interruption_and_receive_error(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    from google import genai
+
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
+    )
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Tell me about Paris."},
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Paris is the capital "}],
+                    },
+                }
+            },
+            # User barges in: server sends Turn 2 inputTranscription before Turn 1 interrupted/turnComplete
+            {
+                "serverContent": {
+                    "inputTranscription": {
+                        "text": "Stop, tell me about Rome."
+                    },
+                }
+            },
+            {
+                "serverContent": {
+                    "interrupted": True,
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Rome is in Italy..."}],
+                    },
+                }
+            },
+            ConnectionError("transport lost mid-turn"),
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            client = genai.Client(api_key="test-key")
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"\x00\x01" * 32, mime_type="audio/pcm"
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+
+                seen_chunks = 0
+                async for _ in session.receive():
+                    seen_chunks += 1
+                    if seen_chunks == 1:
+                        # Barge-in audio sent while Turn 1 is active
+                        await session.send_realtime_input(
+                            audio=genai_types.Blob(
+                                data=b"\x02\x03" * 32, mime_type="audio/pcm"
+                            )
+                        )
+                        await session.send_realtime_input(
+                            audio_stream_end=True
+                        )
+
+                with pytest.raises(
+                    ConnectionError, match="transport lost mid-turn"
+                ):
+                    async for _ in session.receive():
+                        pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    span1, span2 = spans[0], spans[1]
+
+    assert span1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "interrupted",
+    )
+    in1 = json.loads(span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    assert in1[0]["parts"][1]["content"] == "Tell me about Paris."
+
+    assert span2.status.status_code == StatusCode.ERROR
+    assert span2.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    assert span2.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("error",)
+    in2 = json.loads(span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    assert in2[0]["parts"][1]["content"] == "Stop, tell me about Rome."
+
+    logs = log_exporter.get_finished_logs()
+    ended = next(
+        l.log_record
+        for l in logs
+        if l.log_record.event_name == "gen_ai.client.realtime_session.ended"
+    )
+    assert ended.severity_number == SeverityNumber.WARN
+    assert ended.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+
+@pytest.mark.asyncio
+async def test_live_transactional_sends_failed_requests_retries_and_session_send(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    from google import genai
+
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
+    )
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply after retries."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            client = genai.Client(api_key="test-key")
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # 1. Rejected send_realtime_input (multiple args) must not record input or start speech
+                with pytest.raises(ValueError):
+                    await session.send_realtime_input(
+                        activity_start=genai_types.ActivityStart(),
+                        text="Rejected text",
+                    )
+                # Retry with valid send_realtime_input
+                await session.send_realtime_input(text="Valid realtime text")
+
+                # 2. Rejected send_client_content (malformed dict in list) raises SDK error, not recorded
+                with pytest.raises(Exception):
+                    await session.send_client_content(
+                        turns=[{"parts": "invalid-not-a-list"}]  # type: ignore[list-item]
+                    )
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Valid client content")],
+                    )
+                )
+
+                # 3. Rejected send_tool_response (missing id on non-Vertex) raises ValueError, not recorded
+                with pytest.raises(ValueError):
+                    await session.send_tool_response(
+                        function_responses=genai_types.FunctionResponse(
+                            name="fn", response={"rejected": True}
+                        )
+                    )
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-ok",
+                        name="fn",
+                        response={"accepted": True},
+                    )
+                )
+
+                # 4. Rejected session.send(input=12345) followed by valid session.send calls
+                with pytest.raises(ValueError):
+                    await session.send(input=12345)  # type: ignore[arg-type]
+                await session.send(input="Sent via send()", end_of_turn=True)
+                await session.send(
+                    input=genai_types.Blob(
+                        data=b"\xaa\xbb", mime_type="image/png"
+                    )
+                )
+                await session.send(
+                    input=genai_types.FunctionResponse(
+                        id="call-send-fn",
+                        name="fn",
+                        response={"via": "send"},
+                    )
+                )
+
+                async for _ in session.receive():
+                    pass
+
+                # 5. Transport failure during send_realtime_input(activity_end=...) fails open speech span
+                await session.send_realtime_input(
+                    activity_start=genai_types.ActivityStart()
+                )
+                with patch.object(
+                    fake_ws,
+                    "send",
+                    side_effect=ConnectionError("ws send failed"),
+                ):
+                    with pytest.raises(
+                        ConnectionError, match="ws send failed"
+                    ):
+                        await session.send_realtime_input(
+                            activity_end=genai_types.ActivityEnd()
+                        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    inf_span, speech_span = spans[0], spans[1]
+
+    in_msgs = json.loads(inf_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    assert len(in_msgs) == 6
+    assert in_msgs[0]["parts"] == [
+        {"type": "text", "content": "Valid realtime text"}
+    ]
+    assert in_msgs[1]["parts"] == [
+        {"type": "text", "content": "Valid client content"}
+    ]
+    assert in_msgs[2]["parts"][0]["id"] == "call-ok"
+    assert in_msgs[3]["parts"] == [
+        {"type": "text", "content": "Sent via send()"}
+    ]
+    assert in_msgs[4]["parts"][0]["modality"] == "image"
+    assert in_msgs[5]["parts"][0]["id"] == "call-send-fn"
+
+    assert speech_span.name == "user_speech"
+    assert speech_span.status.status_code == StatusCode.ERROR
+    assert (
+        speech_span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    )
+
+    logs = log_exporter.get_finished_logs()
+    ended = next(
+        l.log_record
+        for l in logs
+        if l.log_record.event_name == "gen_ai.client.realtime_session.ended"
+    )
+    assert ended.severity_number == SeverityNumber.WARN
+    assert ended.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+
+@pytest.mark.asyncio
+async def test_live_send_context_update_snapshot_and_missing_method_branch(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    from google import genai
+
+    def tool_v1(x: str) -> str:
+        """Tool v1."""
+        return x
+
+    def tool_v2(y: str) -> str:
+        """Tool v2."""
+        return y
+
+    has_context_update = hasattr(
+        genai_types, "LiveClientContextUpdate"
+    ) and hasattr(genai_live.AsyncSession, "send_context_update")
+
+    if not has_context_update:
+        # Oldest SDK branch: verify AsyncSession has no send_context_update and wrapping succeeds
+        fake_ws = _FakeWebSocket([{"setupComplete": {}}])
+        with patch(
+            "google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)
+        ):
+            with instrument(
+                GoogleGenAiSdkInstrumentor(),
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+            ):
+                client = genai.Client(api_key="test-key")
+                async with client.aio.live.connect(
+                    model="gemini-2.5-flash-native-audio-preview-12-2025",
+                ) as session:
+                    assert not hasattr(session, "send_context_update")
+        return
+
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
+    )
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 1 streaming..."}],
+                    },
+                }
+            },
+            {
+                "serverContent": {
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 2 with updated context."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            client = genai.Client(api_key="test-key")
+            config = genai_types.LiveConnectConfig(
+                response_modalities=[genai_types.Modality.TEXT],
+                system_instruction="Initial system instruction",
+                tools=[tool_v1],
+            )
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                # Start Turn 1 (first chunk)
+                await session._receive()
+                # Mid-generation context update: Turn 1 must keep Initial instruction & tool_v1,
+                # while Turn 2 gets Updated instruction & tool_v2.
+                await session.send_context_update(
+                    system_instruction="Updated system instruction",
+                    tools=[tool_v2],
+                )
+                # Failed context update (both args None raises ValueError) must not overwrite Turn 2's config
+                with pytest.raises(ValueError):
+                    await session.send_context_update()
+                # Finish Turn 1
+                await session._receive()
+                # Run Turn 2
+                await session._receive()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    span1, span2 = spans[0], spans[1]
+
+    sys1 = json.loads(span1.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
+    tools1 = json.loads(span1.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])
+    assert sys1 == [{"type": "text", "content": "Initial system instruction"}]
+    assert [t["name"] for t in tools1] == ["tool_v1"]
+
+    sys2 = json.loads(span2.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
+    tools2 = json.loads(span2.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])
+    assert sys2 == [{"type": "text", "content": "Updated system instruction"}]
+    assert [t["name"] for t in tools2] == ["tool_v2"]
+
+    # Also verify send_context_update with NO_CONTENT and EVENT_ONLY does not record instructions/tools
+    span_exporter.clear()
+    for mode in ("NO_CONTENT", "EVENT_ONLY"):
+        monkeypatch.setenv(
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, mode
+        )
+        ws_nc = _FakeWebSocket(
+            [
+                {"setupComplete": {}},
+                {
+                    "serverContent": {
+                        "modelTurn": {
+                            "role": "model",
+                            "parts": [{"text": "Silent"}],
+                        },
+                        "turnComplete": True,
+                    }
+                },
+            ]
+        )
+        with patch(
+            "google.genai.live.ws_connect", _make_fake_ws_connect(ws_nc)
+        ):
+            with instrument(
+                GoogleGenAiSdkInstrumentor(),
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+            ):
+                client = genai.Client(api_key="test-key")
+                async with client.aio.live.connect(
+                    model="gemini-2.5-flash-native-audio-preview-12-2025",
+                ) as session:
+                    await session.send_context_update(
+                        system_instruction="Should not be captured",
+                        tools=[tool_v1],
+                    )
+                    await session.send_realtime_input(
+                        audio=genai_types.Blob(
+                            data=b"\x01\x02", mime_type="audio/pcm"
+                        )
+                    )
+                    async for _ in session.receive():
+                        pass
+
+    nc_spans = span_exporter.get_finished_spans()
+    assert len(nc_spans) == 2
+    for s in nc_spans:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in s.attributes
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in s.attributes
+        assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in s.attributes
+        assert GenAI.GEN_AI_TOOL_DEFINITIONS not in s.attributes
+
+
+@pytest.mark.asyncio
+async def test_live_in_progress_turn_complete_does_not_freeze_mark_end(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Step 1..."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Step 2 done."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+    completion_calls = [False, True]
+
+    with (
+        patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)),
+        patch.object(
+            live_module,
+            "_is_interaction_complete",
+            side_effect=lambda sc: (
+                completion_calls.pop(0)
+                if sc is not None and completion_calls
+                else False
+            ),
+        ),
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            client = genai.Client(api_key="test-key")
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # Frame 1 has turnComplete=True, but _is_interaction_complete is False (in progress)
+                await session._receive()
+                await asyncio.sleep(0.05)
+                # Frame 2 completes the interaction
+                await session._receive()
+
+    (span,) = span_exporter.get_finished_spans()
+    span_duration_s = (span.end_time - span.start_time) / 1e9
+    assert span_duration_s >= 0.04

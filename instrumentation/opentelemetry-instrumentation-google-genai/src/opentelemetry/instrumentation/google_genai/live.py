@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import functools
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -32,6 +33,7 @@ from google.genai.types import (
     Tool,
     ToolListUnion,
     ToolListUnionDict,
+    ToolUnionDict,
 )
 
 from opentelemetry.context import Context, get_current
@@ -39,6 +41,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes.error_attributes import ErrorTypeValues
+from opentelemetry.util.genai.completion_hook import _NoOpCompletionHook
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     Error,
@@ -47,6 +50,7 @@ from opentelemetry.util.genai.invocation import (
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
+    ContentCapturingMode,
     InputMessage,
     MessagePart,
     Modality,
@@ -71,6 +75,26 @@ from .generate_content import _to_tool_definition
 from .message import _to_part, to_input_messages, to_system_instructions
 
 _ORIGINAL_ASYNC_LIVE_CONNECT = AsyncLive.connect
+_ACTIVE_SEND_CALLBACK: contextvars.ContextVar[
+    list[Callable[[], None]] | None
+] = contextvars.ContextVar(
+    "_otel_google_genai_live_active_send_callback", default=None
+)
+
+
+def _should_capture_live_content(telemetry_handler: TelemetryHandler) -> bool:
+    """Return True when message/audio content should be buffered for Live spans or hooks.
+
+    Because ``realtime_inference`` does not emit a
+    ``gen_ai.client.inference.operation.details`` event, ``EVENT_ONLY`` mode
+    captures content only when a completion hook is active.
+    """
+    return telemetry_handler._content_capturing_mode in (
+        ContentCapturingMode.SPAN_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    ) or not isinstance(
+        telemetry_handler._completion_hook, _NoOpCompletionHook
+    )
 
 
 def _strip_model_prefix(model: str | None) -> str | None:
@@ -182,8 +206,13 @@ def _extract_tool_definitions(
                 tool_item = genai_types.Tool.model_validate(tool_item)
             except Exception:  # pylint: disable=broad-exception-caught
                 continue
-        if isinstance(tool_item, Tool):
-            definitions.extend(_to_tool_definition(tool_item))
+        if isinstance(tool_item, Tool) or callable(tool_item):
+            try:
+                definitions.extend(
+                    _to_tool_definition(cast(ToolUnionDict, tool_item))
+                )
+            except Exception:  # pylint: disable=broad-exception-caught
+                continue
     return definitions
 
 
@@ -284,6 +313,10 @@ def _is_interaction_complete(
 class _ActiveGeneration:
     invocation: RealtimeInferenceInvocation
     input_messages: list[InputMessage] = field(default_factory=list)
+    system_instruction: list[SystemInstructionPart] = field(
+        default_factory=list
+    )
+    tool_definitions: list[ToolDefinition] = field(default_factory=list)
     completed_output_messages: list[OutputMessage] = field(
         default_factory=list
     )
@@ -385,7 +418,7 @@ class _LiveSessionTracker:
         thinking_config = _get_live_config_field(config, "thinking_config")
         thinking_level = _get_config_field(thinking_config, "thinking_level")
         self.reasoning_level = (
-            str(getattr(thinking_level, "value", thinking_level)).lower()
+            str(getattr(thinking_level, "value", thinking_level))
             if thinking_level is not None
             else None
         )
@@ -399,7 +432,7 @@ class _LiveSessionTracker:
 
         self.system_instruction: list[SystemInstructionPart] = []
         self.tool_definitions: list[ToolDefinition] = []
-        if self._telemetry_handler.should_capture_content():
+        if self._should_capture_content():
             sys_inst = _get_live_config_field(config, "system_instruction")
             if sys_inst is not None:
                 self.system_instruction = _extract_system_instruction(
@@ -419,6 +452,9 @@ class _LiveSessionTracker:
         self._speech_invocation: UserSpeechInvocation | None = None
         self.terminal_error: BaseException | None = None
 
+    def _should_capture_content(self) -> bool:
+        return _should_capture_live_content(self._telemetry_handler)
+
     def _mark_new_user_utterance(self) -> None:
         if self._active_gen is not None:
             self._active_gen.accepting_input_transcription = False
@@ -426,7 +462,7 @@ class _LiveSessionTracker:
     def _flush_pending_audio(self) -> None:
         if not self._pending_audio_chunks:
             return
-        if self._telemetry_handler.should_capture_content():
+        if self._should_capture_content():
             combined = b"".join(self._pending_audio_chunks)
             mime_type = self._pending_audio_mime_type or "audio/pcm"
             if (
@@ -501,10 +537,10 @@ class _LiveSessionTracker:
             return
         self._flush_pending_audio()
         modality = (
-            Modality.IMAGE
-            if "image" in lower_mime
-            else Modality.VIDEO
+            Modality.VIDEO
             if force_non_audio or "video" in lower_mime
+            else Modality.IMAGE
+            if "image" in lower_mime
             else Modality.DOCUMENT
         )
         self._pending_input_messages.append(
@@ -536,7 +572,7 @@ class _LiveSessionTracker:
         ):
             self._mark_new_user_utterance()
 
-        capture_content = self._telemetry_handler.should_capture_content()
+        capture_content = self._should_capture_content()
 
         if audio is not None:
             if capture_content:
@@ -555,7 +591,7 @@ class _LiveSessionTracker:
             if capture_content:
                 self._record_blob_input(
                     cast(BlobOrDict | Mapping[str, object], video),
-                    default_mime="video/mp4",
+                    default_mime="image/jpeg",
                     force_non_audio=True,
                 )
         elif text is not None:
@@ -587,10 +623,7 @@ class _LiveSessionTracker:
         self._flush_pending_audio()
         if turns is not None:
             self._mark_new_user_utterance()
-        if (
-            turns is not None
-            and self._telemetry_handler.should_capture_content()
-        ):
+        if turns is not None and self._should_capture_content():
             normalized_turns: list[Content] | None = None
             t_client_content = getattr(
                 genai_transformers, "t_client_content", None
@@ -604,6 +637,17 @@ class _LiveSessionTracker:
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
             if normalized_turns is None:
+                t_contents = getattr(genai_transformers, "t_contents", None)
+                if callable(t_contents):
+                    try:
+                        raw_contents = t_contents(turns)
+                        if isinstance(raw_contents, list):
+                            normalized_turns = cast(
+                                list[Content], raw_contents
+                            )
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+            if normalized_turns is None:
                 if isinstance(turns, Content):
                     normalized_turns = [turns]
                 elif isinstance(turns, Mapping):
@@ -614,13 +658,16 @@ class _LiveSessionTracker:
                 elif isinstance(turns, Sequence) and not isinstance(
                     turns, str
                 ):
-                    seq_turns = cast(Sequence[object], turns)
-                    normalized_turns = [
-                        Content.model_validate(item)
-                        if isinstance(item, Mapping)
-                        else cast(Content, item)
-                        for item in seq_turns
-                    ]
+                    try:
+                        seq_turns = cast(Sequence[object], turns)
+                        normalized_turns = [
+                            Content.model_validate(item)
+                            if isinstance(item, Mapping)
+                            else cast(Content, item)
+                            for item in seq_turns
+                        ]
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
             if normalized_turns is not None:
                 try:
                     messages = to_input_messages(contents=normalized_turns)
@@ -640,7 +687,7 @@ class _LiveSessionTracker:
             and self._active_gen.awaiting_tool_response
         ):
             return
-        if not self._telemetry_handler.should_capture_content():
+        if not self._should_capture_content():
             return
         tool_msg = _build_tool_response_input_message(function_responses)
         if tool_msg is not None:
@@ -651,7 +698,7 @@ class _LiveSessionTracker:
         system_instruction: ContentUnion | ContentUnionDict | None = None,
         tools: ToolListUnion | ToolListUnionDict | None = None,
     ) -> None:
-        if not self._telemetry_handler.should_capture_content():
+        if not self._should_capture_content():
             return
         if system_instruction is not None:
             self.system_instruction = _extract_system_instruction(
@@ -659,6 +706,111 @@ class _LiveSessionTracker:
             )
         if tools is not None:
             self.tool_definitions = _extract_tool_definitions(tools)
+
+    def on_send(
+        self,
+        input_val: object = None,
+        end_of_turn: bool = False,
+    ) -> None:
+        if input_val is None:
+            self._flush_pending_audio()
+            return
+
+        if isinstance(input_val, genai_types.LiveClientRealtimeInput) or (
+            isinstance(input_val, Mapping) and "media_chunks" in input_val
+        ):
+            self._mark_new_user_utterance()
+            if self._should_capture_content():
+                chunks = _get_config_field(input_val, "media_chunks")
+                if isinstance(chunks, Sequence):
+                    for chunk in cast(Sequence[object], chunks):
+                        self._record_blob_input(
+                            cast(BlobOrDict | Mapping[str, object], chunk),
+                            default_mime="audio/pcm",
+                        )
+            return
+
+        if isinstance(input_val, genai_types.Blob) or (
+            isinstance(input_val, Mapping) and "data" in input_val
+        ):
+            self._mark_new_user_utterance()
+            if self._should_capture_content():
+                self._record_blob_input(
+                    cast(BlobOrDict | Mapping[str, object], input_val),
+                    default_mime="audio/pcm",
+                )
+            return
+
+        if isinstance(input_val, genai_types.LiveClientToolResponse) or (
+            isinstance(input_val, Mapping)
+            and "function_responses" in input_val
+        ):
+            fn_resps = cast(
+                FunctionResponseOrDict
+                | Sequence[FunctionResponseOrDict]
+                | None,
+                _get_config_field(input_val, "function_responses"),
+            )
+            self.on_send_tool_response(fn_resps)
+            return
+
+        if isinstance(input_val, genai_types.FunctionResponse) or (
+            isinstance(input_val, Mapping)
+            and "name" in input_val
+            and "response" in input_val
+        ):
+            self.on_send_tool_response(cast(FunctionResponseOrDict, input_val))
+            return
+
+        if isinstance(input_val, genai_types.LiveClientContent) or (
+            isinstance(input_val, Mapping)
+            and ("turns" in input_val or "content" in input_val)
+        ):
+            turns = _get_config_field(input_val, "turns")
+            if turns is None:
+                turns = _get_config_field(input_val, "content")
+            tc = _get_config_field(input_val, "turn_complete")
+            self.on_send_client_content(
+                cast(ContentListUnion | ContentListUnionDict | None, turns),
+                turn_complete=bool(end_of_turn if tc is None else tc),
+            )
+            return
+
+        if isinstance(input_val, Sequence) and not isinstance(
+            input_val, (str, bytes, bytearray)
+        ):
+            seq_val = cast(Sequence[object], input_val)
+            if seq_val and any(
+                isinstance(item, genai_types.FunctionResponse)
+                or (
+                    isinstance(item, Mapping)
+                    and "name" in item
+                    and "response" in item
+                )
+                for item in seq_val
+            ):
+                self.on_send_tool_response(
+                    cast(Sequence[FunctionResponseOrDict], seq_val)
+                )
+                return
+            if seq_val and any(
+                isinstance(item, genai_types.Blob)
+                or (isinstance(item, Mapping) and "data" in item)
+                for item in seq_val
+            ):
+                self._mark_new_user_utterance()
+                if self._should_capture_content():
+                    for item in seq_val:
+                        self._record_blob_input(
+                            cast(BlobOrDict | Mapping[str, object], item),
+                            default_mime="audio/pcm",
+                        )
+                return
+
+        self.on_send_client_content(
+            cast(ContentListUnion | ContentListUnionDict | None, input_val),
+            turn_complete=bool(end_of_turn),
+        )
 
     def ensure_active_generation(self) -> _ActiveGeneration:
         if self._active_gen is None:
@@ -688,6 +840,8 @@ class _LiveSessionTracker:
             self._active_gen = _ActiveGeneration(
                 invocation=invocation,
                 input_messages=input_msgs,
+                system_instruction=list(self.system_instruction),
+                tool_definitions=list(self.tool_definitions),
                 input_transcript_deltas=input_transcript_deltas,
             )
         return self._active_gen
@@ -700,12 +854,10 @@ class _LiveSessionTracker:
     ) -> None:
         invocation = active_gen.invocation
         invocation.realtime_session_id = self.realtime_session_id
+        capture_content = self._should_capture_content()
 
         # Attach any server-reported input audio transcription to the user message.
-        if (
-            active_gen.input_transcript_deltas
-            and self._telemetry_handler.should_capture_content()
-        ):
+        if active_gen.input_transcript_deltas and capture_content:
             input_transcript = "".join(active_gen.input_transcript_deltas)
             active_gen.input_transcript_deltas.clear()
             user_msg: InputMessage | None = None
@@ -725,19 +877,19 @@ class _LiveSessionTracker:
                     )
                 )
 
-        if self._telemetry_handler.should_capture_content():
+        if capture_content:
             active_gen.flush_current_turn_output_message(finish_reason)
 
         invocation.finish_reasons = [finish_reason]
         invocation.output_type = self.output_type
 
-        if self._telemetry_handler.should_capture_content():
+        if capture_content:
             invocation.input_messages = active_gen.input_messages
             invocation.output_messages = active_gen.completed_output_messages
-            if self.system_instruction:
-                invocation.system_instruction = self.system_instruction
-            if self.tool_definitions:
-                invocation.tool_definitions = self.tool_definitions
+            if active_gen.system_instruction:
+                invocation.system_instruction = active_gen.system_instruction
+            if active_gen.tool_definitions:
+                invocation.tool_definitions = active_gen.tool_definitions
 
         usage = active_gen.usage_metadata
         if usage is not None:
@@ -823,7 +975,7 @@ class _LiveSessionTracker:
         server_content = getattr(message, "server_content", None)
         tool_call = getattr(message, "tool_call", None)
         usage_metadata = getattr(message, "usage_metadata", None)
-        capture_content = self._telemetry_handler.should_capture_content()
+        capture_content = self._should_capture_content()
 
         # Accumulate input transcription deltas without starting the generation span.
         if server_content is not None and capture_content:
@@ -844,6 +996,7 @@ class _LiveSessionTracker:
                     )
 
         provider_reason = _turn_complete_reason(server_content)
+        interaction_complete = _is_interaction_complete(server_content)
         has_model_output = bool(
             server_content is not None
             and (
@@ -864,7 +1017,7 @@ class _LiveSessionTracker:
             and (
                 getattr(server_content, "interrupted", False)
                 or getattr(server_content, "generation_complete", False)
-                or getattr(server_content, "turn_complete", False)
+                or interaction_complete
                 or provider_reason is not None
             )
         )
@@ -940,7 +1093,7 @@ class _LiveSessionTracker:
                 active_gen.interrupted = True
             if getattr(server_content, "generation_complete", False):
                 active_gen.generation_complete = True
-            if getattr(server_content, "turn_complete", False):
+            if interaction_complete:
                 active_gen.turn_complete = True
             if has_completion_signal:
                 active_gen.invocation.mark_end()
@@ -981,7 +1134,7 @@ class _LiveSessionTracker:
                 )
                 return
 
-        if _is_interaction_complete(server_content):
+        if interaction_complete:
             finish_reason = active_gen.turn_complete_reason or (
                 "interrupted" if active_gen.interrupted else "stop"
             )
@@ -989,6 +1142,10 @@ class _LiveSessionTracker:
             self._populate_and_finish_generation(
                 active_gen, finish_reason=finish_reason
             )
+
+    def on_send_error(self, exc: BaseException) -> None:
+        self.terminal_error = exc
+        self._stop_user_speech(error=exc)
 
     def on_receive_error(self, exc: BaseException) -> None:
         self.terminal_error = exc
@@ -1028,20 +1185,87 @@ class _LiveSessionTracker:
             )
 
 
+async def _run_transactional_send(
+    tracker: _LiveSessionTracker,
+    commit_fn: Callable[[], None],
+    call_fn: Callable[[], object],
+) -> object:
+    existing_slot = _ACTIVE_SEND_CALLBACK.get()
+    if existing_slot is not None:
+        existing_slot[:] = [commit_fn]
+        res = call_fn()
+        if hasattr(res, "__await__"):
+            return await cast(
+                Callable[..., AsyncIterator[object]], lambda: res
+            )()
+        return res
+
+    slot: list[Callable[[], None]] = [commit_fn]
+    token = _ACTIVE_SEND_CALLBACK.set(slot)
+    try:
+        res = call_fn()
+        if hasattr(res, "__await__"):
+            res = await cast(
+                Callable[..., AsyncIterator[object]], lambda: res
+            )()
+    except BaseException as exc:
+        slot.clear()
+        if not isinstance(exc, (ValueError, TypeError)):
+            tracker.on_send_error(exc)
+        raise
+    else:
+        if slot:
+            cb = slot.pop(0)
+            cb()
+        return res
+    finally:
+        _ACTIVE_SEND_CALLBACK.reset(token)
+
+
 def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
     """Wrap the methods of a live ``AsyncSession`` instance to record telemetry."""
     orig_send_realtime_input = session.send_realtime_input
     orig_send_client_content = session.send_client_content
     orig_send_tool_response = session.send_tool_response
+    orig_send = getattr(session, "send", None)
     orig_send_context_update = getattr(session, "send_context_update", None)
     orig_receive = session._receive
+
+    ws: object = getattr(session, "_ws", None)
+    orig_ws_send = getattr(ws, "send", None) if ws is not None else None
+    if ws is not None and callable(orig_ws_send):
+
+        @functools.wraps(orig_ws_send)
+        async def wrapped_ws_send(*args: object, **kwargs: object) -> object:
+            slot = _ACTIVE_SEND_CALLBACK.get()
+            try:
+                res = orig_ws_send(*args, **kwargs)
+                if hasattr(res, "__await__"):
+                    res = await cast(
+                        Callable[..., AsyncIterator[object]], lambda: res
+                    )()
+            except BaseException as exc:
+                if slot is not None:
+                    slot.clear()
+                tracker.on_send_error(exc)
+                raise
+            if slot:
+                cb = slot.pop(0)
+                cb()
+            return res
+
+        with contextlib.suppress(Exception):
+            setattr(ws, "send", wrapped_ws_send)
 
     @functools.wraps(orig_send_realtime_input)
     async def wrapped_send_realtime_input(
         *args: object, **kwargs: object
     ) -> None:
-        tracker.on_send_realtime_input(kwargs)
-        await orig_send_realtime_input(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        await _run_transactional_send(
+            tracker,
+            lambda: tracker.on_send_realtime_input(kwargs),
+            lambda: orig_send_realtime_input(*args, **kwargs),  # pyright: ignore[reportArgumentType]
+        )
 
     @functools.wraps(orig_send_client_content)
     async def wrapped_send_client_content(
@@ -1059,13 +1283,16 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
         turn_complete = get_argument(
             "turn_complete", orig_send_client_content, args, kwargs
         )
-        tracker.on_send_client_content(
-            turns,
-            turn_complete=True
-            if turn_complete is None
-            else bool(turn_complete),
+        effective_turn_complete = (
+            True if turn_complete is None else bool(turn_complete)
         )
-        await orig_send_client_content(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        await _run_transactional_send(
+            tracker,
+            lambda: tracker.on_send_client_content(
+                turns, turn_complete=effective_turn_complete
+            ),
+            lambda: orig_send_client_content(*args, **kwargs),  # pyright: ignore[reportArgumentType]
+        )
 
     @functools.wraps(orig_send_tool_response)
     async def wrapped_send_tool_response(
@@ -1077,8 +1304,11 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 "function_responses", orig_send_tool_response, args, kwargs
             ),
         )
-        tracker.on_send_tool_response(function_responses)
-        await orig_send_tool_response(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        await _run_transactional_send(
+            tracker,
+            lambda: tracker.on_send_tool_response(function_responses),
+            lambda: orig_send_tool_response(*args, **kwargs),  # pyright: ignore[reportArgumentType]
+        )
 
     @functools.wraps(orig_receive)
     async def wrapped_receive(
@@ -1102,6 +1332,22 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
     setattr(session, "send_tool_response", wrapped_send_tool_response)
     setattr(session, "_receive", wrapped_receive)
 
+    if callable(orig_send):
+
+        @functools.wraps(orig_send)
+        async def wrapped_send(*args: object, **kwargs: object) -> object:
+            input_val = get_argument("input", orig_send, args, kwargs)
+            end_of_turn = get_argument("end_of_turn", orig_send, args, kwargs)
+            return await _run_transactional_send(
+                tracker,
+                lambda: tracker.on_send(
+                    input_val, end_of_turn=bool(end_of_turn)
+                ),
+                lambda: orig_send(*args, **kwargs),
+            )
+
+        setattr(session, "send", wrapped_send)
+
     if callable(orig_send_context_update):
 
         @functools.wraps(orig_send_context_update)
@@ -1121,15 +1367,13 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 ToolListUnion | ToolListUnionDict | None,
                 get_argument("tools", orig_send_context_update, args, kwargs),
             )
-            tracker.on_send_context_update(
-                system_instruction=sys_inst, tools=tools
+            return await _run_transactional_send(
+                tracker,
+                lambda: tracker.on_send_context_update(
+                    system_instruction=sys_inst, tools=tools
+                ),
+                lambda: orig_send_context_update(*args, **kwargs),
             )
-            res = orig_send_context_update(*args, **kwargs)
-            if hasattr(res, "__await__"):
-                return await cast(
-                    Callable[..., AsyncIterator[object]], lambda: res
-                )()
-            return res
 
         setattr(session, "send_context_update", wrapped_send_context_update)
 
