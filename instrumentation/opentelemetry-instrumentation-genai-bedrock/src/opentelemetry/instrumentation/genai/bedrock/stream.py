@@ -85,6 +85,18 @@ def _build_stream_parts(
     return parts
 
 
+_CONVERSE_EVENT_KEYS = frozenset(
+    (
+        "messageStart",
+        "contentBlockStart",
+        "contentBlockDelta",
+        "contentBlockStop",
+        "messageStop",
+        "metadata",
+    )
+)
+
+
 def _process_converse_event(
     stream: _BedrockConverseStreamMixin | _BedrockInvokeModelStreamMixin,
     chunk: dict[str, Any],
@@ -314,7 +326,6 @@ class _BedrockInvokeModelStreamMixin:
         if not _is_dict(chunk_data):
             return
 
-        # 1. Check amazon-bedrock-invocationMetrics
         metrics = chunk_data.get("amazon-bedrock-invocationMetrics")
         if _is_dict(metrics):
             if "inputTokenCount" in metrics:
@@ -324,8 +335,18 @@ class _BedrockInvokeModelStreamMixin:
                     metrics["outputTokenCount"]
                 )
 
-        # 2. Anthropic Messages format
         msg_type = chunk_data.get("type")
+        if msg_type is not None:
+            self._process_anthropic_event(msg_type, chunk_data)
+        elif _CONVERSE_EVENT_KEYS.intersection(chunk_data):
+            # Amazon Nova streams the Converse event shapes
+            _process_converse_event(self, chunk_data)
+        else:
+            self._process_legacy_stream_chunk(chunk_data)
+
+    def _process_anthropic_event(
+        self, msg_type: str, chunk_data: dict[str, Any]
+    ) -> None:
         if msg_type == "message_start":
             message = chunk_data.get("message", {})
             if _is_dict(message):
@@ -420,11 +441,8 @@ class _BedrockInvokeModelStreamMixin:
             if _is_dict(usage) and "output_tokens" in usage:
                 self._self_output_tokens = _safe_int(usage["output_tokens"])
 
-        # 3. Amazon Nova format, which streams the Converse event shapes
-        if msg_type is None:
-            _process_converse_event(self, chunk_data)
-
-        # 4. Legacy Claude / Titan / Llama / Mistral / Cohere stream chunks
+    def _process_legacy_stream_chunk(self, chunk_data: dict[str, Any]) -> None:
+        # Legacy Claude / Titan / Llama / Mistral / Cohere stream chunks
         if "completion" in chunk_data and isinstance(
             chunk_data["completion"], str
         ):
@@ -463,11 +481,7 @@ class _BedrockInvokeModelStreamMixin:
                     out["stop_reason"], str
                 ):
                     self._self_stop_reason = out["stop_reason"]
-        elif (
-            "text" in chunk_data
-            and isinstance(chunk_data["text"], str)
-            and msg_type is None
-        ):
+        elif "text" in chunk_data and isinstance(chunk_data["text"], str):
             if self._self_capture_content:
                 self._self_accumulated_text.append(chunk_data["text"])
             if chunk_data.get("is_finished"):
