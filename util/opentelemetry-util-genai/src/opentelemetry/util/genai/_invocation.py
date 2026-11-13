@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from types import TracebackType
 from typing import Any, ClassVar, Self, TypeAlias, cast
 
-from opentelemetry._logs import Logger, LogRecord
+from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import (
     Context,
     attach,
@@ -192,6 +192,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     _records_stream_telemetry: ClassVar[bool] = False
     """Whether stream wrappers mark this invocation as streamed and record chunk timing."""
+
+    _exception_event_name: ClassVar[str | None] = None
+    """Name of the event emitted when the operation fails with an exception, if any."""
 
     def __init__(
         self,
@@ -454,6 +457,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._finished = True
         try:
             self._apply_finish(error)
+            if error is not None:
+                self._emit_exception_event(error)
         finally:
             self.suspend()
             self.span.end()
@@ -461,6 +466,35 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 self._span_context = set_value(
                     self._context_key, None, context=self._span_context
                 )
+
+    def _emit_exception_event(self, error: Error) -> None:
+        """Emit the invocation's exception event for a raised exception.
+
+        Only invocations with an ``_exception_event_name`` report it. Errors
+        built without an exception have nothing to report, and, as in the SDK's
+        ``use_span``, a ``BaseException`` that is not an ``Exception`` (such as
+        cancellation) is not treated as one. The SDK fills ``exception.type``,
+        ``exception.message`` and ``exception.stacktrace`` from the exception.
+
+        For more details, see the semantic convention documentation:
+        https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-exceptions.md
+        """
+        event_name = self._exception_event_name
+        exception = error.exception
+        if event_name is None or not isinstance(exception, Exception):
+            return
+        if not self._logger.enabled(
+            context=self._span_context,
+            severity_number=SeverityNumber.WARN,
+            event_name=event_name,
+        ):
+            return
+        self._logger.emit(
+            event_name=event_name,
+            exception=exception,
+            context=self._span_context,
+            severity_number=SeverityNumber.WARN,
+        )
 
     def stop(self) -> None:
         """Finalize the invocation successfully and end its span."""

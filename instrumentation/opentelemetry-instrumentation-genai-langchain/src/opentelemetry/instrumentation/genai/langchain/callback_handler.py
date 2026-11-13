@@ -390,7 +390,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 else:
                     # We create invoke_agent span for the initial chain for agent. All follow-up chains invoked for agent invocation will not create agent span.
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, None
+                        run_id,
+                        parent_run_id,
+                        None,
                     )
             elif agent_announcement is not None:
                 agent = self._telemetry_handler.invoke_local_agent(
@@ -409,13 +411,26 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 # parent-child traversal through _find_agent_context is not broken for
                 # any children of this node.
                 self._invocation_manager.add_invocation_state(
-                    run_id, parent_run_id, None
+                    run_id,
+                    parent_run_id,
+                    None,
                 )
         else:
             # For unclassified chains, we still want to track them in the invocation manager to maintain the parent-child relationships, even though we won't create spans for them.
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, None
+                run_id,
+                parent_run_id,
+                None,
             )
+
+        invocation = self._invocation_manager.get_invocation(run_id)
+        # Only create_agent/create_react_agent graphs report every model and tool call
+        # through callbacks; other agents may call models directly, so their counts are unknown.
+        if agent_announcement is not None and isinstance(
+            invocation, LocalAgentInvocation
+        ):
+            invocation.inference_calls = 0
+            invocation.tool_calls = 0
 
         if prompt_context := _extract_prompt_context(
             serialized,
@@ -600,6 +615,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             parent_run_id=parent_run_id,
             invocation=llm_invocation,
         )
+        self._invocation_manager.record_agent_call(parent_run_id)
 
     def on_llm_new_token(
         self,
@@ -846,6 +862,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> None:
         if not self._enabled:
             return
+        self._invocation_manager.record_agent_call(
+            parent_run_id, tool_call=True
+        )
         name = "unknown"
         description = None
         if serialized is not None:
