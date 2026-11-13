@@ -372,6 +372,8 @@ def test_model_response_stream(
     assert (
         GenAIAttributes.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK in span.attributes
     )
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 def test_model_response_stream_content_capture(
@@ -438,6 +440,8 @@ def test_model_aresponse_stream(
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 20
     )
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 def test_model_aresponse_stream_content_capture(
@@ -2390,3 +2394,307 @@ def test_openai_stream_partial_tool_call_deltas_early_close_and_error(
             "arguments": {"city": "Tokyo"},
         }
     ]
+
+
+def test_real_openai_request_params_override_and_zero_max_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that request_params overrides model fields and preserves zero max_tokens."""
+    import httpx
+    import openai
+    from agno.models.openai import OpenAIChat
+
+    sent_bodies: list[dict[str, Any]] = []
+
+    def _transport(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-override-1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4o-2024-08-06",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(transport=httpx.MockTransport(_transport)),
+    )
+    model = OpenAIChat(
+        id="gpt-4o",
+        temperature=0.7,
+        max_tokens=0,
+        max_completion_tokens=100,
+        request_params={
+            "temperature": 0,
+            "frequency_penalty": 0.25,
+            "stop": ["STOP_HERE"],
+        },
+        client=client,
+    )
+    model.response(messages=[Message(role="user", content="Hi")])
+
+    assert sent_bodies[0]["temperature"] == 0
+    assert sent_bodies[0]["max_tokens"] == 0
+    assert sent_bodies[0]["frequency_penalty"] == 0.25
+    assert sent_bodies[0]["stop"] == ["STOP_HERE"]
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.0
+    )
+    assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 0
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_FREQUENCY_PENALTY)
+        == 0.25
+    )
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    ) == ("STOP_HERE",)
+
+
+def test_model_stream_defers_invocation_until_first_read(
+    instrument_agno,
+    span_exporter,
+    tracer_provider,
+) -> None:
+    """Test that sync and async stream wrappers start inference on first read under the consumption context."""
+    tracer = tracer_provider.get_tracer(__name__)
+    model = _StreamModel(id="lazy-stream-model", provider="OpenAI")
+
+    with tracer.start_as_current_span("construct_parent"):
+        stream = model.response_stream(
+            messages=[Message(role="user", content="Lazy sync")]
+        )
+        assert len(span_exporter.get_finished_spans()) == 0
+
+    with tracer.start_as_current_span("consume_parent") as consume_span:
+        list(stream)
+
+    spans = span_exporter.get_finished_spans()
+    chat_span = next(s for s in spans if s.name == "chat lazy-stream-model")
+    assert chat_span.parent is not None
+    assert chat_span.parent.span_id == consume_span.get_span_context().span_id
+
+    span_exporter.clear()
+
+    async def _run_async() -> int:
+        with tracer.start_as_current_span("async_construct_parent"):
+            astream = model.aresponse_stream(
+                messages=[Message(role="user", content="Lazy async")]
+            )
+            assert len(span_exporter.get_finished_spans()) == 0
+
+        with tracer.start_as_current_span(
+            "async_consume_parent"
+        ) as aconsume_span:
+            async for _ in astream:
+                pass
+            return aconsume_span.get_span_context().span_id
+
+    expected_parent_id = asyncio.run(_run_async())
+    aspans = span_exporter.get_finished_spans()
+    achat_span = next(s for s in aspans if s.name == "chat lazy-stream-model")
+    assert achat_span.parent is not None
+    assert achat_span.parent.span_id == expected_parent_id
+
+
+def test_model_stream_preserves_multi_image_multi_chunk_output(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that sync and async stream wrappers preserve all images within a chunk and across chunks."""
+    from agno.media import Image
+
+    class _MultiImageStreamModel(MockModel):
+        def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                content="part 1 ",
+                images=[
+                    Image(
+                        url="https://example.com/img1.png",
+                        mime_type="image/png",
+                    ),
+                    Image(
+                        url="https://example.com/img2.png",
+                        mime_type="image/png",
+                    ),
+                ],
+            )
+            yield ModelResponse(
+                content="part 2",
+                images=[
+                    Image(
+                        url="https://example.com/img3.png",
+                        mime_type="image/png",
+                    ),
+                ],
+            )
+
+        async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                content="apart 1 ",
+                images=[
+                    Image(
+                        url="https://example.com/aimg1.png",
+                        mime_type="image/png",
+                    ),
+                    Image(
+                        url="https://example.com/aimg2.png",
+                        mime_type="image/png",
+                    ),
+                ],
+            )
+            yield ModelResponse(
+                content="apart 2",
+                images=[
+                    Image(
+                        url="https://example.com/aimg3.png",
+                        mime_type="image/png",
+                    ),
+                ],
+            )
+
+    model = _MultiImageStreamModel(id="multi-img", provider="OpenAI")
+    list(
+        model.response_stream(messages=[Message(role="user", content="imgs")])
+    )
+
+    (sync_span,) = span_exporter.get_finished_spans()
+    sync_out = json.loads(
+        str(sync_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    sync_uris = [
+        p["uri"] for p in sync_out[0]["parts"] if p.get("type") == "uri"
+    ]
+    assert sync_uris == [
+        "https://example.com/img1.png",
+        "https://example.com/img2.png",
+        "https://example.com/img3.png",
+    ]
+
+    span_exporter.clear()
+
+    async def _consume() -> None:
+        async for _ in model.aresponse_stream(
+            messages=[Message(role="user", content="aimgs")]
+        ):
+            pass
+
+    asyncio.run(_consume())
+    (async_span,) = span_exporter.get_finished_spans()
+    async_out = json.loads(
+        str(async_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    async_uris = [
+        p["uri"] for p in async_out[0]["parts"] if p.get("type") == "uri"
+    ]
+    assert async_uris == [
+        "https://example.com/aimg1.png",
+        "https://example.com/aimg2.png",
+        "https://example.com/aimg3.png",
+    ]
+
+
+def test_real_openai_chat_audio_response_and_stream_not_double_encoded(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that base64 audio from OpenAIChat (normal and streamed) is decoded once into BlobPart."""
+    import httpx
+    import openai
+    from agno.models.openai import OpenAIChat
+
+    payload = {
+        "id": "chatcmpl-audio-1",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o-audio-preview",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "audio": {
+                        "id": "audio_123",
+                        "data": "AAE=",
+                        "expires_at": 1700003600,
+                        "transcript": "Hello audio",
+                    },
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    sync_client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _req: httpx.Response(200, json=payload)
+            )
+        ),
+    )
+    model = OpenAIChat(id="gpt-4o-audio-preview", client=sync_client)
+    model.response(messages=[Message(role="user", content="Speak")])
+
+    (sync_span,) = span_exporter.get_finished_spans()
+    sync_out = json.loads(
+        str(sync_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    audio_blobs = [
+        p
+        for p in sync_out[0]["parts"]
+        if p.get("type") == "blob" and p.get("modality") == "audio"
+    ]
+    assert len(audio_blobs) == 1
+    assert audio_blobs[0]["content"] == "AAE="
+
+    span_exporter.clear()
+
+    sse_lines = [
+        'data: {"id":"chatcmpl-audio-s","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-audio-preview","choices":[{"index":0,"delta":{"role":"assistant","audio":{"id":"audio_s1","data":"AA","transcript":"Hello "}},"finish_reason":null}]}',
+        'data: {"id":"chatcmpl-audio-s","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-audio-preview","choices":[{"index":0,"delta":{"audio":{"data":"E=","transcript":"audio"}},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+    ]
+    sse_body = ("\n\n".join(sse_lines) + "\n\n").encode("utf-8")
+    stream_client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _req: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=sse_body,
+                )
+            )
+        ),
+    )
+    stream_model = OpenAIChat(id="gpt-4o-audio-preview", client=stream_client)
+    list(
+        stream_model.response_stream(
+            messages=[Message(role="user", content="Speak stream")]
+        )
+    )
+
+    (stream_span,) = span_exporter.get_finished_spans()
+    stream_out = json.loads(
+        str(stream_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    stream_audio_blobs = [
+        p
+        for p in stream_out[0]["parts"]
+        if p.get("type") == "blob" and p.get("modality") == "audio"
+    ]
+    assert len(stream_audio_blobs) == 1
+    assert stream_audio_blobs[0]["content"] == "AAE="

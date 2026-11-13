@@ -10,8 +10,9 @@ from typing import Any
 
 import httpx
 import openai
-from agno.media import Audio, File, Image
+from agno.media import Audio, File, Image, Video
 from agno.models.message import Message
+from agno.models.moonshot import MoonShot
 from agno.models.openai import OpenAIChat
 from agno.models.openrouter import OpenRouter
 from agno.tools.function import Function
@@ -359,7 +360,7 @@ class ChatToolCallingScenario(Scenario):
 
 
 class ChatMultimodalScenario(Scenario):
-    expected_spans = {"chat": 1}
+    expected_spans = {"chat": 2}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -440,22 +441,41 @@ class ChatMultimodalScenario(Scenario):
                     )
                 ]
             )
+            video_model = MoonShot(id="kimi-k2.5", client=client)
+            video_model.response(
+                messages=[
+                    Message(
+                        role="user",
+                        content="Describe this video",
+                        videos=[
+                            Video(
+                                id="ms://video-conformance-123",
+                                url="https://example.com/clip.mp4",
+                                format="mp4",
+                            )
+                        ],
+                    )
+                ]
+            )
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
         spans = _chat_spans(report)
-        assert spans, "expected a chat span"
-        span = spans[0]
-        input_parts = _message_part_type_and_modality(
-            _attr(span, "gen_ai.input.messages")
-        )
-        output_parts = _message_part_type_and_modality(
-            _attr(span, "gen_ai.output.messages")
-        )
+        assert len(spans) == 2, f"expected 2 chat spans, saw {len(spans)}"
+        input_parts: set[tuple[str, str | None]] = set()
+        output_parts: set[tuple[str, str | None]] = set()
+        for span in spans:
+            input_parts |= _message_part_type_and_modality(
+                _attr(span, "gen_ai.input.messages")
+            )
+            output_parts |= _message_part_type_and_modality(
+                _attr(span, "gen_ai.output.messages")
+            )
         for expected_input in (
             ("uri", "image"),
             ("blob", "audio"),
             ("file", "document"),
+            ("uri", "video"),
         ):
             assert expected_input in input_parts, (
                 f"expected {expected_input!r} on input messages, saw {input_parts}"
