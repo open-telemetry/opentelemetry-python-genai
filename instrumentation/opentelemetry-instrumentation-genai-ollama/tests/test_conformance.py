@@ -25,7 +25,10 @@ from opentelemetry.test_util_genai.conformance import (
 
 from .conformance.embedding import EmbeddingScenario
 from .conformance.inference import InferenceScenario
-from .conformance.inference_streaming import InferenceStreamingScenario
+from .conformance.inference_streaming import (
+    InferenceStreamingNoContentScenario,
+    InferenceStreamingScenario,
+)
 from .conformance.tool_calling import ToolCallingScenario
 
 
@@ -34,6 +37,7 @@ from .conformance.tool_calling import ToolCallingScenario
     [
         InferenceScenario(),
         InferenceStreamingScenario(),
+        InferenceStreamingNoContentScenario(),
         ToolCallingScenario(),
         EmbeddingScenario(),
     ],

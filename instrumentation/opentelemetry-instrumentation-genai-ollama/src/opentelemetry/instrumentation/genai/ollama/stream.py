@@ -5,11 +5,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from opentelemetry.instrumentation.genai.ollama.utils import (
     apply_final_chunk,
-    get,
     output_message,
     tool_call_requests,
 )
@@ -20,6 +19,11 @@ from opentelemetry.util.genai.stream import (
 )
 from opentelemetry.util.genai.types import MessagePart
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Generator
+
+    from ollama import ChatResponse
+
 
 class _ChatStreamMixin:
     """Chunk handling shared by the sync and async wrappers."""
@@ -29,36 +33,36 @@ class _ChatStreamMixin:
     _self_content: list[str]
     _self_thinking: list[str]
     _self_tool_calls: list[MessagePart]
-    _self_final_chunk: Any
+    _self_has_tool_calls: bool
 
     def _init_buffers(self, capture_content: bool) -> None:
         self._self_capture_content = capture_content
         self._self_content = []
         self._self_thinking = []
         self._self_tool_calls = []
-        self._self_final_chunk = None
+        self._self_has_tool_calls = False
 
-    def _process_chunk(self, chunk: Any) -> None:
-        message = get(chunk, "message")
-        if content := get(message, "content"):
-            self._self_content.append(str(content))
-        if thinking := get(message, "thinking"):
-            self._self_thinking.append(str(thinking))
-        self._self_tool_calls.extend(
-            tool_call_requests(get(message, "tool_calls"))
-        )
+    def _process_chunk(self, chunk: ChatResponse) -> None:
+        message = chunk.message
+        self._self_has_tool_calls |= bool(message.tool_calls)
+        if self._self_capture_content:
+            if content := message.content:
+                self._self_content.append(content)
+            if thinking := message.get("thinking"):
+                self._self_thinking.append(str(thinking))
+            self._self_tool_calls.extend(
+                tool_call_requests(message.tool_calls)
+            )
         # Only the last chunk carries the done reason and token counts.
-        if get(chunk, "done"):
-            self._self_final_chunk = chunk
+        if chunk.done:
+            apply_final_chunk(
+                invocation=self._self_invocation,
+                response=chunk,
+                has_tool_calls=self._self_has_tool_calls,
+            )
 
     def _record_response(self) -> None:
         invocation = self._self_invocation
-        if self._self_final_chunk is not None:
-            apply_final_chunk(
-                invocation,
-                self._self_final_chunk,
-                bool(self._self_tool_calls),
-            )
         if self._self_capture_content:
             invocation.output_messages = [
                 output_message(
@@ -77,12 +81,12 @@ class _ChatStreamMixin:
         self._self_invocation.fail(error)
 
 
-class ChatStreamWrapper(_ChatStreamMixin, SyncStreamWrapper[Any]):
+class ChatStreamWrapper(_ChatStreamMixin, SyncStreamWrapper["ChatResponse"]):
     """Wraps the generator returned by ``Client.chat(stream=True)``."""
 
     def __init__(
         self,
-        stream: Any,
+        stream: Generator[ChatResponse, None, None],
         invocation: InferenceInvocation,
         capture_content: bool,
     ) -> None:
@@ -92,12 +96,14 @@ class ChatStreamWrapper(_ChatStreamMixin, SyncStreamWrapper[Any]):
         self._init_buffers(capture_content)
 
 
-class AsyncChatStreamWrapper(_ChatStreamMixin, AsyncStreamWrapper[Any]):
+class AsyncChatStreamWrapper(
+    _ChatStreamMixin, AsyncStreamWrapper["ChatResponse"]
+):
     """Wraps the async generator returned by ``AsyncClient.chat(stream=True)``."""
 
     def __init__(
         self,
-        stream: Any,
+        stream: AsyncIterator[ChatResponse],
         invocation: InferenceInvocation,
         capture_content: bool,
     ) -> None:

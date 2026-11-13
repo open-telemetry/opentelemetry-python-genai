@@ -12,9 +12,13 @@ from typing import Any
 
 import ollama
 import pytest
+from vcr import VCR
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.genai.ollama import OllamaInstrumentor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -157,6 +161,109 @@ def test_chat_stream_records_the_drained_response(
             "content": "".join(chunk.message.content for chunk in chunks),
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("instrument_no_content")
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "cassette, request_kwargs, expected_finish_reason",
+    [
+        pytest.param(
+            "test_chat_stream_records_the_drained_response.yaml",
+            {"model": CHAT_MODEL, "messages": MESSAGES},
+            "stop",
+            id="text",
+        ),
+        pytest.param(
+            "test_chat_stream_records_tool_calls.yaml",
+            {
+                "model": CHAT_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What is the weather in Paris? Use the tool.",
+                    }
+                ],
+                "tools": [WEATHER_TOOL],
+                "options": {"temperature": 0},
+            },
+            "tool_call",
+            id="tools",
+        ),
+        pytest.param(
+            "test_chat_stream_records_reasoning_and_a_length_finish.yaml",
+            {
+                "model": REASONING_MODEL,
+                "messages": [{"role": "user", "content": "What is 17 * 23?"}],
+                "think": True,
+                "options": {"num_predict": 40},
+            },
+            "length",
+            id="reasoning",
+            marks=pytest.mark.skipif(
+                "think"
+                not in inspect.signature(ollama.Client.chat).parameters,
+                reason="the think parameter is unavailable on this ollama version",
+            ),
+        ),
+    ],
+)
+async def test_chat_stream_does_not_buffer_disabled_content(
+    span_exporter: InMemorySpanExporter,
+    vcr: VCR,
+    asynchronous: bool,
+    cassette: str,
+    request_kwargs: dict[str, Any],
+    expected_finish_reason: str,
+) -> None:
+    client = (
+        ollama.AsyncClient(host=HOST)
+        if asynchronous
+        else ollama.Client(host=HOST)
+    )
+    with vcr.use_cassette(cassette) as recording:
+        response = client.chat(stream=True, **request_kwargs)
+        stream = await response if asynchronous else response
+        chunks = []
+        try:
+            while True:
+                try:
+                    chunk = (
+                        await anext(stream) if asynchronous else next(stream)
+                    )
+                except (StopIteration, StopAsyncIteration):
+                    break
+                chunks.append(chunk)
+                assert stream._self_content == []
+                assert stream._self_thinking == []
+                assert stream._self_tool_calls == []
+        finally:
+            if asynchronous:
+                await stream.aclose()
+            else:
+                stream.close()
+
+    assert chunks == [
+        ollama.ChatResponse.model_validate_json(line)
+        for line in recording.responses[0]["body"]["string"].splitlines()
+    ]
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.UNSET
+    assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        expected_finish_reason,
+    )
+    assert (
+        span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS]
+        == chunks[-1].prompt_eval_count
+    )
+    assert (
+        span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == chunks[-1].eval_count
+    )
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    assert GenAI.GEN_AI_TOOL_DEFINITIONS not in span.attributes
 
 
 def test_chat_stream_span_ends_only_after_the_stream_is_drained(
