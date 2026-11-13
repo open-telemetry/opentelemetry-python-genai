@@ -48,7 +48,7 @@ Check out the `manual example <examples/manual>`_ for more details.
 Instrumenting all clients
 *************************
 
-When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create`` and ``interactions.get`` operations.
+When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create``, ``interactions.get``, and ``aio.live.connect`` operations.
 You can also optionally capture prompts and responses as log events.
 
 Make sure to configure OpenTelemetry tracing, logging, and metrics to capture all telemetry emitted by the instrumentation.
@@ -89,6 +89,17 @@ This controls whether the following content is captured on spans and/or events:
 - Output messages from the LLM.
 - System Instructions
 - The result of tool calls and the tool call parameters (other tool call details and tool definitions are always captured).
+
+Truncating binary payloads (e.g. audio / image blobs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Inline binary media (such as realtime PCM audio chunks or inline images) is only buffered and recorded when content capture is enabled, and is stored on ``BlobPart.content`` as raw ``bytes``. For Gemini Live (``aio.live.connect``), ``realtime_inference`` spans do not emit a ``gen_ai.client.inference.operation.details`` log event and the ``gen_ai.client.realtime_session.started`` / ``ended`` events carry no message payload, so Live message and audio content is recorded on spans only in ``SPAN_ONLY`` or ``SPAN_AND_EVENT`` mode (or passed to a configured ``CompletionHook``; ``EVENT_ONLY`` without a completion hook does not buffer or record Live message content).
+
+When messages are emitted as structured ``AnyValue`` maps/lists on log events (for operations that emit ``gen_ai.client.inference.operation.details``), ``BlobPart.content`` is passed to the OpenTelemetry SDK as raw ``bytes``. You can cap the size of each binary payload (and string field) on log events without corrupting the surrounding message structure by configuring ``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`` (or ``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT``) or ``LoggerProvider(log_record_limits=LogRecordLimits(max_log_record_attribute_length=...))``. On spans, message attributes are currently serialized as a single JSON string (with ``BlobPart.content`` base64-encoded), so ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` or ``SpanLimits(max_span_attribute_length=...)`` truncates the serialized JSON string itself and can make it unparsable until structured span attributes (`open-telemetry/opentelemetry-python-genai#1013 <https://github.com/open-telemetry/opentelemetry-python-genai/pull/1013>`_) land.
+
+.. note::
+
+   Truncating ``bytes`` and ``bytearray`` attribute values requires `open-telemetry/opentelemetry-python#5855 <https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased version of ``opentelemetry-api``).
 
 
 Configuration recording
