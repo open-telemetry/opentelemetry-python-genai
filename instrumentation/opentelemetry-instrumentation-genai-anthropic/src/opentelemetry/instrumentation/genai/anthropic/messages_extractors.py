@@ -14,8 +14,7 @@ try:
     import httpx2 as _http_lib
 except ImportError:
     import httpx as _http_lib
-import anthropic
-from anthropic import NotGiven
+from anthropic import NotGiven, Omit
 from anthropic.types import MessageDeltaUsage
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -258,11 +257,7 @@ def set_invocation_response_attributes(
 
 _T = TypeVar("_T")
 
-# `Omit` was added to the anthropic SDK after the supported floor.
-_AnthropicOmit = getattr(anthropic, "Omit", None)
-_UNSET_TYPES = (
-    (NotGiven,) if _AnthropicOmit is None else (NotGiven, _AnthropicOmit)
-)
+_UNSET_TYPES = (NotGiven, Omit)
 
 
 def _none_if_unset(value: _T) -> _T | None:
@@ -293,16 +288,11 @@ def extract_params(  # pylint: disable=too-many-locals
     **_kwargs: object,
 ) -> MessageRequestParams:
     max_tokens = _none_if_unset(max_tokens)
-    messages = _none_if_unset(messages)
     model = _none_if_unset(model)
     stop_sequences = _none_if_unset(stop_sequences)
-    stream = _none_if_unset(stream)
-    system = _none_if_unset(system)
     temperature = _none_if_unset(temperature)
-    tools = _none_if_unset(tools)
     top_k = _none_if_unset(top_k)
     top_p = _none_if_unset(top_p)
-    extra_body = _none_if_unset(extra_body)
 
     if isinstance(extra_body, Mapping):
         body = cast(Mapping[object, object], extra_body)
