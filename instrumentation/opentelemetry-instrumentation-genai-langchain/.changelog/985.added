@@ -1,0 +1,1 @@
+Set `gen_ai.prompt.version` on chat spans from `prompt_version` or LangChain Hub `lc_hub_commit_hash` prompt metadata
