@@ -1860,6 +1860,104 @@ def test_model_input_message_content_blocks(
     ]
 
 
+def test_model_nested_anthropic_document_sources_and_roles(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test nested Anthropic document source blocks and custom/aliased message roles via model.response."""
+    import base64
+
+    model = _SyncModel(id="claude-3-7-sonnet", provider="Anthropic")
+    pdf_b64 = base64.b64encode(b"%PDF-1.4 sample").decode("ascii")
+    txt_b64 = base64.b64encode(b"Plain text doc").decode("ascii")
+
+    messages = [
+        Message(
+            role="developer",
+            content="Follow developer policy.",
+        ),
+        Message(
+            role="model",
+            content="Understood.",
+        ),
+        Message(
+            role="user",
+            content=[
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                },
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/spec.pdf",
+                        "media_type": "application/pdf",
+                    },
+                },
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "text",
+                        "media_type": "text/plain",
+                        "data": "Plain text doc",
+                    },
+                },
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "file",
+                        "file_id": "file-doc-456",
+                        "media_type": "application/pdf",
+                    },
+                },
+            ],
+        ),
+    ]
+
+    model.response(messages=messages)
+
+    (span,) = span_exporter.get_finished_spans()
+    input_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    )
+    assert [m["role"] for m in input_msgs] == [
+        "developer",
+        "assistant",
+        "user",
+    ]
+    assert input_msgs[2]["parts"] == [
+        {
+            "type": "blob",
+            "modality": "document",
+            "mime_type": "application/pdf",
+            "content": pdf_b64,
+        },
+        {
+            "type": "uri",
+            "modality": "document",
+            "mime_type": "application/pdf",
+            "uri": "https://example.com/spec.pdf",
+        },
+        {
+            "type": "blob",
+            "modality": "document",
+            "mime_type": "text/plain",
+            "content": txt_b64,
+        },
+        {
+            "type": "file",
+            "modality": "document",
+            "mime_type": "application/pdf",
+            "file_id": "file-doc-456",
+        },
+    ]
+
+
 def test_real_openai_chat_sync_and_async(
     instrument_agno_content_capture,
     span_exporter,
@@ -1910,6 +2008,18 @@ def test_real_openai_chat_sync_and_async(
         sync_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
         == "openai"
     )
+    if resp.provider_data and "id" in resp.provider_data:
+        assert (
+            sync_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "chatcmpl-real-adapter-1"
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_RESPONSE_ID not in sync_span.attributes
+    assert GenAIAttributes.GEN_AI_RESPONSE_MODEL not in sync_span.attributes
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        not in sync_span.attributes
+    )
     assert (
         sync_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
         == 18
@@ -1956,6 +2066,18 @@ def test_real_openai_chat_sync_and_async(
     assert (
         async_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
         == "openai"
+    )
+    if async_resp.provider_data and "id" in async_resp.provider_data:
+        assert (
+            async_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "chatcmpl-real-adapter-1"
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_RESPONSE_ID not in async_span.attributes
+    assert GenAIAttributes.GEN_AI_RESPONSE_MODEL not in async_span.attributes
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        not in async_span.attributes
     )
     assert (
         async_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
@@ -2008,6 +2130,21 @@ def test_real_openai_chat_stream_sync_and_async(
     assert (
         sync_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
     )
+    has_stream_id = any(
+        c.provider_data and "id" in c.provider_data for c in chunks
+    )
+    if has_stream_id:
+        assert (
+            sync_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "chatcmpl-sse-1"
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_RESPONSE_ID not in sync_span.attributes
+    assert GenAIAttributes.GEN_AI_RESPONSE_MODEL not in sync_span.attributes
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        not in sync_span.attributes
+    )
     assert (
         sync_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
         == 11
@@ -2054,6 +2191,18 @@ def test_real_openai_chat_stream_sync_and_async(
     assert (
         async_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM)
         is True
+    )
+    if has_stream_id:
+        assert (
+            async_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "chatcmpl-sse-1"
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_RESPONSE_ID not in async_span.attributes
+    assert GenAIAttributes.GEN_AI_RESPONSE_MODEL not in async_span.attributes
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        not in async_span.attributes
     )
     assert (
         async_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)

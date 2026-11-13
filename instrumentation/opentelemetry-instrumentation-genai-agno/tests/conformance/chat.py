@@ -8,15 +8,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
+import openai
 from agno.media import Audio, File, Image
 from agno.models.message import Message
-from agno.models.response import ModelResponse
-from tests.mock_model import MockModel
-
-try:
-    from agno.models.message import MessageMetrics
-except ImportError:
-    from agno.models.message import Metrics as MessageMetrics
+from agno.models.openai import OpenAIChat
+from agno.models.openrouter import OpenRouter
+from agno.tools.function import Function
 
 from opentelemetry.instrumentation.genai.agno import AgnoInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
@@ -29,11 +27,38 @@ from opentelemetry.test_util_genai.conformance import (
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 
-_MISSING_SERVER_ADDRESS = (
+# Agno's OpenAIChat adapter leaves base_url unset by default and does not copy
+# response.model or choices[0].finish_reason onto ModelResponse.
+_OPENAI_CHAT_GAPS = tuple(
     ExpectedViolation(
         advice_id="genai_expected_attribute_missing",
-        message_substring="server.address",
-    ),
+        message_substring=attribute,
+    )
+    for attribute in (
+        "server.address",
+        "gen_ai.response.model",
+        "gen_ai.response.finish_reasons",
+    )
+)
+
+# OpenRouter sets a default base_url (populating server.address), while
+# inheriting OpenAIChat's response parsing that omits response.model and
+# finish_reasons on ModelResponse.
+_OPENROUTER_CHAT_GAPS = tuple(
+    ExpectedViolation(
+        advice_id="genai_expected_attribute_missing",
+        message_substring=attribute,
+    )
+    for attribute in (
+        "gen_ai.response.model",
+        "gen_ai.response.finish_reasons",
+    )
+)
+
+_REAL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
+    "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
+    "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
 )
 
 
@@ -65,103 +90,29 @@ def _message_part_types(messages_json: str | None) -> set[str]:
     }
 
 
-class _ConformanceChatModel(MockModel):
-    def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
-        return ModelResponse(
-            content="Conformance model response",
-            provider_data={
-                "model": "gpt-4o-2024-08-06",
-                "id": "chatcmpl-conformance",
-                "finish_reason": "stop",
-            },
-            response_usage=MessageMetrics(
-                input_tokens=12,
-                output_tokens=6,
-            ),
-        )
-
-    def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
-        yield ModelResponse(content="Conformance ")
-        yield ModelResponse(
-            content="stream response",
-            provider_data={
-                "model": "gpt-4o-2024-08-06",
-                "id": "chatcmpl-stream-conformance",
-                "finish_reason": "stop",
-            },
-            response_usage=MessageMetrics(
-                input_tokens=14,
-                output_tokens=8,
-            ),
-        )
+def _message_part_type_and_modality(
+    messages_json: str | None,
+) -> set[tuple[str, str | None]]:
+    if not messages_json:
+        return set()
+    messages = json.loads(messages_json)
+    return {
+        (part["type"], part.get("modality"))
+        for message in messages
+        for part in message.get("parts", [])
+        if "type" in part
+    }
 
 
-class _ConformanceToolAndReasoningModel(MockModel):
-    def __init__(self, **kwargs: Any) -> None:
-        self._turn = 0
-        super().__init__(**kwargs)
-
-    def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
-        self._turn += 1
-        if self._turn == 1:
-            return ModelResponse(
-                content=None,
-                reasoning_content="Need to call get_weather.",
-                tool_calls=[
-                    {
-                        "id": "call_weather_1",
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": '{"city": "Paris"}',
-                        },
-                    }
-                ],
-                provider_data={
-                    "model": "gpt-4o-2024-08-06",
-                    "id": "chatcmpl-tools-1",
-                    "finish_reason": "tool_calls",
-                },
-                response_usage=MessageMetrics(
-                    input_tokens=16,
-                    output_tokens=8,
-                ),
-            )
-        return ModelResponse(
-            content="The weather in Paris is sunny.",
-            reasoning_content="Checking tool output for Paris weather.",
-            provider_data={
-                "model": "gpt-4o-2024-08-06",
-                "id": "chatcmpl-tools-2",
-                "finish_reason": "stop",
-            },
-            response_usage=MessageMetrics(
-                input_tokens=24,
-                output_tokens=10,
-            ),
-        )
-
-
-class _ConformanceMultimodalModel(MockModel):
-    def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
-        return ModelResponse(
-            content="Described media attachments.",
-            images=[
-                Image(
-                    url="https://example.com/generated.png",
-                    mime_type="image/png",
-                )
-            ],
-            provider_data={
-                "model": "gpt-4o-2024-08-06",
-                "id": "chatcmpl-multimodal-conformance",
-                "finish_reason": "stop",
-            },
-            response_usage=MessageMetrics(
-                input_tokens=30,
-                output_tokens=12,
-            ),
-        )
+def _mock_openai_client(
+    handler: Any,
+) -> openai.OpenAI:
+    return openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(handler),
+        ),
+    )
 
 
 class ChatScenario(Scenario):
@@ -170,7 +121,7 @@ class ChatScenario(Scenario):
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
     )
-    expected_violations = _MISSING_SERVER_ADDRESS
+    expected_violations = _OPENAI_CHAT_GAPS
 
     def run(
         self,
@@ -180,6 +131,30 @@ class ChatScenario(Scenario):
         logger_provider: LoggerProvider,
         vcr: Any,
     ) -> None:
+        payload = {
+            "id": "chatcmpl-conformance",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o-2024-08-06",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Conformance model response",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 6,
+                "total_tokens": 18,
+            },
+        }
+        client = _mock_openai_client(
+            lambda _request: httpx.Response(200, json=payload)
+        )
         with instrument(
             AgnoInstrumentor(),
             tracer_provider=tracer_provider,
@@ -187,7 +162,7 @@ class ChatScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
-            model = _ConformanceChatModel(id="gpt-4o", provider="OpenAI")
+            model = OpenAIChat(id="gpt-4o", client=client)
             model.response(
                 messages=[
                     Message(role="user", content="hello chat conformance")
@@ -203,7 +178,7 @@ class ChatStreamingScenario(Scenario):
         "gen_ai.client.operation.time_to_first_chunk",
         "gen_ai.client.operation.time_per_output_chunk",
     )
-    expected_violations = _MISSING_SERVER_ADDRESS
+    expected_violations = _OPENAI_CHAT_GAPS
 
     def run(
         self,
@@ -213,6 +188,20 @@ class ChatStreamingScenario(Scenario):
         logger_provider: LoggerProvider,
         vcr: Any,
     ) -> None:
+        sse_lines = [
+            'data: {"id":"chatcmpl-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"role":"assistant","content":"Conformance "},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"content":"stream response"},"finish_reason":"stop"}]}',
+            'data: {"id":"chatcmpl-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[],"usage":{"prompt_tokens":14,"completion_tokens":8,"total_tokens":22}}',
+            "data: [DONE]",
+        ]
+        sse_body = ("\n\n".join(sse_lines) + "\n\n").encode("utf-8")
+        client = _mock_openai_client(
+            lambda _request: httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=sse_body,
+            )
+        )
         with instrument(
             AgnoInstrumentor(),
             tracer_provider=tracer_provider,
@@ -220,7 +209,7 @@ class ChatStreamingScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
-            model = _ConformanceChatModel(id="gpt-4o", provider="OpenAI")
+            model = OpenAIChat(id="gpt-4o", client=client)
             list(
                 model.response_stream(
                     messages=[
@@ -245,7 +234,7 @@ class ChatToolCallingScenario(Scenario):
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
     )
-    expected_violations = _MISSING_SERVER_ADDRESS
+    expected_violations = _OPENAI_CHAT_GAPS
 
     def run(
         self,
@@ -255,12 +244,78 @@ class ChatToolCallingScenario(Scenario):
         logger_provider: LoggerProvider,
         vcr: Any,
     ) -> None:
-        from agno.tools.function import Function
-
         def get_weather(city: str) -> str:
             """Get the current weather for a city."""
             return f"Sunny in {city}"
 
+        turn = 0
+
+        def _handle_request(_request: httpx.Request) -> httpx.Response:
+            nonlocal turn
+            turn += 1
+            if turn == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "chatcmpl-tools-1",
+                        "object": "chat.completion",
+                        "created": 1700000000,
+                        "model": "gpt-4o-2024-08-06",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": None,
+                                    "reasoning_content": "Need to call get_weather.",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_weather_1",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "get_weather",
+                                                "arguments": '{"city": "Paris"}',
+                                            },
+                                        }
+                                    ],
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 16,
+                            "completion_tokens": 8,
+                            "total_tokens": 24,
+                        },
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-tools-2",
+                    "object": "chat.completion",
+                    "created": 1700000001,
+                    "model": "gpt-4o-2024-08-06",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "The weather in Paris is sunny.",
+                                "reasoning_content": "Checking tool output for Paris weather.",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 24,
+                        "completion_tokens": 10,
+                        "total_tokens": 34,
+                    },
+                },
+            )
+
+        client = _mock_openai_client(_handle_request)
         with instrument(
             AgnoInstrumentor(),
             tracer_provider=tracer_provider,
@@ -268,9 +323,7 @@ class ChatToolCallingScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
-            model = _ConformanceToolAndReasoningModel(
-                id="gpt-4o", provider="OpenAI"
-            )
+            model = OpenAIChat(id="gpt-4o", client=client)
             model.response(
                 messages=[
                     Message(
@@ -287,18 +340,22 @@ class ChatToolCallingScenario(Scenario):
         assert any(_attr(s, "gen_ai.tool.definitions") for s in spans), (
             "expected gen_ai.tool.definitions on the chat span"
         )
-        all_types: set[str] = set()
+        input_types: set[str] = set()
+        output_types: set[str] = set()
         for span in spans:
-            all_types |= _message_part_types(
+            input_types |= _message_part_types(
                 _attr(span, "gen_ai.input.messages")
             )
-            all_types |= _message_part_types(
+            output_types |= _message_part_types(
                 _attr(span, "gen_ai.output.messages")
             )
-        for expected_part in ("tool_call", "tool_call_response", "reasoning"):
-            assert expected_part in all_types, (
-                f"expected {expected_part!r} part on chat messages, saw {all_types}"
+        for expected_output_part in ("tool_call", "reasoning"):
+            assert expected_output_part in output_types, (
+                f"expected {expected_output_part!r} part on output messages, saw {output_types}"
             )
+        assert "tool_call_response" in input_types, (
+            f"expected 'tool_call_response' part on input messages, saw {input_types}"
+        )
 
 
 class ChatMultimodalScenario(Scenario):
@@ -307,7 +364,7 @@ class ChatMultimodalScenario(Scenario):
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
     )
-    expected_violations = _MISSING_SERVER_ADDRESS
+    expected_violations = _OPENROUTER_CHAT_GAPS
 
     def run(
         self,
@@ -317,6 +374,40 @@ class ChatMultimodalScenario(Scenario):
         logger_provider: LoggerProvider,
         vcr: Any,
     ) -> None:
+        payload = {
+            "id": "chatcmpl-multimodal-conformance",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o-2024-08-06",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Described media attachments.",
+                        "images": [
+                            {
+                                "image_url": {
+                                    "url": (
+                                        "data:image/png;base64,"
+                                        f"{_REAL_PNG_B64}"
+                                    )
+                                }
+                            }
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 30,
+                "completion_tokens": 12,
+                "total_tokens": 42,
+            },
+        }
+        client = _mock_openai_client(
+            lambda _request: httpx.Response(200, json=payload)
+        )
         with instrument(
             AgnoInstrumentor(),
             tracer_provider=tracer_provider,
@@ -324,7 +415,7 @@ class ChatMultimodalScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
-            model = _ConformanceMultimodalModel(id="gpt-4o", provider="OpenAI")
+            model = OpenRouter(id="gpt-4o", client=client)
             model.response(
                 messages=[
                     Message(
@@ -355,12 +446,20 @@ class ChatMultimodalScenario(Scenario):
         spans = _chat_spans(report)
         assert spans, "expected a chat span"
         span = spans[0]
-        input_types = _message_part_types(_attr(span, "gen_ai.input.messages"))
-        output_types = _message_part_types(
+        input_parts = _message_part_type_and_modality(
+            _attr(span, "gen_ai.input.messages")
+        )
+        output_parts = _message_part_type_and_modality(
             _attr(span, "gen_ai.output.messages")
         )
-        all_types = input_types | output_types
-        for expected_part in ("blob", "uri", "file"):
-            assert expected_part in all_types, (
-                f"expected {expected_part!r} part on chat messages, saw {all_types}"
+        for expected_input in (
+            ("uri", "image"),
+            ("blob", "audio"),
+            ("file", "document"),
+        ):
+            assert expected_input in input_parts, (
+                f"expected {expected_input!r} on input messages, saw {input_parts}"
             )
+        assert ("blob", "image") in output_parts, (
+            f"expected ('blob', 'image') on output messages, saw {output_parts}"
+        )
