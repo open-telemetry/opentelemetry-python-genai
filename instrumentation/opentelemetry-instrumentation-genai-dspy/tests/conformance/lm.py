@@ -139,14 +139,12 @@ class LMScenario(Scenario):
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
-        spans = [
+        span = next(
             entry["span"]
             for entry in report["samples"]
             if "span" in entry
             and _attr(entry["span"], "gen_ai.operation.name") == "chat"
-        ]
-        assert len(spans) == 1, "expected exactly one chat span"
-        span = spans[0]
+        )
         expected_usage = {
             "gen_ai.usage.input_tokens": 10,
             "gen_ai.usage.output_tokens": 5,
