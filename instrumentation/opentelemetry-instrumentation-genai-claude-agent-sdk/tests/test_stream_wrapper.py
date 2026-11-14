@@ -19,7 +19,11 @@ import pytest
 from claude_agent_sdk import types as sdk_types
 from claude_agent_sdk.types import ClaudeAgentOptions
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace
+from opentelemetry.util.genai._conversation_context import (
+    with_conversation_id,
+)
 
 from ._replay import (
     ReplayTransport,
@@ -150,6 +154,21 @@ def test_conversation_id_falls_back_to_result_message(
 
     span = agent_spans(span_exporter)[0]
     assert span.attributes["gen_ai.conversation.id"] == "session-from-result"
+
+
+def test_sdk_session_id_overrides_inherited_conversation_id(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # query() running inside another conversation still reports its own
+    # SDK session, not the parent's id.
+    token = otel_context.attach(with_conversation_id("parent-conversation"))
+    try:
+        run_query(single_turn())
+    finally:
+        otel_context.detach(token)
+
+    span = agent_spans(span_exporter)[0]
+    assert span.attributes["gen_ai.conversation.id"] == "session-1"
 
 
 def test_usage_comes_from_result_message(

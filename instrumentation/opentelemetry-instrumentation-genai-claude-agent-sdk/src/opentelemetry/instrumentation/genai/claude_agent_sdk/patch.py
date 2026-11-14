@@ -139,6 +139,10 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
         self._self_outputs: list[OutputMessage] = []
         self._self_result_usage: dict[str, Any] | None = None
         self._self_result_error: Error | None = None
+        # Whether an SDK session id has been applied. The invocation may already
+        # hold an ambient conversation id inherited from the caller, so its
+        # ``conversation_id`` cannot tell whether the SDK session was seen.
+        self._self_sdk_session_seen = False
         # None until an assistant message reports the component, so a missing
         # component stays missing instead of being exported as a zero.
         self._self_assistant_input: int | None = None
@@ -201,11 +205,14 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
             self._handle_system(chunk)
 
     def _set_conversation_id(self, session_id: Any) -> None:
-        # The SDK session id identifies the conversation the run belongs to.
-        # The first one seen wins; the init message and the result carry the same id.
+        # The SDK session id identifies the conversation the run belongs to and
+        # overrides an inherited ambient id. The first one seen wins; the init
+        # message and the result carry the same id.
+        if self._self_sdk_session_seen:
+            return
         if isinstance(session_id, str) and session_id:
-            if self._self_agent.conversation_id is None:
-                self._self_agent.conversation_id = session_id
+            self._self_agent.conversation_id = session_id
+            self._self_sdk_session_seen = True
 
     def _handle_system(self, chunk: Any) -> None:
         if getattr(chunk, "subtype", None) != "init":
