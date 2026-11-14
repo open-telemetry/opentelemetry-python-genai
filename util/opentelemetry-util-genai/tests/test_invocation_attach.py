@@ -17,6 +17,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import get_current_span
+from opentelemetry.util.genai._inference_invocation import (
+    SuppressedInferenceInvocation,
+)
 from opentelemetry.util.genai._invocation import GenAIInvocation
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.stream import (
@@ -308,3 +311,19 @@ def test_completion_hook_runs_with_span_current(
 
     assert seen == [invocation.span]
     assert get_current_span() is caller_span
+
+
+def test_activate_leaves_context_alone_without_own_span(
+    handler: TelemetryHandler, caller_span: Any
+) -> None:
+    outer = handler.inference("prov", _attach_to_context=False)
+    with outer.activate():
+        inner = handler.inference("prov", _attach_to_context=False)
+    assert isinstance(inner, SuppressedInferenceInvocation)
+
+    with inner.activate():
+        assert get_current_span() is caller_span
+    with inner:
+        assert get_current_span() is caller_span
+
+    outer.stop()
