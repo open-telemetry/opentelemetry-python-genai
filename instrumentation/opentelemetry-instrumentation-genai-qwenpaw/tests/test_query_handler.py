@@ -336,6 +336,33 @@ async def test_partial_or_non_assistant_output_omits_finish_reason(
 
 
 @pytest.mark.asyncio
+async def test_agent_span_is_current_only_while_the_stream_runs(
+    instrument_no_content, runner_module, span_exporter
+) -> None:
+    seen = []
+
+    async def multi_chunk(
+        request: object, msgs: object, runner: object
+    ) -> AsyncIterator[tuple[object, bool]]:
+        del request, msgs, runner
+        for i in range(2):
+            seen.append(get_current_span().get_span_context())
+            yield assistant_reply(f"chunk-{i}"), i == 1
+
+    runner = runner_module.AgentRunner(agent_id="entry-agent")
+    with patched_command_path(runner_module, multi_chunk):
+        stream = runner.query_handler(user_command_msgs(), make_request())
+        assert not get_current_span().get_span_context().is_valid
+        await asyncio.create_task(anext(stream))
+        assert not get_current_span().get_span_context().is_valid
+        async for _ in stream:
+            assert not get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context, span.context]
+
+
+@pytest.mark.asyncio
 async def test_break_mid_stream_finalizes_span_and_restores_context(
     instrument_no_content, runner_module, span_exporter, tracer_provider
 ) -> None:

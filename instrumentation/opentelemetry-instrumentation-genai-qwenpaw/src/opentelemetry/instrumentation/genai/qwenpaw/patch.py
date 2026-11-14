@@ -35,10 +35,8 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
         stream: AsyncGenerator[object, None],
         invocation: LocalAgentInvocation,
     ) -> None:
-        super().__init__(stream)
-        # INTERNAL agent invocations must not opt into the base wrapper's
-        # streamed inference timing metrics or gen_ai.request.stream handling.
-        self._self_agent_invocation = invocation
+        super().__init__(stream, invocation=invocation)
+        self._self_invocation = invocation
         self._self_output_complete = False
         self._self_output_message: OutputMessage | None = None
 
@@ -52,7 +50,7 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
             and getattr(item[0], "role", None) == "assistant"
             and item[1] is True
         )
-        if not self._self_agent_invocation.should_capture_content:
+        if not self._self_invocation.should_capture_content:
             return
         output_message = output_message_from_yield_item(item)
         if output_message is not None:
@@ -61,18 +59,16 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
     def _on_stream_end(self) -> None:
         self._apply_output_message()
         if self._self_output_complete:
-            self._self_agent_invocation.finish_reasons = ["stop"]
-        self._self_agent_invocation.stop()
+            self._self_invocation.finish_reasons = ["stop"]
+        self._self_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._apply_output_message()
-        self._self_agent_invocation.fail(error)
+        self._self_invocation.fail(error)
 
     def _apply_output_message(self) -> None:
         if self._self_output_message is not None:
-            self._self_agent_invocation.output_messages = [
-                self._self_output_message
-            ]
+            self._self_invocation.output_messages = [self._self_output_message]
 
 
 def _build_invocation(
@@ -87,6 +83,7 @@ def _build_invocation(
     invocation = handler.invoke_local_agent(
         agent_name=agent_name,
         conversation_id=non_empty_str(getattr(request, "session_id", None)),
+        _attach_to_context=False,
     )
     if invocation.should_capture_content:
         invocation.input_messages = input_messages_from_msgs(msgs)
@@ -107,11 +104,8 @@ def make_query_handler_wrapper(
     ) -> QueryHandlerStreamWrapper:
         msgs, request = parse_query_handler_call(args, kwargs)
         invocation = _build_invocation(handler, instance, msgs, request)
-        try:
+        with invocation.activate():
             stream = wrapped(*args, **kwargs)
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
         return QueryHandlerStreamWrapper(stream, invocation)
 
     return query_handler_wrapper
