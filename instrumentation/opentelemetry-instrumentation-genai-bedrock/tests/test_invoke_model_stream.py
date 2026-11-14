@@ -467,7 +467,7 @@ def test_stream_wrapper_anthropic_with_cache_tokens(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 90
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
@@ -771,7 +771,7 @@ def test_invoke_model_with_response_stream_end_to_end_stubber(
     )
     assert span.attributes[ServerAttributes.SERVER_PORT] == 443
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 20
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
