@@ -1181,6 +1181,7 @@ def _start_interactions_invocation(
                 request_model=_get_field(request, "model"),
                 server_address=server_address,
                 agent_name=agent,
+                _attach_to_context=False,
             )
         )
     else:
@@ -1190,6 +1191,7 @@ def _start_interactions_invocation(
             operation_name="interactions.create",
             server_address=server_address,
             error_type_resolver=resolve_error_type,
+            _attach_to_context=False,
         )
     invocation.tool_definitions = _maybe_get_tool_definitions(
         _get_field(request, "tools")
@@ -1230,10 +1232,9 @@ def _create_instrumented_interactions_create(
             telemetry_handler, instance, request
         )
 
-        try:
+        with invocation.activate():
             response = wrapped(*args, **kwargs)
             if _is_interaction_stream(response, request):
-                invocation.suspend()
                 return InteractionsStreamWrapper(
                     response,
                     invocation,
@@ -1242,11 +1243,8 @@ def _create_instrumented_interactions_create(
             _apply_interaction_response_attributes(
                 response, invocation, telemetry_handler
             )
-            invocation.stop()
-            return response
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
+        invocation.stop()
+        return response
 
     return instrumented_interactions_create
 
@@ -1273,10 +1271,9 @@ def _create_instrumented_async_interactions_create(
             telemetry_handler, instance, request
         )
 
-        try:
+        with invocation.activate():
             response = await wrapped(*args, **kwargs)
             if _is_interaction_stream(response, request):
-                invocation.suspend()
                 return AsyncInteractionsStreamWrapper(
                     response,
                     invocation,
@@ -1289,11 +1286,8 @@ def _create_instrumented_async_interactions_create(
             _apply_interaction_response_attributes(
                 response, invocation, telemetry_handler
             )
-            invocation.stop()
-            return response
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
+        invocation.stop()
+        return response
 
     return instrumented_interactions_create
 
@@ -1369,6 +1363,7 @@ def _start_fetch_invocation(
         response_id=interaction_id,
         server_address=server_address,
         error_type_resolver=resolve_error_type,
+        _attach_to_context=False,
     )
     last_event_id = kwargs.get("last_event_id")
     if streaming and isinstance(last_event_id, str) and last_event_id:
@@ -1413,7 +1408,7 @@ def _create_instrumented_interactions_get(
             telemetry_handler, instance, interaction_id, kwargs
         )
 
-        try:
+        with invocation.activate():
             result = wrapped(*args, **kwargs)
             if _is_fetched_interaction(result):
                 _apply_fetched_interaction_attributes(
@@ -1422,17 +1417,13 @@ def _create_instrumented_interactions_get(
             elif not _is_unparsed_response(result) and hasattr(
                 result, "__iter__"
             ):
-                invocation.suspend()
                 return FetchInteractionStreamWrapper(
                     cast("Stream[InteractionSSEEvent]", result),
                     invocation,
                     telemetry_handler,
                 )
-            invocation.stop()
-            return result
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
+        invocation.stop()
+        return result
 
     return instrumented_interactions_get
 
@@ -1471,7 +1462,7 @@ def _create_instrumented_async_interactions_get(
             telemetry_handler, instance, interaction_id, kwargs
         )
 
-        try:
+        with invocation.activate():
             result = await wrapped(*args, **kwargs)
             if _is_fetched_interaction(result):
                 _apply_fetched_interaction_attributes(
@@ -1480,15 +1471,11 @@ def _create_instrumented_async_interactions_get(
             elif not _is_unparsed_response(result) and hasattr(
                 result, "__aiter__"
             ):
-                invocation.suspend()
                 return AsyncFetchInteractionStreamWrapper(
                     result, invocation, telemetry_handler
                 )
-            invocation.stop()
-            return result
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
+        invocation.stop()
+        return result
 
     return instrumented_interactions_get
 

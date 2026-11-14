@@ -119,6 +119,7 @@ def _create_instrumented_embed_content(
             ),
             request_model=kwargs.get("model"),
             server_address=server_address,
+            _attach_to_context=False,
         ) as invocation:
             response = wrapped(*args, **kwargs)
             _apply_embedding_response_attributes(response, invocation)
@@ -154,6 +155,7 @@ def _create_instrumented_async_embed_content(
             ),
             request_model=kwargs.get("model"),
             server_address=server_address,
+            _attach_to_context=False,
         ) as invocation:
             response = await wrapped(*args, **kwargs)
             _apply_embedding_response_attributes(response, invocation)
