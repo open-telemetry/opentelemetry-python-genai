@@ -1515,6 +1515,11 @@ class DetailedUsageLM(FakeLM):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "content_capture",
+    ["SPAN_ONLY", "NO_CONTENT"],
+    ids=["span_only", "no_content"],
+)
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
     "usage,expected_attrs,omitted_attrs",
@@ -1641,24 +1646,40 @@ class DetailedUsageLM(FakeLM):
     ],
 )
 async def test_lm_call_cached_and_reasoning_tokens(
-    instrument_dspy,
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
     span_exporter,
+    content_capture: str,
     use_async: bool,
     usage: Mapping[str, Any] | object | None,
     expected_attrs: dict[str, int],
     omitted_attrs: tuple[str, ...],
 ) -> None:
-    lm = DetailedUsageLM(usage=usage)
-    if use_async:
-        await lm.acall("Capital of France?")
-    else:
-        lm("Capital of France?")
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture=content_capture,
+    ):
+        lm = DetailedUsageLM(usage=usage)
+        if use_async:
+            await lm.acall("Capital of France?")
+        else:
+            lm("Capital of France?")
 
     (span,) = span_exporter.get_finished_spans()
     for key, value in expected_attrs.items():
         assert span.attributes[key] == value
     for key in omitted_attrs:
         assert key not in span.attributes
+    if content_capture == "NO_CONTENT":
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in span.attributes
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES in span.attributes
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES in span.attributes
 
 
 @pytest.mark.skipif(not hasattr(dspy, "lm15"), reason="requires DSPy 3.4+")
