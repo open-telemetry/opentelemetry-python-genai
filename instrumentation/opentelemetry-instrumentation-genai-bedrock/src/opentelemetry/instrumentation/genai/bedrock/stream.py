@@ -215,7 +215,7 @@ class _BedrockConverseStreamMixin:
         self._self_invocation.cache_read_input_tokens = (
             self._self_cache_read_input_tokens
         )
-        self._self_invocation.cache_creation_input_tokens = (
+        self._self_invocation.cache_write_input_tokens = (
             self._self_cache_creation_input_tokens
         )
 
@@ -467,8 +467,11 @@ class _BedrockInvokeModelStreamMixin:
         if finish_reason:
             self._self_invocation.finish_reasons = [finish_reason]
 
-        if self._self_input_tokens is not None:
-            self._self_invocation.input_tokens = self._self_input_tokens
+        self._self_invocation.input_tokens = _total_input_tokens(
+            self._self_input_tokens,
+            self._self_cache_read_input_tokens,
+            self._self_cache_creation_input_tokens,
+        )
         if self._self_output_tokens is not None:
             self._self_invocation.output_tokens = self._self_output_tokens
         if self._self_cache_read_input_tokens is not None:
@@ -476,7 +479,7 @@ class _BedrockInvokeModelStreamMixin:
                 self._self_cache_read_input_tokens
             )
         if self._self_cache_creation_input_tokens is not None:
-            self._self_invocation.cache_creation_input_tokens = (
+            self._self_invocation.cache_write_input_tokens = (
                 self._self_cache_creation_input_tokens
             )
 
