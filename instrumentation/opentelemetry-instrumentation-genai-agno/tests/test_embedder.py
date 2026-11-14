@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from openai.types import CreateEmbeddingResponse, Embedding
 
 try:
     from agno.exceptions import EmbeddingError
@@ -64,6 +65,25 @@ def _create_mock_response(
     else:
         resp.usage = None
     return resp
+
+
+def _create_batch_response(
+    embeddings: list[list[float]], usage: dict[str, Any] | None = None
+) -> CreateEmbeddingResponse:
+    usage_data = dict(usage or {})
+    usage_data.setdefault(
+        "total_tokens",
+        usage_data.get("prompt_tokens", usage_data.get("input_tokens", 0)),
+    )
+    return CreateEmbeddingResponse(
+        data=[
+            Embedding(embedding=embedding, index=index, object="embedding")
+            for index, embedding in enumerate(embeddings)
+        ],
+        model="async-batch-model",
+        object="list",
+        usage=usage_data,
+    )
 
 
 def test_embedder_get_embedding_sync(
@@ -184,6 +204,174 @@ def test_embedder_async_get_embedding_and_usage(
     span = spans[0]
     assert span.attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 5
     assert span.attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 2
+
+
+def test_embedder_async_get_embeddings_batch_and_usage(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Batch embeddings emit one span and count usage once per request."""
+    mock_client = MagicMock()
+    mock_client.embeddings.create = AsyncMock(
+        side_effect=[
+            _create_batch_response(
+                [[0.1, 0.2], [0.3, 0.4]], {"prompt_tokens": 7}
+            ),
+            _create_batch_response([[0.5, 0.6]], {"prompt_tokens": 7}),
+        ]
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="async-batch-model",
+        async_client=mock_client,
+        batch_size=2,
+    )
+
+    async def _test() -> None:
+        (
+            embeddings,
+            usage,
+        ) = await embedder.async_get_embeddings_batch_and_usage(
+            ["first", "second", "third"]
+        )
+        assert embeddings == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+        assert usage == [
+            {"prompt_tokens": 7, "total_tokens": 7},
+            {"prompt_tokens": 7, "total_tokens": 7},
+            {"prompt_tokens": 7, "total_tokens": 7},
+        ]
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "embeddings async-batch-model"
+    assert spans[0].attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 2
+    assert spans[0].attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 14
+
+
+def test_embedder_async_batch_fallback_suppresses_individual_spans(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Per-text fallback calls enrich the batch span without duplicating it."""
+    mock_client = MagicMock()
+    mock_client.embeddings.create = AsyncMock(
+        side_effect=[
+            ValueError("batch failed"),
+            _create_batch_response([[0.1, 0.2]], {"prompt_tokens": 2}),
+            _create_batch_response([[0.3, 0.4]], {"prompt_tokens": 3}),
+        ]
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="async-batch-fallback-model",
+        async_client=mock_client,
+        batch_size=2,
+    )
+
+    async def _test() -> None:
+        (
+            embeddings,
+            usage,
+        ) = await embedder.async_get_embeddings_batch_and_usage(
+            ["first", "second"]
+        )
+        assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
+        assert usage == [
+            {"prompt_tokens": 2, "total_tokens": 2},
+            {"prompt_tokens": 3, "total_tokens": 3},
+        ]
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "embeddings async-batch-fallback-model"
+    assert spans[0].attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 2
+    assert spans[0].attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 5
+
+
+@pytest.mark.skipif(
+    EmbeddingError is None,
+    reason="Agno 2.x has no EmbeddingError and reports errors in-band",
+)
+def test_embedder_async_batch_error_finalizes_and_cleans_context(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    mock_client = MagicMock()
+    mock_client.embeddings.create = AsyncMock(
+        side_effect=ValueError("batch failed")
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="async-batch-error-model",
+        async_client=mock_client,
+        batch_size=2,
+    )
+
+    async def _test() -> None:
+        with pytest.raises(EmbeddingError) as caught:
+            await embedder.async_get_embeddings_batch_and_usage(
+                ["first", "second"]
+            )
+        assert "All 2 chunks failed" in str(caught.value)
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert (
+        spans[0].attributes.get(ERROR_TYPE) == "agno.exceptions.EmbeddingError"
+    )
+
+    span_exporter.clear()
+    mock_client.embeddings.create = AsyncMock(
+        return_value=_create_batch_response([[0.1, 0.2]], {"prompt_tokens": 2})
+    )
+    asyncio.run(embedder.async_get_embedding("after error"))
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_embedder_async_batch_cancellation_finalizes_and_cleans_context(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    cancellation = asyncio.CancelledError("cancelled")
+    mock_client = MagicMock()
+    mock_client.embeddings.create = AsyncMock(side_effect=cancellation)
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="async-batch-cancel-model",
+        async_client=mock_client,
+        batch_size=2,
+    )
+
+    async def _test() -> None:
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await embedder.async_get_embeddings_batch_and_usage(
+                ["first", "second"]
+            )
+        assert caught.value is cancellation
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert (
+        spans[0].attributes.get(ERROR_TYPE)
+        == "asyncio.exceptions.CancelledError"
+    )
+
+    span_exporter.clear()
+    mock_client.embeddings.create = AsyncMock(
+        return_value=_create_batch_response([[0.1, 0.2]], {"prompt_tokens": 2})
+    )
+    asyncio.run(embedder.async_get_embedding("after cancellation"))
+    assert len(span_exporter.get_finished_spans()) == 1
 
 
 def test_embedder_nested_call_suppression_sync(
@@ -641,6 +829,76 @@ def test_embedder_dual_instrumentation_suppressed_inner(
             spans[0].instrumentation_scope.name
             == "opentelemetry.instrumentation.genai.agno"
         )
+
+
+def test_embedder_nested_dual_instrumentation_counts_each_request_once(
+    span_exporter, tracer_provider, logger_provider, meter_provider
+) -> None:
+    """Nested Agno and OpenAI layers do not double-count batch usage."""
+    pytest.importorskip("opentelemetry.instrumentation.genai.openai")
+    from unittest.mock import patch
+
+    import openai
+
+    from opentelemetry.instrumentation.genai.agno import AgnoInstrumentor
+    from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
+    from opentelemetry.test_util_genai.instrumentor import instrument
+    from opentelemetry.util.genai.handler import TelemetryHandler
+
+    responses = [
+        _create_batch_response([[0.1, 0.2], [0.3, 0.4]], {"prompt_tokens": 5}),
+        _create_batch_response([[0.5, 0.6]], {"prompt_tokens": 4}),
+    ]
+    with (
+        instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ),
+        instrument(
+            OpenAIInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ),
+    ):
+        client = openai.AsyncOpenAI(api_key="fake")
+        with patch.object(
+            client, "post", new=AsyncMock(side_effect=responses)
+        ):
+            embedder = OpenAIEmbedder(
+                api_key="fake",
+                id="text-embedding-3-small",
+                async_client=client,
+                batch_size=2,
+            )
+            handler = TelemetryHandler(
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+            )
+
+            async def _test() -> None:
+                with handler.embedding(
+                    "outer", request_model="text-embedding-3-small"
+                ):
+                    (
+                        embeddings,
+                        _,
+                    ) = await embedder.async_get_embeddings_batch_and_usage(
+                        ["first", "second", "third"]
+                    )
+                assert embeddings == [
+                    [0.1, 0.2],
+                    [0.3, 0.4],
+                    [0.5, 0.6],
+                ]
+
+            asyncio.run(_test())
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 9
 
 
 def test_embedder_base64_encoding_dimensions(
