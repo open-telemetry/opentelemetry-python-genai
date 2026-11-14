@@ -1,0 +1,57 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen2.5:0.5b",
+        "stream": true,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say this is a test"
+          }
+        ],
+        "tools": []
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '109'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/chat
+  response:
+    body:
+      string: |
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.636075Z","message":{"role":"assistant","content":"That"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.7069584Z","message":{"role":"assistant","content":"'s"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.7716728Z","message":{"role":"assistant","content":" great"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.8540017Z","message":{"role":"assistant","content":"!"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.8562215Z","message":{"role":"assistant","content":" How"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.8759794Z","message":{"role":"assistant","content":" can"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.8783754Z","message":{"role":"assistant","content":" I"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.8892782Z","message":{"role":"assistant","content":" help"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.8905382Z","message":{"role":"assistant","content":" you"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.8965539Z","message":{"role":"assistant","content":" today"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.9082135Z","message":{"role":"assistant","content":"?"},"done":false}
+        {"model":"qwen2.5:0.5b","created_at":"2026-10-29T14:40:21.9140902Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","total_duration":365897700,"load_duration":4939500,"prompt_eval_count":34,"prompt_eval_cached_count":33,"prompt_eval_duration":77404000,"eval_count":12,"eval_duration":278257000}
+    headers:
+      content-type:
+      - application/x-ndjson
+      date:
+      - Thu, 29 Oct 2026 14:40:21 GMT
+      transfer-encoding:
+      - chunked
+    status:
+      code: 200
+      message: OK
+version: 1

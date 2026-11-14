@@ -1,0 +1,1 @@
+Expose `ContextData` in `opentelemetry.util.genai.invocation` as the base class for invocation context data containers.
