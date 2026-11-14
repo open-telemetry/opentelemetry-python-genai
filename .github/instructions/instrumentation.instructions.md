@@ -18,6 +18,8 @@ streaming | provider error | stream closed early | content capture on | content 
   the behavior under test.
 - Flag tests that call `_private` helpers or hand-built SDK mocks instead of the instrumented
   client public API.
+- Flag changes that drop coverage of a previously tested code path (deleted cassettes, removed
+  branches, fixtures forced onto a different API mode).
 
 **Types and speculative code.**
 - Flag `Any`/`object` in signatures and `getattr`/`hasattr` on known SDK types. Flag reads of
