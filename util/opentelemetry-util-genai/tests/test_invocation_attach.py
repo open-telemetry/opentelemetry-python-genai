@@ -327,3 +327,29 @@ def test_activate_leaves_context_alone_without_own_span(
         assert get_current_span() is caller_span
 
     outer.stop()
+
+
+@pytest.mark.parametrize(
+    "mode", ["attached_on_create", "with", "nested_activate"]
+)
+def test_error_in_activate_restores_caller_context(
+    handler: TelemetryHandler, caller_span: Any, mode: str
+) -> None:
+    invocation = handler.inference(
+        "prov", _attach_to_context=mode == "attached_on_create"
+    )
+
+    def run() -> None:
+        with invocation.activate():
+            with invocation.activate():
+                raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        if mode == "with":
+            with invocation:
+                run()
+        else:
+            run()
+
+    assert invocation._finished
+    assert get_current_span() is caller_span
