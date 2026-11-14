@@ -176,14 +176,15 @@ Full transparency isn't always reachable — prefer the least intrusive option t
 
 Follow [Streaming responses](../util/opentelemetry-util-genai/AGENTS.md#streaming-responses): declare
 `opentelemetry-util-genai[wrapt]` in `pyproject.toml`, subclass
-`SyncStreamWrapper` / `AsyncStreamWrapper`, call `invocation.suspend()` before returning the stream,
+`SyncStreamWrapper` / `AsyncStreamWrapper`, create the invocation with `_attach_to_context=False`,
 and don't call `invocation.stop()` when the SDK returns the stream.
 
 ### Context propagation
 
 - When the instrumented call returns, its span must not be current in the caller's context, on
-  any path: streams (including tool streams), raw or unparsed responses, early returns. Suspend or
-  detach before returning.
+  any path: streams (including tool streams), raw or unparsed responses, early returns. Create
+  invocations with `_attach_to_context=False` and scope work with `with invocation:` or
+  `invocation.activate()`; don't call the deprecated `invocation.suspend()`.
 - For async APIs, start the invocation inside the awaited coroutine, not when the coroutine is
   created. Otherwise concurrent calls nest under each other.
 - Don't suppress context detach errors. They signal mismatched attach/detach; fix the pairing.

@@ -633,27 +633,14 @@ def test_async_stream_wrapper_abandon_does_not_override_failure():
 # test_handler_metrics). These tests cover the wrapper's side of that seam.
 
 
-class _FakeTimingInvocation:
-    """Minimal stand-in for InferenceInvocation's timing seam."""
-
-    _records_stream_telemetry = True
-
-    def __init__(self):
-        self.chunk_times = []
-        self._request_stream = None
-
-    def _on_stream_chunk(self, chunk_at):
-        self.chunk_times.append(chunk_at)
-
-
-class _UnflaggedTimingInvocation:
-    """Has the timing hook but does not opt in to stream telemetry."""
-
-    def __init__(self):
-        self.chunk_times = []
-
-    def _on_stream_chunk(self, chunk_at):
-        self.chunk_times.append(chunk_at)
+def _timing_invocation():
+    """A real inference invocation whose chunk timestamps are recorded on ``chunk_times``."""
+    invocation = TelemetryHandler(tracer_provider=TracerProvider()).inference(
+        "prov", request_model="model", _attach_to_context=False
+    )
+    invocation.chunk_times = []
+    invocation._on_stream_chunk = invocation.chunk_times.append
+    return invocation
 
 
 class _TimingSyncWrapper(SyncStreamWrapper):
@@ -690,7 +677,7 @@ class _TimingAsyncWrapper(AsyncStreamWrapper):
 
 
 def test_sync_wrapper_reports_each_chunk_arrival():
-    invocation = _FakeTimingInvocation()
+    invocation = _timing_invocation()
     stream = _FakeSyncStream(chunks=["a", "b", "c"])
     wrapper = _TimingSyncWrapper(stream, invocation=invocation)
 
@@ -703,26 +690,15 @@ def test_sync_wrapper_reports_each_chunk_arrival():
 
 
 def test_sync_wrapper_marks_request_stream():
-    invocation = _FakeTimingInvocation()
+    invocation = _timing_invocation()
     # The wrapper marks the request as streamed at construction, before any
     # chunk is read.
     _TimingSyncWrapper(_FakeSyncStream(chunks=["a"]), invocation=invocation)
     assert invocation._request_stream is True
 
 
-def test_sync_wrapper_skips_stream_telemetry_without_flag():
-    invocation = _UnflaggedTimingInvocation()
-    wrapper = _TimingSyncWrapper(
-        _FakeSyncStream(chunks=["a"]), invocation=invocation
-    )
-    assert list(wrapper) == ["a"]
-
-    assert invocation.chunk_times == []
-    assert not hasattr(invocation, "_request_stream")
-
-
 def test_sync_wrapper_single_chunk_one_report():
-    invocation = _FakeTimingInvocation()
+    invocation = _timing_invocation()
     stream = _FakeSyncStream(chunks=["only"])
     wrapper = _TimingSyncWrapper(stream, invocation=invocation)
 
@@ -743,7 +719,7 @@ def test_sync_wrapper_without_invocation_skips_timing():
 
 
 def test_sync_wrapper_error_before_first_chunk_no_report():
-    invocation = _FakeTimingInvocation()
+    invocation = _timing_invocation()
     stream = _FakeSyncStream(error=RuntimeError("network"))
     wrapper = _TimingSyncWrapper(stream, invocation=invocation)
 
@@ -756,7 +732,7 @@ def test_sync_wrapper_error_before_first_chunk_no_report():
 def test_sync_wrapper_captures_arrival_before_processing():
     """Arrival time is taken before _process_chunk, so per-chunk timing
     excludes the instrumentation's own processing of the chunk."""
-    invocation = _FakeTimingInvocation()
+    invocation = _timing_invocation()
     stream = _FakeSyncStream(chunks=["a"])
     # First clock read is the chunk arrival (100.0); the second is consumed
     # inside _process_chunk to simulate processing taking time.
@@ -775,7 +751,7 @@ def test_sync_wrapper_captures_arrival_before_processing():
 
 def test_async_wrapper_reports_each_chunk_arrival():
     async def exercise():
-        invocation = _FakeTimingInvocation()
+        invocation = _timing_invocation()
         stream = _FakeAsyncStream(chunks=["x", "y", "z"])
         wrapper = _TimingAsyncWrapper(stream, invocation=invocation)
 
@@ -786,21 +762,6 @@ def test_async_wrapper_reports_each_chunk_arrival():
 
         assert chunks == ["x", "y", "z"]
         assert invocation.chunk_times == pytest.approx([201.3, 202.0, 202.2])
-
-    asyncio.run(exercise())
-
-
-def test_async_wrapper_skips_stream_telemetry_without_flag():
-    async def exercise():
-        invocation = _UnflaggedTimingInvocation()
-        stream = _FakeAsyncStream(chunks=["x"])
-        wrapper = _TimingAsyncWrapper(stream, invocation=invocation)
-
-        chunks = [chunk async for chunk in wrapper]
-
-        assert chunks == ["x"]
-        assert invocation.chunk_times == []
-        assert not hasattr(invocation, "_request_stream")
 
     asyncio.run(exercise())
 
@@ -1242,21 +1203,15 @@ async def test_finalize_on_aclose_runs_inside_execution_context(close_error):
 
 
 class _FakeInvocation:
-    _records_stream_telemetry = True
-
     def __init__(self):
         self.stop_count = 0
         self.failures = []
-        self._request_stream = False
 
     def stop(self):
         self.stop_count += 1
 
     def fail(self, error):
         self.failures.append(error)
-
-    def _on_stream_chunk(self, chunk_at):
-        pass
 
 
 class _FakeSyncManager:
@@ -1575,7 +1530,6 @@ def test_sync_manager_wrapper_hands_factory_invocation_to_stream_wrapper():
 
     with wrapper as stream_wrapper:
         assert stream_wrapper._self_invocation is invocation
-        assert invocation._request_stream is True
         assert invocation.stop_count == 0
 
     assert invocation.stop_count == 1
@@ -2315,52 +2269,7 @@ async def test_async_manager_exit_runs_inside_stream_execution_scope(
         assert invocation.stop_count == 1
 
 
-class _ActivatingInvocation:
-    """Invocation double that records whether reads ran inside activate()."""
-
-    def __init__(self, suspended: bool) -> None:
-        self._suspended = suspended
-        self.active = False
-        self.activations = 0
-
-    def _on_stream_chunk(self, chunk_at: float) -> None:
-        pass
-
-    def stop(self) -> None:
-        pass
-
-    def fail(self, error: Any) -> None:
-        pass
-
-    @contextmanager
-    def activate(self) -> Iterator[None]:
-        self.activations += 1
-        self.active = True
-        try:
-            yield
-        finally:
-            self.active = False
-
-
-@pytest.mark.parametrize("attach", [True, False])
-def test_default_execution_context_follows_suspended(attach: bool):
-    invocation = _ActivatingInvocation(attach)
-    seen: list[bool] = []
-
-    class Wrapper(_TestSyncStreamWrapper):
-        def _process_chunk(self, chunk: Any) -> None:
-            seen.append(invocation.active)
-            super()._process_chunk(chunk)
-
-    wrapper = Wrapper(iter(["a", "b"]), invocation)
-    assert list(wrapper) == ["a", "b"]
-    assert seen == [attach, attach]
-    # one activation per read: two chunks and the read that ends the stream
-    assert invocation.activations == (3 if attach else 0)
-    assert invocation.active is False
-
-
-def test_default_execution_context_without_suspended_flag_is_a_noop():
+def test_default_execution_context_ignores_non_genai_invocation():
     class Bare:
         def _on_stream_chunk(self, chunk_at: float) -> None:
             pass
@@ -2462,7 +2371,7 @@ def test_default_execution_context_leaves_suppressed_inference_invocation_alone(
         inner = handler.inference("openai", request_model="model")
         assert isinstance(inner, SuppressedInferenceInvocation)
         inner.suspend()
-        assert not inner._suspended
+        assert not inner._needs_activation
 
         wrapper = _TestSyncStreamWrapper(iter(["a"]), inner)
         assert list(wrapper) == ["a"]
@@ -2595,8 +2504,7 @@ def test_tool_stream_wrapper_records_no_chunk_timing_metrics():
     assert names == {"gen_ai.execute_tool.duration"}
 
 
-def test_tool_stream_wrapper_leaves_detached_tool_invocation_alone():
-    """A tool invocation created with _attach_to_context=False is never made current by the wrapper."""
+def test_tool_stream_wrapper_activates_unattached_tool_invocation():
     caller_span = get_current_span()
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
@@ -2617,7 +2525,7 @@ def test_tool_stream_wrapper_leaves_detached_tool_invocation_alone():
         yield "a"
 
     assert list(SyncToolStreamWrapper(tool_body(), invocation)) == ["a"]
-    assert inside == [caller_span]
+    assert inside == [invocation.span]
     assert get_current_span() is caller_span
     assert len(span_exporter.get_finished_spans()) == 1
 

@@ -1,0 +1,1 @@
+``invocation.activate()`` fails the invocation when an exception escapes the block, and the completion hook runs with the invocation span current.
