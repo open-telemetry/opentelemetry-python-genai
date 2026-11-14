@@ -12,6 +12,7 @@ from opentelemetry.instrumentation.google_genai.interactions import (
     _HAS_INTERACTIONS,
     AsyncInteractionsResource,
     InteractionsResource,
+    _create_resource_classes,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 
@@ -28,9 +29,10 @@ def _get_wrapped_functions():
     # The interactions API only exists on newer google-genai versions; the
     # instrumentation skips wrapping it otherwise, so only assert on it there.
     if _HAS_INTERACTIONS:
+        create_class, async_create_class = _create_resource_classes()
         wrapped_functions += [
-            InteractionsResource.create,
-            AsyncInteractionsResource.create,
+            create_class.create,
+            async_create_class.create,
             InteractionsResource.get,
             AsyncInteractionsResource.get,
         ]
