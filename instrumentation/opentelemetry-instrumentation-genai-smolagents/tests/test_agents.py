@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import gc
 import inspect
-import json
 import pathlib
 import sys
 import tempfile
@@ -108,7 +107,7 @@ def test_code_agent_non_streaming(
 
     assert attr(agent_span, GenAI.GEN_AI_REQUEST_MODEL) == "fake-model"
     assert attr(agent_span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
-    assert json.loads(attr(agent_span, GenAI.GEN_AI_TOOL_DEFINITIONS)) == [
+    assert parse_messages(agent_span, GenAI.GEN_AI_TOOL_DEFINITIONS) == [
         {
             "type": "function",
             "name": "final_answer",
@@ -130,7 +129,6 @@ def test_code_agent_non_streaming(
     assert inputs[0] == {
         "role": "user",
         "parts": [{"type": "text", "content": "Test question"}],
-        "name": None,
     }
     outputs = parse_messages(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert outputs[0]["parts"][0]["content"] == "Test result from CodeAgent"
@@ -886,7 +884,7 @@ def test_managed_agent_run_is_recorded(
     )
     assert attr(manager_span, GenAI.GEN_AI_AGENT_DESCRIPTION) is None
     # Managed agents are exposed to the manager model as tools.
-    definitions = json.loads(attr(manager_span, GenAI.GEN_AI_TOOL_DEFINITIONS))
+    definitions = parse_messages(manager_span, GenAI.GEN_AI_TOOL_DEFINITIONS)
     assert [definition["name"] for definition in definitions] == [
         "final_answer",
         "search_agent",

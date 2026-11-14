@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from unittest import mock
 
@@ -77,9 +76,8 @@ def test_sync_tool_execution(
     assert attrs.get(GenAI.GEN_AI_TOOL_DESCRIPTION) == "Add two numbers."
 
     args_attr = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
-    assert args_attr is not None
-    assert json.loads(str(args_attr)) == {"x": 3, "y": 4}
-    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == "7"
+    assert args_attr == {"x": 3, "y": 4}
+    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == 7
 
 
 def test_sync_tool_positional_and_mixed_args_extraction(
@@ -167,9 +165,8 @@ async def test_async_tool_execution(
     assert attrs.get(GenAI.GEN_AI_TOOL_DESCRIPTION) == "Multiply numbers."
 
     args_attr = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
-    assert args_attr is not None
-    assert json.loads(str(args_attr)) == {"a": 5, "b": 6}
-    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == "30"
+    assert args_attr == {"a": 5, "b": 6}
+    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == 30
 
 
 def test_sync_tool_error(
@@ -283,9 +280,8 @@ def test_tool_kwargs_not_mutated_by_caller(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     attrs = spans[0].attributes or {}
-    args_raw = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
-    assert args_raw is not None
-    args_dict = json.loads(str(args_raw))
+    args_dict = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
+    assert isinstance(args_dict, dict)
     assert args_dict.get("msg") == "world"
 
 

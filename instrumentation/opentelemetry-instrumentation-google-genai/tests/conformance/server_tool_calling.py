@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from google.genai import Client
@@ -26,7 +25,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 def _output_parts(report: LiveCheckReport) -> list[dict[str, Any]]:
     output_messages = [
-        json.loads(attribute["value"])
+        attribute["value"]
         for entry in report["samples"]
         if "span" in entry
         for attribute in entry["span"]["attributes"]

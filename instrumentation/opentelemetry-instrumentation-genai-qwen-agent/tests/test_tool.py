@@ -76,10 +76,9 @@ def test_call_tool_span_attributes(span_exporter, instrument_with_content):
         attrs[GenAIAttributes.GEN_AI_TOOL_DESCRIPTION]
         == "Get weather information"
     )
-    assert (
-        attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS]
-        == '{"city":"Beijing"}'
-    )
+    assert attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS] == {
+        "city": "Beijing"
+    }
     assert (
         attrs[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT] == "Sunny, 25 degrees"
     )
@@ -124,7 +123,7 @@ def test_call_tool_records_tool_call_id(span_exporter, instrument_no_content):
 
 
 def test_call_tool_with_dict_args(span_exporter, instrument_with_content):
-    """Dict tool arguments are serialized to JSON on the span."""
+    """Dict tool arguments are recorded as structured data on the span."""
     agent, tool = _make_agent_with_tool("search")
     tool.call = MagicMock(return_value="Found 3 results")
 
@@ -133,10 +132,9 @@ def test_call_tool_with_dict_args(span_exporter, instrument_with_content):
     tool_spans = _get_tool_spans(span_exporter)
     assert len(tool_spans) == 1
     attrs = dict(tool_spans[0].attributes or {})
-    assert (
-        attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS]
-        == '{"query":"OpenTelemetry"}'
-    )
+    assert attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS] == {
+        "query": "OpenTelemetry"
+    }
 
 
 def test_call_tool_swallowed_error_still_records_span(

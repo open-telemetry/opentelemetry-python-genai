@@ -48,7 +48,15 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": (
+                        {"content": "Hello", "type": "text"},
+                        {"content": "world", "type": "text"},
+                    ),
+                },
+            ),
         )
 
     def test_empty_tuple_contents_mimics_sdk_error(self):
@@ -71,7 +79,7 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS],
-            '[{"content":"Be polite","type":"text"}]',
+            ({"content": "Be polite", "type": "text"},),
         )
 
     def test_mixed_tuple_contents(self):
@@ -87,7 +95,15 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": (
+                        {"content": "Hello", "type": "text"},
+                        {"content": "world", "type": "text"},
+                    ),
+                },
+            ),
         )
 
     def test_instrumentation_does_not_break_core_functionality(self):
@@ -161,7 +177,13 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Hello, world","type":"text"}],"finish_reason":"","name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"content": "Hello, world", "type": "text"},),
+                    "finish_reason": "",
+                },
+            ),
         )
 
     @patch.dict(
@@ -176,7 +198,16 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Let me think.","type":"reasoning"},{"content":"It is sunny.","type":"text"}],"finish_reason":"","name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": (
+                        {"content": "Let me think.", "type": "reasoning"},
+                        {"content": "It is sunny.", "type": "text"},
+                    ),
+                    "finish_reason": "",
+                },
+            ),
         )
 
     def test_includes_token_counts_in_span_not_aggregated_from_responses(self):

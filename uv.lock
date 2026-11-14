@@ -5391,6 +5391,7 @@ name = "opentelemetry-test-util-genai"
 version = "0.0.0"
 source = { editable = "util/opentelemetry-test-util-genai" }
 dependencies = [
+    { name = "jsonschema" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
@@ -5403,6 +5404,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", specifier = ">=4.20.0" },
     { name = "opentelemetry-api", specifier = "~=1.45" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-sdk", specifier = "~=1.45" },

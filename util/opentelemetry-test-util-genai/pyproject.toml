@@ -13,6 +13,7 @@ classifiers = ["Private :: Do Not Upload"]
 # Lower bounds are required: sibling packages install this editable in their oldest test env
 # under UV_RESOLUTION=lowest-direct, which floors every unbounded dep to its earliest release.
 dependencies = [
+  "jsonschema >= 4.20.0",
   "opentelemetry-api ~= 1.45",
   "opentelemetry-instrumentation >= 0.64b0, <1",
   "opentelemetry-sdk ~= 1.45",

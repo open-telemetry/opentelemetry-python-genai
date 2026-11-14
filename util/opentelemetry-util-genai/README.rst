@@ -175,10 +175,11 @@ Set ``RetrievalInvocation.documents`` using
         invocation.documents = [RetrievalDocument(id="doc-1", score=0.9)]
 
 The model contains only the optional ``id`` and ``score`` fields; unset
-fields serialize as JSON ``null``. Documents are recorded in
-``gen_ai.retrieval.documents`` only in ``SPAN_ONLY`` or ``SPAN_AND_EVENT``
-content-capture mode. Passing dictionaries is deprecated, but existing
-dictionary payloads continue to serialize unchanged.
+fields are omitted when recorded. Documents are recorded as structured
+values in ``gen_ai.retrieval.documents`` only in ``SPAN_ONLY`` or
+``SPAN_AND_EVENT`` content-capture mode. Passing dictionaries is
+deprecated, but existing dictionary payloads continue to be recorded
+unchanged.
 
 
 Environment Variables
@@ -195,7 +196,7 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 
 When a ``LoggerProvider`` is configured, the package emits ``gen_ai.client.inference.operation.details``
 events (with ``DEBUG`` severity) regardless of the content capturing mode. Message content is
-included (as dictionaries instead of JSON strings) only in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
+included as structured dictionaries in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
 To suppress these events while keeping a ``LoggerProvider`` active, configure your logger or
 ``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
 <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
@@ -252,9 +253,9 @@ This package sets the following span attributes on LLM invocations:
 
 **Content attributes (sensitive, requires content capturing enabled):**
 
-- ``gen_ai.input.messages``: Str('[{"role": "user", "parts": [{"content": "hello world", "type": "text"}]}]')
-- ``gen_ai.output.messages``: Str('[{"role": "assistant", "parts": [{"content": "hello back", "type": "text"}], "finish_reason": "stop"}]')
-- ``gen_ai.system_instructions``: Str('[{"content": "You are a helpful assistant.", "type": "text"}]')
+- ``gen_ai.input.messages``: Slice([Map({"role": "user", "parts": [{"content": "hello world", "type": "text"}]})])
+- ``gen_ai.output.messages``: Slice([Map({"role": "assistant", "parts": [{"content": "hello back", "type": "text"}], "finish_reason": "stop"})])
+- ``gen_ai.system_instructions``: Slice([Map({"content": "You are a helpful assistant.", "type": "text"})])
 
 **Error attributes:**
 
