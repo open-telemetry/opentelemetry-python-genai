@@ -37,6 +37,16 @@ _logger = logging.getLogger(__name__)
 
 _METHODS = (
     (
+        "langchain_core.language_models.llms",
+        "BaseLLM",
+        "_generate_helper",
+    ),
+    (
+        "langchain_core.language_models.llms",
+        "BaseLLM",
+        "_agenerate_helper",
+    ),
+    (
         "langchain_core.language_models.chat_models",
         "BaseChatModel",
         "_generate_with_cache",
@@ -120,9 +130,12 @@ class _ExecutionContext:
         def run_id_for(
             instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
         ) -> UUID | None:
-            run_manager = parameters.bind(
-                instance, *args, **kwargs
-            ).arguments.get("run_manager")
+            arguments = parameters.bind(instance, *args, **kwargs).arguments
+            run_manager = arguments.get("run_manager")
+            if run_manager is None:
+                run_managers = arguments.get("run_managers")
+                if run_managers is not None and len(run_managers) == 1:
+                    run_manager = run_managers[0]
             return run_manager.run_id if run_manager is not None else None
 
         @wraps(original)
@@ -321,6 +334,7 @@ class _ExecutionContext:
             ("AsyncCallbackManager", _astart_run),
         ):
             for method in (
+                "on_llm_start",
                 "on_chat_model_start",
                 "on_chain_start",
                 "on_tool_start",
@@ -336,6 +350,11 @@ class _ExecutionContext:
                 )
 
         for module_name, class_name, methods in (
+            (
+                "langchain_core.language_models.llms",
+                "BaseLLM",
+                ("stream", "astream"),
+            ),
             (
                 "langchain_core.language_models.chat_models",
                 "BaseChatModel",
