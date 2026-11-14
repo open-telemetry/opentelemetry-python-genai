@@ -7,7 +7,7 @@
 import inspect
 import json
 from collections import UserList
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from qwen_agent.agent import Agent
@@ -16,6 +16,7 @@ from qwen_agent.llm import base as qwen_llm_base
 from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
 from qwen_agent.tools.base import BaseTool, register_tool
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.qwen_agent.utils import (
     convert_to_input_messages,
 )
@@ -399,6 +400,36 @@ def test_nested_agent_runs_produce_nested_spans(
     assert len(child_spans) == 1
     assert child_spans[0].parent is not None
     assert child_spans[0].parent.span_id == parent_spans[0].context.span_id
+
+
+def test_agent_run_span_is_current_only_inside_the_run(
+    span_exporter, instrument_no_content
+):
+    """Tool spans nest under invoke_agent; caller code between chunks doesn't."""
+    agent = _StubAgent.create(name="ScopedBot", llm=_StubLLM())
+    tool = MagicMock(
+        description="Get weather", call=MagicMock(return_value="ok")
+    )
+    agent.function_map = {"get_weather": tool}
+    seen_in_run: list[int] = []
+
+    def fake_run(self, messages, **kwargs):
+        seen_in_run.append(trace.get_current_span().get_span_context().span_id)
+        self._call_tool("get_weather", "{}")
+        yield [Message(role="assistant", content="chunk 1")]
+        self._call_tool("get_weather", "{}")
+        yield [Message(role="assistant", content="chunk 2")]
+
+    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
+        for _ in agent.run([Message(role="user", content="Go")]):
+            assert not trace.get_current_span().get_span_context().is_valid
+
+    (agent_span,) = _spans_named(span_exporter, "invoke_agent ScopedBot")
+    tool_spans = _spans_named(span_exporter, "execute_tool get_weather")
+    assert len(tool_spans) == 2
+    assert seen_in_run == [agent_span.context.span_id]
+    for tool_span in tool_spans:
+        assert tool_span.parent.span_id == agent_span.context.span_id
 
 
 def test_convert_to_input_messages_handles_tuples():
