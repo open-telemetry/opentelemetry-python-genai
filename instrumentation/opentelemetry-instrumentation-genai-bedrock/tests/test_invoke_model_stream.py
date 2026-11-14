@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.stub import Stubber
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.bedrock.patch import (
     _handle_invoke_model,
 )
@@ -743,10 +744,15 @@ def test_invoke_model_with_response_stream_end_to_end_stubber(
             modelId="anthropic.claude-3-sonnet-20240229-v1:0",
             body=json.dumps(request_body),
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert isinstance(response["body"], BedrockInvokeModelStreamWrapper)
-        stream_events = list(response["body"])
+        stream_events = []
+        for event in response["body"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            stream_events.append(event)
         assert len(stream_events) == 4
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1

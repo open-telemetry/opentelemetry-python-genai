@@ -15,6 +15,7 @@ import pytest_asyncio
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_retrieve_response,
 )
@@ -116,8 +117,13 @@ def test_invoke_agent_sync_with_content(
             sessionId="session-123",
             inputText="Hi",
         )
-        chunks = list(response["completion"])
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        chunks = []
+        for chunk in response["completion"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            chunks.append(chunk)
         assert len(chunks) == 2
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -320,10 +326,15 @@ def test_invoke_agent_sync_caller_error_during_stream(
             sessionId="session-123",
             inputText="Hi",
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(RuntimeError):
             with response["completion"] as stream:
                 for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
                     raise RuntimeError("caller error")
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -694,7 +705,7 @@ def test_invoke_inline_agent_sync_caller_error_during_stream(
     assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
 
 
-def test_invoke_inline_agent_sync_nested_call_inherits_conversation_id(
+def test_invoke_inline_agent_sync_stream_restores_caller_context(
     agent_client,
     instrument_with_content,
     span_exporter,
@@ -733,6 +744,9 @@ def test_invoke_inline_agent_sync_nested_call_inherits_conversation_id(
                 inputText="Hi",
             )
             for _ in response["completion"]:
+                # The stream suspends the invoke_agent context between reads,
+                # so caller work here belongs to the enclosing workflow and
+                # inherits its conversation id, not the agent's.
                 with handler.inference(provider="aws.bedrock"):
                     pass
 
@@ -743,9 +757,9 @@ def test_invoke_inline_agent_sync_nested_call_inherits_conversation_id(
     assert nested_span.name == "chat"
     assert (
         nested_span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
-        == "session-inline-nested"
+        == "outer-session"
     )
-    assert nested_span.parent.span_id == agent_span.context.span_id
+    assert nested_span.parent.span_id == workflow_span.context.span_id
 
     assert agent_span.name == "invoke_agent"
     assert (
@@ -1033,7 +1047,12 @@ async def test_async_invoke_agent_with_content(
             sessionId="async-session-123",
             inputText="Hello async agent",
         )
-        collected = [chunk async for chunk in response["completion"]]
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        collected = []
+        async for chunk in response["completion"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            collected.append(chunk)
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     assert len(collected) == 2
 
@@ -1229,10 +1248,15 @@ async def test_async_invoke_agent_caller_error_during_stream(
             sessionId="async-session-123",
             inputText="Hello async agent",
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(RuntimeError):
             async with response["completion"] as stream:
                 async for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
                     raise RuntimeError("caller error")
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1618,7 +1642,7 @@ async def test_async_invoke_inline_agent_caller_error_during_stream(
 
 
 @pytest.mark.asyncio
-async def test_async_invoke_inline_agent_nested_call_inherits_conversation_id(
+async def test_async_invoke_inline_agent_stream_restores_caller_context(
     async_agent_client,
     instrument_with_content,
     span_exporter,
@@ -1659,6 +1683,9 @@ async def test_async_invoke_inline_agent_nested_call_inherits_conversation_id(
                 inputText="Hi async",
             )
             async for _ in response["completion"]:
+                # The stream suspends the invoke_agent context between reads,
+                # so caller work here belongs to the enclosing workflow and
+                # inherits its conversation id, not the agent's.
                 with handler.inference(provider="aws.bedrock"):
                     pass
 
@@ -1669,9 +1696,9 @@ async def test_async_invoke_inline_agent_nested_call_inherits_conversation_id(
     assert nested_span.name == "chat"
     assert (
         nested_span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
-        == "async-session-inline-nested"
+        == "outer-async-session"
     )
-    assert nested_span.parent.span_id == agent_span.context.span_id
+    assert nested_span.parent.span_id == workflow_span.context.span_id
 
     assert agent_span.name == "invoke_agent"
     assert (
@@ -2221,8 +2248,13 @@ def test_retrieve_and_generate_stream_sync_with_content(
             },
         )
         assert len(span_exporter.get_finished_spans()) == 0
-        events = list(response["stream"])
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        events = []
+        for event in response["stream"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            events.append(event)
         assert len(events) == 2
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -2396,10 +2428,15 @@ def test_retrieve_and_generate_stream_sync_caller_error(
                 },
             },
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(ValueError):
             with response["stream"] as stream:
                 for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
                     raise ValueError("caller failed")
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -2549,8 +2586,13 @@ async def test_async_retrieve_and_generate_stream_with_content(
             },
         )
         assert len(span_exporter.get_finished_spans()) == 0
-        events = [event async for event in response["stream"]]
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        events = []
+        async for event in response["stream"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            events.append(event)
         assert len(events) == 2
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -2667,10 +2709,15 @@ async def test_async_retrieve_and_generate_stream_caller_error(
                 },
             },
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(RuntimeError):
             async with response["stream"] as stream:
                 async for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
                     raise RuntimeError("async caller failed")
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
