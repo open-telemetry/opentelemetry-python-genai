@@ -229,13 +229,6 @@ def create_chat_invocation(
             service_tier
         )
 
-    if capture_content:  # optimization
-        invocation.input_messages = _prepare_input_messages(
-            kwargs.get("messages", [])
-        )
-        invocation.tool_definitions = _prepare_tool_definitions(
-            kwargs.get("tools")
-        )
     return invocation
 
 
