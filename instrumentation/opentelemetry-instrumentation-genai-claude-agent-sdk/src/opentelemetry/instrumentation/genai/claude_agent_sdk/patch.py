@@ -100,7 +100,7 @@ def _finish_reason(stop_reason: str) -> str:
 def _result_error(chunk: Any) -> Error:
     """Build the run error a ``ResultMessage`` reports without raising."""
     subtype = getattr(chunk, "subtype", None)
-    errors = getattr(chunk, "errors", None)
+    errors: list[object] | None = getattr(chunk, "errors", None)
     message: str | None = None
     if isinstance(errors, list) and errors:
         message = str(errors[0])
@@ -217,7 +217,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
     def _handle_system(self, chunk: Any) -> None:
         if getattr(chunk, "subtype", None) != "init":
             return
-        data = getattr(chunk, "data", None)
+        data: dict[str, object] | None = getattr(chunk, "data", None)
         if isinstance(data, dict):
             self._set_conversation_id(data.get("session_id"))
 
