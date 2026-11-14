@@ -85,6 +85,16 @@ environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to o
     export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_AND_EVENT
 
 
+Native tracing in Claude Code
+*****************************
+
+The CLI bundled with the SDK can emit its own spans when
+``CLAUDE_CODE_ENABLE_TELEMETRY=1`` and ``CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1``
+are set and a traces exporter is configured with ``OTEL_TRACES_EXPORTER``.
+With both that and this package enabled, one tool call is reported
+twice, as ``claude_code.tool`` and as ``execute_tool``. Enable one of the two.
+
+
 References
 ----------
 
