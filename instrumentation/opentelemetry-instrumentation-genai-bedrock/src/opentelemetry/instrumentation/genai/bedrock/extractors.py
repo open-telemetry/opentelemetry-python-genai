@@ -537,6 +537,7 @@ def extract_invoke_model_request(
     stop_seqs = _first_not_none(
         body.get("stop_sequences"),
         body.get("stopSequences"),
+        body.get("stop"),
         text_gen_config.get("stopSequences") if text_gen_config else None,
     )
     if _is_list(stop_seqs):
