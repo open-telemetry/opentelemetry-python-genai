@@ -7,6 +7,7 @@ import inspect
 import io
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, cast
 
 from botocore.client import BaseClient
@@ -26,6 +27,7 @@ from opentelemetry.util.genai.invocation import (
 )
 from opentelemetry.util.genai.utils import bind_arguments
 
+from ._body_capture import BodyCapture, capture_body
 from .extractors import (
     extract_converse_request,
     extract_converse_response,
@@ -60,6 +62,42 @@ _logger = logging.getLogger(__name__)
 
 BEDROCK_RUNTIME = "bedrock-runtime"
 BEDROCK_AGENT_RUNTIME = "bedrock-agent-runtime"
+
+
+@dataclass(frozen=True)
+class _SdkCall:
+    """The call handed to the SDK, with the request body being captured."""
+
+    params: dict[str, Any]
+    body_capture: BodyCapture | None
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+
+
+def _sdk_call(
+    api_params: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> _SdkCall:
+    """Replace a file-like ``body`` with a recording proxy."""
+    body_capture = capture_body(api_params.get("body"))
+    if body_capture is None:
+        return _SdkCall(api_params, None, args, kwargs)
+
+    params = {**api_params, "body": body_capture}
+    if len(args) > 1:
+        # ``_make_api_call(operation_name, api_params)``
+        return _SdkCall(
+            params, body_capture, (*args[:1], params, *args[2:]), kwargs
+        )
+    return _SdkCall(
+        params, body_capture, args, {**kwargs, "api_params": params}
+    )
+
+
+def _request_params(call: _SdkCall) -> dict[str, Any]:
+    """The request parameters, with a captured body replaced by its snapshot."""
+    if call.body_capture is None:
+        return call.params
+    return {**call.params, "body": call.body_capture.snapshot()}
 
 
 def _handle_converse(
@@ -191,9 +229,12 @@ def _handle_invoke_model(
             server_address=server_address,
             server_port=server_port,
         )
-        extract_embedding_request(api_params, invocation)
+        call = _sdk_call(api_params, args, kwargs)
         try:
-            response: Any = wrapped(*args, **kwargs)
+            try:
+                response: Any = wrapped(*call.args, **call.kwargs)
+            finally:
+                extract_embedding_request(_request_params(call), invocation)
             raw_bytes = b""
             body_stream = response.get("body")
             if hasattr(body_stream, "read"):
@@ -220,11 +261,16 @@ def _handle_invoke_model(
         server_port=server_port,
     )
     capture_content = handler.should_capture_content()
-    extract_invoke_model_request(
-        api_params, invocation, capture_content=capture_content
-    )
+    call = _sdk_call(api_params, args, kwargs)
     try:
-        response = wrapped(*args, **kwargs)
+        try:
+            response = wrapped(*call.args, **call.kwargs)
+        finally:
+            extract_invoke_model_request(
+                _request_params(call),
+                invocation,
+                capture_content=capture_content,
+            )
     except BaseException as exc:
         invocation.fail(exc)
         raise
@@ -285,9 +331,12 @@ async def _handle_async_invoke_model(
             server_address=server_address,
             server_port=server_port,
         )
-        extract_embedding_request(api_params, invocation)
+        call = _sdk_call(api_params, args, kwargs)
         try:
-            response: Any = await wrapped(*args, **kwargs)
+            try:
+                response: Any = await wrapped(*call.args, **call.kwargs)
+            finally:
+                extract_embedding_request(_request_params(call), invocation)
         except BaseException as exc:
             invocation.fail(exc)
             raise
@@ -331,11 +380,16 @@ async def _handle_async_invoke_model(
         server_port=server_port,
     )
     capture_content = handler.should_capture_content()
-    extract_invoke_model_request(
-        api_params, invocation, capture_content=capture_content
-    )
+    call = _sdk_call(api_params, args, kwargs)
     try:
-        response = await wrapped(*args, **kwargs)
+        try:
+            response = await wrapped(*call.args, **call.kwargs)
+        finally:
+            extract_invoke_model_request(
+                _request_params(call),
+                invocation,
+                capture_content=capture_content,
+            )
     except BaseException as exc:
         invocation.fail(exc)
         raise
