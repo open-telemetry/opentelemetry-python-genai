@@ -353,3 +353,27 @@ def test_error_in_activate_restores_caller_context(
 
     assert invocation._finished
     assert get_current_span() is caller_span
+
+
+@pytest.mark.parametrize("finish", ["activate_error", "stop", "fail"])
+def test_finish_inside_child_span_restores_caller_context(
+    handler: TelemetryHandler, caller_span: Any, finish: str
+) -> None:
+    invocation = handler.inference("prov", _attach_to_context=False)
+
+    with invocation:
+        with handler._tracer.start_as_current_span("child") as child:
+            if finish == "activate_error":
+                with pytest.raises(ValueError):
+                    with invocation.activate():
+                        assert get_current_span() is invocation.span
+                        raise ValueError("boom")
+            elif finish == "stop":
+                invocation.stop()
+            else:
+                invocation.fail(ValueError("boom"))
+            assert invocation._finished
+            assert get_current_span() is child
+        assert get_current_span() is invocation.span
+
+    assert get_current_span() is caller_span

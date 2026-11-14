@@ -282,6 +282,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             self.span = get_current_span(context=ctx)
             self._span_context = ctx
             self._context_token = None
+        # Owned by __enter__/__exit__; stop()/fail() can run inside nested
+        # scopes, where detaching it would restore contexts out of order.
+        self._with_token: ContextToken | None = None
         self._monotonic_start_s: float = timeit.default_timer()
         self._finished: bool = False
 
@@ -308,7 +311,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     @property
     def _needs_activation(self) -> bool:
-        """True when this invocation owns a span that is not attached to the context.
+        """True when this invocation owns a span that was not attached on creation.
 
         Stream wrappers activate such an invocation around each read. One that
         is still attached is left alone: activating it around the read that
@@ -340,7 +343,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         Restores the previous context on exit. An exception escaping the block
         fails the invocation; leaving the block normally does not stop it. Does
         not change the context once the invocation has finished, while it is
-        already attached, or when it does not own a span.
+        attached on creation, or when it does not own a span.
         """
         token = (
             attach(self.context)
@@ -526,8 +529,12 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._finish(error)
 
     def __enter__(self) -> Self:
-        if self._needs_activation and not self._finished:
-            self._context_token = attach(self._span_context)
+        if (
+            self._needs_activation
+            and not self._finished
+            and self._with_token is None
+        ):
+            self._with_token = attach(self._span_context)
         return self
 
     def __exit__(
@@ -536,10 +543,15 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        if exc_value is not None:
-            self.fail(exc_value)
-        else:
-            self.stop()
+        try:
+            if exc_value is not None:
+                self.fail(exc_value)
+            else:
+                self.stop()
+        finally:
+            token, self._with_token = self._with_token, None
+            if token is not None:
+                detach(token)
 
 
 def _json_dumps_unless_str(value: object) -> str | None:
