@@ -57,7 +57,7 @@ from opentelemetry.util.genai.utils import (
     tool_arguments_to_any_value,
 )
 
-from .patch import _get_active_conversation_id
+from ._conversation import _get_active_conversation_id
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
@@ -107,22 +107,19 @@ class GenAITracingProcessor(TracingProcessor):
     def on_trace_end(self, trace: Trace) -> None:
         invocation = self._invocations.pop(trace, None)
         if invocation is not None:
-            if isinstance(invocation, WorkflowInvocation):
+            if (
+                isinstance(invocation, WorkflowInvocation)
+                and not invocation.conversation_id
+            ):
                 conv_id = _get_active_conversation_id()
                 if conv_id is not None:
                     invocation.conversation_id = conv_id
-                    invocation._data.conversation_id = conv_id
             invocation.stop()
 
     def on_span_start(self, span: Span[Any]) -> None:
         span_data = span.span_data
         if isinstance(span_data, AgentSpanData):
             conv_id = _get_active_conversation_id()
-            if conv_id is not None:
-                for inv in self._invocations.values():
-                    if isinstance(inv, WorkflowInvocation):
-                        inv.conversation_id = conv_id
-                        inv._data.conversation_id = conv_id
             kwargs: dict[str, Any] = {}
             if conv_id is not None:
                 kwargs["conversation_id"] = conv_id

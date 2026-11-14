@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, NonCallableMock, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, NonCallableMock
 
 import agents
 import agents.run
@@ -17,12 +17,12 @@ from openai.types.responses import Response, ResponseCompletedEvent
 from opentelemetry.instrumentation.genai.openai_agents import (
     OpenAIAgentsInstrumentor,
 )
-from opentelemetry.instrumentation.genai.openai_agents.package import (
-    _instruments,
-)
-from opentelemetry.instrumentation.genai.openai_agents.patch import (
+from opentelemetry.instrumentation.genai.openai_agents._conversation import (
     _extract_conversation_id,
     _get_active_conversation_id,
+)
+from opentelemetry.instrumentation.genai.openai_agents.package import (
+    _instruments,
 )
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
@@ -236,52 +236,47 @@ def test_double_uninstrument_is_noop() -> None:
 
 def test_extract_conversation_id_from_kwargs() -> None:
     assert (
-        _extract_conversation_id((), {"conversation_id": "conv-123"})
-        == "conv-123"
-    )
-
-
-def test_extract_conversation_id_from_session() -> None:
-    session = MagicMock(session_id="sess-456")
-    assert _extract_conversation_id((), {"session": session}) == "sess-456"
-
-
-def test_extract_conversation_id_prefers_conversation_id_over_session() -> (
-    None
-):
-    session = MagicMock(session_id="sess-456")
-    assert (
-        _extract_conversation_id(
-            (), {"conversation_id": "conv-123", "session": session}
-        )
-        == "conv-123"
+        _extract_conversation_id({"conversation_id": "conv-123"}) == "conv-123"
     )
 
 
 def test_extract_conversation_id_from_resumed_run_state() -> None:
-    run_state = MagicMock(_conversation_id="state-789")
-    # input as positional arg 1
-    assert _extract_conversation_id(("agent", run_state), {}) == "state-789"
-    # input as keyword arg
-    assert _extract_conversation_id((), {"input": run_state}) == "state-789"
+    from agents.run_state import RunState
+
+    run_state = MagicMock(spec=RunState, _conversation_id="state-789")
+    assert _extract_conversation_id({"input": run_state}) == "state-789"
 
 
 def test_extract_conversation_id_returns_none_when_empty() -> None:
-    assert _extract_conversation_id((), {}) is None
-    assert _extract_conversation_id((), {"conversation_id": None}) is None
-    assert _extract_conversation_id((), {"session": None}) is None
-    assert (
-        _extract_conversation_id((), {"session": MagicMock(session_id=None)})
-        is None
-    )
+    assert _extract_conversation_id({}) is None
+    assert _extract_conversation_id({"conversation_id": None}) is None
+    assert _extract_conversation_id({"input": "text input"}) is None
 
 
-def test_extract_conversation_id_uninitialized_session_returns_none() -> None:
-    session = MagicMock()
-    type(session).session_id = PropertyMock(
-        side_effect=ValueError("Session ID not yet available.")
+def test_extract_conversation_id_from_run_streamed_positional_arguments() -> (
+    None
+):
+    import inspect
+
+    sig = inspect.signature(agents.Runner.run_streamed)
+    mock_agent = MagicMock()
+    bound = sig.bind(
+        mock_agent,
+        "input",
+        None,
+        10,
+        None,
+        None,
+        None,
+        False,
+        "conv-pos-stream",
+        MagicMock(session_id="sess-pos-stream"),
     )
-    assert _extract_conversation_id((), {"session": session}) is None
+    bound.apply_defaults()
+    assert _extract_conversation_id(bound.arguments) == "conv-pos-stream"
+    session_arg = bound.arguments.get("session")
+    assert session_arg is not None
+    assert session_arg.session_id == "sess-pos-stream"
 
 
 def test_instrument_and_uninstrument_wraps_runner_methods() -> None:
@@ -549,7 +544,7 @@ def test_runner_entry_points_preserve_hooks(
 
 
 @pytest.mark.asyncio
-async def test_runner_conversation_id_updates_outer_trace_group_id(
+async def test_outer_trace_group_id_preserved_when_inner_runner_specifies_conversation_id(
     tracer_provider: TracerProvider,
     logger_provider: Any,
     meter_provider: Any,
@@ -573,8 +568,95 @@ async def test_runner_conversation_id_updates_outer_trace_group_id(
     agent_span = spans["invoke_agent test_agent"]
     assert workflow_span.attributes is not None
     assert agent_span.attributes is not None
+    assert workflow_span.attributes["gen_ai.conversation.id"] == "g1"
+    assert agent_span.attributes["gen_ai.conversation.id"] == "conv-1"
+
+
+@pytest.mark.asyncio
+async def test_runner_conversation_id_recorded_on_workflow_and_agent(
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    model = _mock_model([_FINAL_MESSAGE])
+    agent = agents.Agent(name="test_agent", model=model)
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        await agents.Runner.run(agent, "hello", conversation_id="conv-1")
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert "invoke_workflow Agent workflow" in spans
+    assert "invoke_agent test_agent" in spans
+    workflow_span = spans["invoke_workflow Agent workflow"]
+    agent_span = spans["invoke_agent test_agent"]
+    assert workflow_span.attributes is not None
+    assert agent_span.attributes is not None
     assert workflow_span.attributes["gen_ai.conversation.id"] == "conv-1"
     assert agent_span.attributes["gen_ai.conversation.id"] == "conv-1"
+
+
+@pytest.mark.asyncio
+async def test_runner_session_id_recorded_as_conversation_id(
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    model = _mock_model([_FINAL_MESSAGE])
+    agent = agents.Agent(name="test_agent", model=model)
+    session = agents.SQLiteSession("sess-1")
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        await agents.Runner.run(agent, "hello", session=session)
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert "invoke_workflow Agent workflow" in spans
+    assert "invoke_agent test_agent" in spans
+    workflow_span = spans["invoke_workflow Agent workflow"]
+    agent_span = spans["invoke_agent test_agent"]
+    assert workflow_span.attributes is not None
+    assert agent_span.attributes is not None
+    assert workflow_span.attributes["gen_ai.conversation.id"] == "sess-1"
+    assert agent_span.attributes["gen_ai.conversation.id"] == "sess-1"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_runs_keep_own_conversation_id(
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    model = _mock_model([_FINAL_MESSAGE], [_FINAL_MESSAGE])
+    agent = agents.Agent(name="test_agent", model=model)
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        await asyncio.gather(
+            agents.Runner.run(agent, "hello a", conversation_id="conv-a"),
+            agents.Runner.run(agent, "hello b", conversation_id="conv-b"),
+        )
+
+    agent_spans = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name == "invoke_agent test_agent"
+    ]
+    assert len(agent_spans) == 2
+    conv_ids = {s.attributes["gen_ai.conversation.id"] for s in agent_spans}
+    assert conv_ids == {"conv-a", "conv-b"}
 
 
 @pytest.mark.asyncio

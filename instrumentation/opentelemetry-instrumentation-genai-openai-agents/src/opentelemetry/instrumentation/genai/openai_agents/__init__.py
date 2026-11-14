@@ -1,30 +1,29 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""OpenTelemetry instrumentation for the ``openai-agents`` SDK.
+"""OpenAI Agents instrumentation for OpenTelemetry.
 
-Target library:
-    https://pypi.org/project/openai-agents/
+Registers a :class:`GenAITracingProcessor` with the agents library's
+public ``add_trace_processor`` extension API. The processor reacts
+synchronously to the agents library's own ``Trace`` / ``AgentSpan`` /
+``FunctionSpan`` start/end callbacks and turns them
+into ``invoke_workflow`` / ``invoke_agent`` / ``execute_tool`` spans via
+``opentelemetry-util-genai``.
 
-The agents library provides high-level workflow, agent, and tool orchestration
-layered on top of the OpenAI API. It ships its own tracing subsystem
-(``agents.tracing``) that emits tree-structured traces of spans
-(``AgentSpanData``, ``FunctionSpanData``, etc.).
+LLM-level spans (``chat`` / ``embeddings``) are produced
+by ``opentelemetry-instrumentation-genai-openai`` when both packages are
+installed; this instrumentation does not emit them.
 
-This instrumentation registers a custom ``TracingProcessor`` with that
-subsystem and maps the agents library's lifecycle events to semantic-conventions
-spans via ``opentelemetry-util-genai``:
+SDK lifecycle hooks populate each agent invocation's inference and client-side
+tool call counters. Inference counters represent logical model calls, not
+individual retry attempts. ``opentelemetry-util-genai`` records these as histogram
+metrics, not span attributes. Counters remain unset for SDK spans that end
+before any agent-start or call-start hook is observed.
 
-* Top-level ``Trace`` objects map to ``invoke_workflow`` spans.
-* ``AgentSpanData`` spans map to ``invoke_agent`` (INTERNAL) spans.
-* ``FunctionSpanData`` spans map to ``execute_tool`` spans.
+Usage
+-----
 
-LLM calls (e.g. ``GenerationSpanData`` / ``ResponseSpanData``) are intentionally
-NOT mapped here — users instrument the underlying client (typically
-``opentelemetry-instrumentation-genai-openai``) to capture chat-completions
-and embeddings calls.
-
-Usage::
+.. code:: python
 
     from opentelemetry.instrumentation.genai.openai_agents import (
         OpenAIAgentsInstrumentor,
@@ -62,13 +61,12 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
-from .package import _instruments
-from .patch import (
+from ._conversation import (
     _current_conversation_id,
     _current_session,
     _extract_conversation_id,
-    _extract_session,
 )
+from .package import _instruments
 from .processor import GenAIRunHooks, GenAITracingProcessor
 
 __all__ = ["OpenAIAgentsInstrumentor"]
@@ -157,8 +155,10 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         if processor is not None and not isinstance(hooks, GenAIRunHooks):
             bound.arguments["hooks"] = GenAIRunHooks(hooks, processor)
 
-        conv_id = _extract_conversation_id(args, kwargs)
-        session = _extract_session(args, kwargs)
+        conv_id = _extract_conversation_id(bound.arguments)
+        session = bound.arguments.get("session")
+        if session is None and isinstance(bound.arguments.get("kwargs"), dict):
+            session = bound.arguments["kwargs"].get("session")
 
         if inspect.iscoroutinefunction(wrapped):
 
