@@ -306,13 +306,15 @@ async def test_async_converse_stream_success(
         response = await async_bedrock_client.converse_stream(
             modelId=NOVA_MODEL_ID, messages=[]
         )
-        # The caller's context must survive the call and the drain.
         assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert isinstance(
             response["stream"], AsyncBedrockConverseStreamWrapper
         )
-        chunks = [chunk async for chunk in response["stream"]]
+        chunks = []
+        async for chunk in response["stream"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            chunks.append(chunk)
         assert len(chunks) == len(CONVERSE_STREAM_EVENTS)
         assert trace.get_current_span() is trace.INVALID_SPAN
 
@@ -351,9 +353,13 @@ async def test_async_converse_stream_error(
             modelId=NOVA_MODEL_ID, messages=[]
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(RuntimeError, match="Stream read failure"):
             async for _ in response["stream"]:
                 pass
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -378,10 +384,15 @@ async def test_async_converse_stream_caller_error(
             modelId=NOVA_MODEL_ID, messages=[]
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(ValueError, match="caller error"):
             async with response["stream"] as stream:
                 async for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
                     raise ValueError("caller error")
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -406,10 +417,16 @@ async def test_async_converse_stream_async_with_success(
             modelId=NOVA_MODEL_ID, messages=[]
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         async with response["stream"] as stream:
-            chunks = [chunk async for chunk in stream]
+            chunks = []
+            async for chunk in stream:
+                assert trace.get_current_span() is trace.INVALID_SPAN
+                chunks.append(chunk)
             assert len(chunks) == len(CONVERSE_STREAM_EVENTS)
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
     assert mock_stream.closed
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -462,8 +479,10 @@ async def test_async_invoke_model_lazy_read(
         # The span stays open until the caller drains the body.
         assert len(span_exporter.get_finished_spans()) == 0
         assert isinstance(response["body"], AsyncBedrockStreamingBodyWrapper)
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert await response["body"].read() == body_content
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -730,9 +749,14 @@ async def test_async_invoke_model_context_manager(
             modelId=MODEL_ID, body="{}"
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         async with response["body"] as body:
             assert body is response["body"]
+            assert trace.get_current_span() is trace.INVALID_SPAN
             assert await body.read() == body_content
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -765,8 +789,13 @@ async def test_async_invoke_model_async_iteration(
             modelId=MODEL_ID, body="{}"
         )
 
-        chunks = [chunk async for chunk in response["body"]]
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        chunks = []
+        async for chunk in response["body"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            chunks.append(chunk)
         assert b"".join(chunks) == body_content
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -941,13 +970,15 @@ async def test_async_invoke_model_stream_success(
                 modelId=MODEL_ID, body="{}"
             )
         )
-        # The caller's context must survive the call and the drain.
         assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert isinstance(
             response["body"], AsyncBedrockInvokeModelStreamWrapper
         )
-        chunks = [chunk async for chunk in response["body"]]
+        chunks = []
+        async for chunk in response["body"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            chunks.append(chunk)
         assert len(chunks) == len(INVOKE_MODEL_STREAM_EVENTS)
         assert trace.get_current_span() is trace.INVALID_SPAN
 
@@ -989,9 +1020,13 @@ async def test_async_invoke_model_stream_error(
             )
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(RuntimeError, match="Stream read failure"):
             async for _ in response["body"]:
                 pass
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1018,10 +1053,15 @@ async def test_async_invoke_model_stream_caller_error(
             )
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(ValueError, match="caller error"):
             async with response["body"] as stream:
                 async for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
                     raise ValueError("caller error")
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1048,10 +1088,16 @@ async def test_async_invoke_model_stream_async_with_success(
             )
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         async with response["body"] as stream:
-            chunks = [chunk async for chunk in stream]
+            chunks = []
+            async for chunk in stream:
+                assert trace.get_current_span() is trace.INVALID_SPAN
+                chunks.append(chunk)
             assert len(chunks) == len(INVOKE_MODEL_STREAM_EVENTS)
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
     assert mock_stream.closed
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1076,7 +1122,9 @@ async def test_async_invoke_model_stream_sync_close(
                 modelId=MODEL_ID, body="{}"
             )
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
         response["body"].close()
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     assert mock_stream.closed
     spans = span_exporter.get_finished_spans()

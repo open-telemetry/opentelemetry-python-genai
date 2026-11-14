@@ -744,12 +744,13 @@ def test_invoke_model_with_response_stream_end_to_end_stubber(
             modelId="anthropic.claude-3-sonnet-20240229-v1:0",
             body=json.dumps(request_body),
         )
-        # Same caller-context guarantee as converse_stream: the call must not
-        # leave the Bedrock span current, before or after the body is drained.
         assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert isinstance(response["body"], BedrockInvokeModelStreamWrapper)
-        stream_events = list(response["body"])
+        stream_events = []
+        for event in response["body"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            stream_events.append(event)
         assert len(stream_events) == 4
         assert trace.get_current_span() is trace.INVALID_SPAN
 
