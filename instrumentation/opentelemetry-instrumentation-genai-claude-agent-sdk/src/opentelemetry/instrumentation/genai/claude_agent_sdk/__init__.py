@@ -116,11 +116,15 @@ class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
             instrumentation_scope_version=__version__,
         )
 
-        # Patching will be added in a follow-up PR
+        from opentelemetry.instrumentation.genai.claude_agent_sdk import patch
+
+        patch.instrument(self._handler)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Claude Agent SDK instrumentation.
 
         This removes all patches applied during instrumentation.
         """
-        # Unpatching will be added in a follow-up PR
+        from opentelemetry.instrumentation.genai.claude_agent_sdk import patch
+
+        patch.uninstrument()
