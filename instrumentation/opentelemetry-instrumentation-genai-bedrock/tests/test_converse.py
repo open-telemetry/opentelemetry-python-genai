@@ -8,6 +8,7 @@ import json
 import pytest
 from botocore.exceptions import ClientError
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_content_block,
     extract_converse_request,
@@ -680,3 +681,40 @@ def test_extract_converse_request_system_instruction_drops_non_text(
         assert invocation.system_instruction == [
             TextPart(content="Be concise"),
         ]
+
+
+_MESSAGES = [{"role": "user", "content": [{"text": "Say this is a test"}]}]
+_INFERENCE_CONFIG = {
+    "maxTokens": 10,
+    "temperature": 0.8,
+    "topP": 1,
+    "stopSequences": ["|"],
+}
+
+
+def _record_current_span_on_send(client, operation: str) -> list[int]:
+    seen: list[int] = []
+
+    def hook(**_kwargs) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    client.meta.events.register(
+        f"before-send.bedrock-runtime.{operation}", hook
+    )
+    return seen
+
+
+def test_converse_span_is_current_only_during_the_request(
+    bedrock_client, instrument_no_content, span_exporter, vcr
+) -> None:
+    seen = _record_current_span_on_send(bedrock_client, "Converse")
+    with vcr.use_cassette("test_converse_with_content.yaml"):
+        bedrock_client.converse(
+            messages=_MESSAGES,
+            modelId="amazon.nova-micro-v1:0",
+            inferenceConfig=_INFERENCE_CONFIG,
+        )
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]

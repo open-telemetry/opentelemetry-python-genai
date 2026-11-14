@@ -9,6 +9,7 @@ import pytest
 from botocore.eventstream import EventStream
 from botocore.exceptions import ClientError, EventStreamError
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.bedrock.stream import (
     BedrockConverseStreamWrapper,
 )
@@ -503,3 +504,42 @@ def test_stream_wrapper_skips_redacted_reasoning(tracer_provider) -> None:
     parts = invocation.output_messages[0].parts
     assert [part.type for part in parts] == ["text"]
     assert getattr(parts[0], "content") == "Here is the result."
+
+
+_MESSAGES = [{"role": "user", "content": [{"text": "Say this is a test"}]}]
+_INFERENCE_CONFIG = {
+    "maxTokens": 10,
+    "temperature": 0.8,
+    "topP": 1,
+    "stopSequences": ["|"],
+}
+
+
+def _record_current_span_on_send(client, operation: str) -> list[int]:
+    seen: list[int] = []
+
+    def hook(**_kwargs) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    client.meta.events.register(
+        f"before-send.bedrock-runtime.{operation}", hook
+    )
+    return seen
+
+
+def test_converse_stream_span_is_not_current_between_reads(
+    bedrock_client, instrument_no_content, span_exporter, vcr
+) -> None:
+    seen = _record_current_span_on_send(bedrock_client, "ConverseStream")
+    with vcr.use_cassette("test_converse_stream_with_content.yaml"):
+        response = bedrock_client.converse_stream(
+            messages=_MESSAGES,
+            modelId="amazon.nova-micro-v1:0",
+            inferenceConfig=_INFERENCE_CONFIG,
+        )
+        assert not trace.get_current_span().get_span_context().is_valid
+        for _ in response["stream"]:
+            assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]

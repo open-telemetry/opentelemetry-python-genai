@@ -84,16 +84,14 @@ def _handle_converse(
         server_address=server_address,
         server_port=server_port,
         operation_name=GenAiOperationNameValues.CHAT.value,
+        _attach_to_context=False,
     )
     capture_content = handler.should_capture_content()
     extract_converse_request(
         api_params, invocation, capture_content=capture_content
     )
-    try:
+    with invocation.activate():
         response: Any = wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     if is_stream:
         # Any 200 response is guaranteed to have this..
@@ -137,16 +135,14 @@ async def _handle_async_converse(
         server_address=server_address,
         server_port=server_port,
         operation_name=GenAiOperationNameValues.CHAT.value,
+        _attach_to_context=False,
     )
     capture_content = handler.should_capture_content()
     extract_converse_request(
         api_params, invocation, capture_content=capture_content
     )
-    try:
+    with invocation.activate():
         response: Any = await wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     if is_stream:
         if "stream" in response:
@@ -190,9 +186,10 @@ def _handle_invoke_model(
             request_model=model_id,
             server_address=server_address,
             server_port=server_port,
+            _attach_to_context=False,
         )
         extract_embedding_request(api_params, invocation)
-        try:
+        with invocation:
             response: Any = wrapped(*args, **kwargs)
             raw_bytes = b""
             body_stream = response.get("body")
@@ -201,16 +198,11 @@ def _handle_invoke_model(
                 response["body"] = StreamingBody(
                     io.BytesIO(raw_bytes), len(raw_bytes)
                 )
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
-
-        extract_embedding_response(
-            response,
-            raw_bytes,
-            invocation,
-        )
-        invocation.stop()
+            extract_embedding_response(
+                response,
+                raw_bytes,
+                invocation,
+            )
         return response
 
     invocation = handler.inference(
@@ -218,16 +210,14 @@ def _handle_invoke_model(
         request_model=model_id,
         server_address=server_address,
         server_port=server_port,
+        _attach_to_context=False,
     )
     capture_content = handler.should_capture_content()
     extract_invoke_model_request(
         api_params, invocation, capture_content=capture_content
     )
-    try:
+    with invocation.activate():
         response = wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     if is_stream:
         if "body" in response:
@@ -241,11 +231,8 @@ def _handle_invoke_model(
         raw_bytes = b""
         body_stream = response.get("body")
         if hasattr(body_stream, "read"):
-            try:
+            with invocation.activate():
                 raw_bytes = body_stream.read()
-            except BaseException as exc:
-                invocation.fail(exc)
-                raise
             response["body"] = StreamingBody(
                 io.BytesIO(raw_bytes), len(raw_bytes)
             )
@@ -284,13 +271,11 @@ async def _handle_async_invoke_model(
             request_model=model_id,
             server_address=server_address,
             server_port=server_port,
+            _attach_to_context=False,
         )
         extract_embedding_request(api_params, invocation)
-        try:
+        with invocation.activate():
             response: Any = await wrapped(*args, **kwargs)
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
 
         body_stream = response.get("body")
         if body_stream is not None:
@@ -306,11 +291,8 @@ async def _handle_async_invoke_model(
 
             raw_bytes = b""
             if hasattr(body_stream, "read"):
-                try:
+                with invocation.activate():
                     raw_bytes = body_stream.read()
-                except BaseException as exc:
-                    invocation.fail(exc)
-                    raise
                 response["body"] = StreamingBody(
                     io.BytesIO(raw_bytes), len(raw_bytes)
                 )
@@ -329,16 +311,14 @@ async def _handle_async_invoke_model(
         request_model=model_id,
         server_address=server_address,
         server_port=server_port,
+        _attach_to_context=False,
     )
     capture_content = handler.should_capture_content()
     extract_invoke_model_request(
         api_params, invocation, capture_content=capture_content
     )
-    try:
+    with invocation.activate():
         response = await wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     if is_stream:
         if "body" in response:
@@ -364,11 +344,8 @@ async def _handle_async_invoke_model(
 
             raw_bytes = b""
             if hasattr(body_stream, "read"):
-                try:
+                with invocation.activate():
                     raw_bytes = body_stream.read()
-                except BaseException as exc:
-                    invocation.fail(exc)
-                    raise
                 response["body"] = StreamingBody(
                     io.BytesIO(raw_bytes), len(raw_bytes)
                 )
@@ -404,6 +381,7 @@ def _start_invoke_agent(
         provider=GenAiProviderNameValues.AWS_BEDROCK.value,
         server_address=server_address,
         server_port=server_port,
+        _attach_to_context=False,
     )
     raw_agent_id = api_params.get("agentId")
     if raw_agent_id:
@@ -450,6 +428,7 @@ def _start_retrieve(
         data_source_id=data_source_id,
         server_address=server_address,
         server_port=server_port,
+        _attach_to_context=False,
     )
     extract_retrieve_request(
         api_params,
@@ -481,11 +460,8 @@ def _handle_invoke_agent(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_invoke_agent(instance, api_params, handler)
-    try:
+    with invocation.activate():
         response: Any = wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     return _finish_invoke_agent(
         response, invocation, BedrockAgentEventStreamWrapper
@@ -501,11 +477,8 @@ async def _handle_async_invoke_agent(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_invoke_agent(instance, api_params, handler)
-    try:
+    with invocation.activate():
         response: Any = await wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     return _finish_invoke_agent(
         response, invocation, AsyncBedrockAgentEventStreamWrapper
@@ -532,6 +505,7 @@ def _start_invoke_inline_agent(
         server_address=server_address,
         server_port=server_port,
         conversation_id=conversation_id,
+        _attach_to_context=False,
     )
     extract_invoke_inline_agent_request(
         api_params,
@@ -550,11 +524,8 @@ def _handle_invoke_inline_agent(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_invoke_inline_agent(instance, api_params, handler)
-    try:
+    with invocation.activate():
         response: Any = wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     return _finish_invoke_agent(
         response, invocation, BedrockAgentEventStreamWrapper
@@ -570,11 +541,8 @@ async def _handle_async_invoke_inline_agent(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_invoke_inline_agent(instance, api_params, handler)
-    try:
+    with invocation.activate():
         response: Any = await wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     return _finish_invoke_agent(
         response, invocation, AsyncBedrockAgentEventStreamWrapper
@@ -590,11 +558,8 @@ def _handle_retrieve(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_retrieve(instance, api_params, handler)
-    try:
+    with invocation.activate():
         response: Any = wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     return _finish_retrieve(response, invocation)
 
@@ -608,11 +573,8 @@ async def _handle_async_retrieve(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_retrieve(instance, api_params, handler)
-    try:
+    with invocation.activate():
         response: Any = await wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     return _finish_retrieve(response, invocation)
 
@@ -629,6 +591,7 @@ def _start_retrieve_and_generate(
         request_model=request_model,
         server_address=server_address,
         server_port=server_port,
+        _attach_to_context=False,
     )
     extract_retrieve_and_generate_request(
         api_params,
@@ -682,11 +645,8 @@ def _handle_retrieve_and_generate(
     is_stream: bool = False,
 ) -> Any:
     invocation = _start_retrieve_and_generate(instance, api_params, handler)
-    try:
+    with invocation.activate():
         response: Any = wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     return _finish_retrieve_and_generate(
         response,
@@ -707,11 +667,8 @@ async def _handle_async_retrieve_and_generate(
     is_stream: bool = False,
 ) -> Any:
     invocation = _start_retrieve_and_generate(instance, api_params, handler)
-    try:
+    with invocation.activate():
         response: Any = await wrapped(*args, **kwargs)
-    except BaseException as exc:
-        invocation.fail(exc)
-        raise
 
     return _finish_retrieve_and_generate(
         response,

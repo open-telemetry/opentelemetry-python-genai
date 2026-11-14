@@ -694,7 +694,7 @@ def test_invoke_inline_agent_sync_caller_error_during_stream(
     assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
 
 
-def test_invoke_inline_agent_sync_nested_call_inherits_conversation_id(
+def test_invoke_inline_agent_sync_call_between_reads_is_not_nested(
     agent_client,
     instrument_with_content,
     span_exporter,
@@ -743,9 +743,9 @@ def test_invoke_inline_agent_sync_nested_call_inherits_conversation_id(
     assert nested_span.name == "chat"
     assert (
         nested_span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
-        == "session-inline-nested"
+        == "outer-session"
     )
-    assert nested_span.parent.span_id == agent_span.context.span_id
+    assert nested_span.parent.span_id == workflow_span.context.span_id
 
     assert agent_span.name == "invoke_agent"
     assert (
@@ -1618,7 +1618,7 @@ async def test_async_invoke_inline_agent_caller_error_during_stream(
 
 
 @pytest.mark.asyncio
-async def test_async_invoke_inline_agent_nested_call_inherits_conversation_id(
+async def test_async_invoke_inline_agent_call_between_reads_is_not_nested(
     async_agent_client,
     instrument_with_content,
     span_exporter,
@@ -1669,9 +1669,9 @@ async def test_async_invoke_inline_agent_nested_call_inherits_conversation_id(
     assert nested_span.name == "chat"
     assert (
         nested_span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
-        == "async-session-inline-nested"
+        == "outer-async-session"
     )
-    assert nested_span.parent.span_id == agent_span.context.span_id
+    assert nested_span.parent.span_id == workflow_span.context.span_id
 
     assert agent_span.name == "invoke_agent"
     assert (
