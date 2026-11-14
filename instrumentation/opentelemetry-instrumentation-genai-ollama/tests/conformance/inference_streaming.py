@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import ollama
 
@@ -13,6 +13,10 @@ from opentelemetry.instrumentation.genai.ollama import OllamaInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
+from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
@@ -21,6 +25,7 @@ from .inference import NO_RESPONSE_ID
 
 
 class InferenceStreamingScenario(Scenario):
+    content_capture: ClassVar[str] = "SPAN_ONLY"
     expected_spans = {"chat": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
@@ -41,7 +46,7 @@ class InferenceStreamingScenario(Scenario):
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
-            content_capture="SPAN_ONLY",
+            content_capture=self.content_capture,
         ):
             with vcr.use_cassette("inference_streaming_conformance.yaml"):
                 for _ in ollama.Client(host=HOST).chat(
@@ -52,3 +57,16 @@ class InferenceStreamingScenario(Scenario):
                     stream=True,
                 ):
                     pass
+
+
+class InferenceStreamingNoContentScenario(InferenceStreamingScenario):
+    content_capture = "NO_CONTENT"
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        for entry in report["samples"]:
+            if "span" in entry:
+                names = {attr["name"] for attr in entry["span"]["attributes"]}
+                assert GenAI.GEN_AI_INPUT_MESSAGES not in names
+                assert GenAI.GEN_AI_OUTPUT_MESSAGES not in names
+                assert GenAI.GEN_AI_TOOL_DEFINITIONS not in names

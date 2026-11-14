@@ -1,0 +1,1 @@
+Avoid retaining streamed message content when content capture is disabled.

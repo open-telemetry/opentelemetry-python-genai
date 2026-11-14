@@ -9,12 +9,20 @@ import gc
 import inspect
 import json
 from typing import Any
+from unittest.mock import MagicMock
 
 import ollama
 import pytest
+from vcr import VCR
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.genai.ollama import OllamaInstrumentor
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -22,7 +30,18 @@ from opentelemetry.semconv.attributes import (
     error_attributes,
     server_attributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.types import (
+    InputMessage,
+    MessagePart,
+    OutputMessage,
+    ReasoningPart,
+    Role,
+    TextPart,
+    ToolCallRequestPart,
+)
 
 from .conftest import CHAT_MODEL, HOST, REASONING_MODEL
 
@@ -157,6 +176,156 @@ def test_chat_stream_records_the_drained_response(
             "content": "".join(chunk.message.content for chunk in chunks),
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "with_completion_hook", [False, True], ids=["no-hook", "hook"]
+)
+@pytest.mark.parametrize(
+    "cassette, request_kwargs, expected_finish_reason, expected_parts",
+    [
+        pytest.param(
+            "test_chat_stream_records_the_drained_response.yaml",
+            {"model": CHAT_MODEL, "messages": MESSAGES},
+            "stop",
+            [TextPart(content="Hello, how are you today?")],
+            id="text",
+        ),
+        pytest.param(
+            "test_chat_stream_records_tool_calls.yaml",
+            {
+                "model": CHAT_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What is the weather in Paris? Use the tool.",
+                    }
+                ],
+                "tools": [WEATHER_TOOL],
+                "options": {"temperature": 0},
+            },
+            "tool_call",
+            [
+                ToolCallRequestPart(
+                    id=None, name="get_weather", arguments={"city": "Paris"}
+                )
+            ],
+            id="tools",
+        ),
+        pytest.param(
+            "test_chat_stream_records_reasoning_and_a_length_finish.yaml",
+            {
+                "model": REASONING_MODEL,
+                "messages": [{"role": "user", "content": "What is 17 * 23?"}],
+                "think": True,
+                "options": {"num_predict": 40},
+            },
+            "length",
+            [
+                ReasoningPart(
+                    content=(
+                        "\nFirst, I need to calculate the product of 17 and 23. \n\n"
+                        "I'll start by breaking down the multiplication into simpler "
+                        "parts. I'll multiply 17 by "
+                    )
+                )
+            ],
+            id="reasoning",
+            marks=pytest.mark.skipif(
+                "think"
+                not in inspect.signature(ollama.Client.chat).parameters,
+                reason="the think parameter is unavailable on this ollama version",
+            ),
+        ),
+    ],
+)
+async def test_chat_stream_collects_content_only_when_requested(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+    vcr: VCR,
+    asynchronous: bool,
+    cassette: str,
+    request_kwargs: dict[str, Any],
+    expected_finish_reason: str,
+    expected_parts: list[MessagePart],
+    with_completion_hook: bool,
+) -> None:
+    hook = MagicMock(spec=CompletionHook) if with_completion_hook else None
+    client = (
+        ollama.AsyncClient(host=HOST)
+        if asynchronous
+        else ollama.Client(host=HOST)
+    )
+    with (
+        instrument(
+            instrumentor=OllamaInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="NO_CONTENT",
+            completion_hook=hook,
+        ),
+        vcr.use_cassette(cassette) as recording,
+    ):
+        response = client.chat(stream=True, **request_kwargs)
+        stream = await response if asynchronous else response
+        chunks = []
+        try:
+            while True:
+                try:
+                    chunk = (
+                        await anext(stream) if asynchronous else next(stream)
+                    )
+                except (StopIteration, StopAsyncIteration):
+                    break
+                chunks.append(chunk)
+                if hook is None:
+                    assert stream._self_content == []
+                    assert stream._self_thinking == []
+                    assert stream._self_tool_calls == []
+        finally:
+            if asynchronous:
+                await stream.aclose()
+            else:
+                stream.close()
+
+    assert chunks == [
+        ollama.ChatResponse.model_validate_json(line)
+        for line in recording.responses[0]["body"]["string"].splitlines()
+    ]
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.UNSET
+    assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        expected_finish_reason,
+    )
+    assert (
+        span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS]
+        == chunks[-1].prompt_eval_count
+    )
+    assert (
+        span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == chunks[-1].eval_count
+    )
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    assert GenAI.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+    if hook is not None:
+        hook.on_completion.assert_called_once()
+        kwargs = hook.on_completion.call_args.kwargs
+        assert kwargs["inputs"] == [
+            InputMessage(
+                role=message["role"],
+                parts=[TextPart(content=message["content"])],
+            )
+            for message in request_kwargs["messages"]
+        ]
+        assert kwargs["outputs"] == [
+            OutputMessage(role=Role.ASSISTANT.value, parts=expected_parts)
+        ]
 
 
 def test_chat_stream_span_ends_only_after_the_stream_is_drained(
