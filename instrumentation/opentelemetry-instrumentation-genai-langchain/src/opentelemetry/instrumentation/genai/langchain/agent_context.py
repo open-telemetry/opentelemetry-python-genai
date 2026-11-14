@@ -14,7 +14,7 @@ handler consults when the root run starts.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Generator, Iterator, Mapping, AsyncGenerator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, cast
@@ -158,15 +158,19 @@ def _announce_at_stream_start(
     # A generator body runs in the consumer's context, so the announcement lands
     # where the callbacks fire - on the first ``next()``, not here.
     iterator = iter(stream)
-    entry = _push(name)
     try:
-        first = next(iterator)
-    except StopIteration:
-        return
+        entry = _push(name)
+        try:
+            first = next(iterator)
+        except StopIteration:
+            return
+        finally:
+            _pop(entry)
+        yield first
+        yield from iterator
     finally:
-        _pop(entry)
-    yield first
-    yield from iterator
+        if isinstance(iterator, Generator):
+            iterator.close()
 
 
 async def _announce_at_astream_start(
@@ -174,13 +178,17 @@ async def _announce_at_astream_start(
 ) -> AsyncIterator[Any]:
     """Announce ``name`` for the first step of ``stream`` only."""
     iterator = stream.__aiter__()
-    entry = _push(name)
     try:
-        first = await iterator.__anext__()
-    except StopAsyncIteration:
-        return
+        entry = _push(name)
+        try:
+            first = await iterator.__anext__()
+        except StopAsyncIteration:
+            return
+        finally:
+            _pop(entry)
+        yield first
+        async for chunk in iterator:
+            yield chunk
     finally:
-        _pop(entry)
-    yield first
-    async for chunk in iterator:
-        yield chunk
+        if isinstance(iterator, AsyncGenerator):
+	        await iterator.aclose()
