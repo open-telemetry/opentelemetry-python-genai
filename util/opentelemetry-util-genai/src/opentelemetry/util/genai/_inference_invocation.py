@@ -138,6 +138,12 @@ class InferenceData(ContextData):
     usage_text_cache_read_input_tokens: int | None = None
     usage_text_input_tokens: int | None = None
     usage_text_output_tokens: int | None = None
+    # Caller attributes recorded on the operation.details event only (never
+    # on the span or metrics). Kept on the inference data container so it
+    # does not reorder positional fields of other invocation data classes.
+    event_attributes: dict[str, AttributeValue] = field(
+        default_factory=dict[str, AttributeValue]
+    )
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -225,6 +231,8 @@ class InferenceInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
+        self.event_attributes = self.data.event_attributes
+        self.data.event_attributes = self.event_attributes
         self._emit_event: bool = self._logger.enabled(
             context=self._span_context,
             severity_number=SeverityNumber.DEBUG,
@@ -965,6 +973,9 @@ class InferenceInvocation(GenAIInvocation):
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
+        # event_attributes are operation.details-event only: never on the
+        # span, and win collisions with ``attributes`` on the event.
+        attributes.update(self.event_attributes)
         return LogRecord(
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,

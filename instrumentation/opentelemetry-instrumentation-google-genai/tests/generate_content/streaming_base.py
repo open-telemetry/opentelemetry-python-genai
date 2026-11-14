@@ -15,6 +15,7 @@ from google.genai.types import (
 from opentelemetry import context as context_api
 from opentelemetry import trace
 from opentelemetry.instrumentation.google_genai import (
+    GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY,
     GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
 )
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
@@ -334,6 +335,37 @@ class StreamingTestCase(TestCase):
             assert (
                 event.attributes["extra_attribute_key"]
                 == "extra_attribute_value"
+            )
+        finally:
+            context_api.detach(tok)
+
+    def test_log_has_event_only_extra_attributes_but_span_does_not(self):
+        # The event-only context channel must land on the operation.details
+        # event but never leak onto the span, for streamed responses too.
+        self.configure_valid_response(text="Yep, it works!")
+        tok = context_api.attach(
+            context_api.set_value(
+                GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+                {"event_only_key": "event_only_value"},
+            )
+        )
+        try:
+            self.generate_content(
+                model="gemini-2.0-flash",
+                contents="Does this work?",
+            )
+            span = self.otel.get_span_named(
+                "generate_content gemini-2.0-flash"
+            )
+            self.assertNotIn("event_only_key", span.attributes)
+            self.otel.assert_has_event_named(
+                "gen_ai.client.inference.operation.details"
+            )
+            event = self.otel.get_event_named(
+                "gen_ai.client.inference.operation.details"
+            )
+            self.assertEqual(
+                event.attributes["event_only_key"], "event_only_value"
             )
         finally:
             context_api.detach(tok)
