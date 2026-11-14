@@ -379,6 +379,24 @@ def test_streaming_run_is_current_only_while_read(
     )
 
 
+def test_run_is_current_only_during_the_run(
+    instrument_with_content, span_exporter, tracer_provider
+) -> None:
+    tracer = tracer_provider.get_tracer("test")
+    agent = CodeAgent(tools=[], model=_SpanningCodeModel(tracer), max_steps=3)
+    agent.run("Test question")
+    assert get_current_span() is INVALID_SPAN
+
+    spans = span_exporter.get_finished_spans()
+    (agent_span,) = spans_by_operation(spans, "invoke_agent")
+    model_work = [span for span in spans if span.name == "model work"]
+    assert model_work
+    assert all(
+        span.parent.span_id == agent_span.context.span_id
+        for span in model_work
+    )
+
+
 def test_streaming_run_stays_a_generator(
     instrument_with_content, span_exporter
 ) -> None:
