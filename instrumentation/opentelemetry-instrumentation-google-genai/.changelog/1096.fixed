@@ -1,0 +1,1 @@
+Fix the span being left open when the ``generate_content_stream`` call raises.
