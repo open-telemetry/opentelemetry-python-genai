@@ -170,6 +170,7 @@ def create_chat_invocation(
         request_model=kwargs.get("model", ""),
         server_address=address if address else None,
         server_port=port if port else None,
+        _attach_to_context=False,
     )
     invocation.temperature = get_value(kwargs.get("temperature"))
     invocation.top_p = get_value(kwargs.get("p") or kwargs.get("top_p"))

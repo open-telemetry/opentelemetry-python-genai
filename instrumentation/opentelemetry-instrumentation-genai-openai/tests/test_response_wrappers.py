@@ -87,7 +87,6 @@ def _fake_invocation(**overrides):
         "stop": _noop_stop,
         "fail": _noop_fail,
         "_on_stream_chunk": _noop_on_stream_chunk,
-        "suspend": _noop_stop,
         "activate": nullcontext,
     }
     fields.update(overrides)
