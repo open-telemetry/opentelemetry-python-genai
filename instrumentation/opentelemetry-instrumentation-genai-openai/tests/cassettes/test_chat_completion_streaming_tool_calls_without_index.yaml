@@ -1,0 +1,125 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "gemini-3.5-flash",
+        "stream": true,
+        "messages": [
+          {
+            "role": "system",
+            "content": "You're a helpful assistant."
+          },
+          {
+            "role": "user",
+            "content": "What's the weather in Seattle and San Francisco today?"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_current_weather",
+              "description": "Get the current weather in a given location",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "location": {
+                    "type": "string",
+                    "description": "The city and state, e.g. Boston, MA"
+                  }
+                },
+                "required": [
+                  "location"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '508'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - OpenAI/Python 3.37.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.37.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.6
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+  response:
+    body:
+      string: |+
+        data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"extra_content":{"google":{"thought_signature":"EpQDCpEDAWkUfRNiulx5Y74lScpc6UrqKB/B6SAGpC2G0W9su+hBQDVPekGTsJWkYf6GnwiMrzc/TBTIAv41QAsNCbjPJXmWNIzKzqM86Asadh20f4JoorodN601KV9PCn0UBcosjQsa5oQxo7Ab5+mnd47t6OjRONCywQnVIXkzE3MtupULgypqQmv3TkfPMQI70YNDsxpi6hkVcSfO9HdIattcDSL7L/fLuDTvvbd/b4B4YFV40T0CaN6BrQqaZd6vQ5e4CFz3bObRdGyF3/LmHwrFm+dTFpUdngoN2cfzJweVggGOuXBseeSX/2ARiFKr8GmbpazR6Q3fLX0mmYbkFmRMdjQtFjkmr6F8SmFwYkcT8l45mgeCoXeCJ32OnKqv574wMZ5baeH0RBCucmMgyDlkywEX4ewmVmI0EQTxU/gxsDGg33Rv5uCUH5alLLQ93Fk9DJgn4gd2zrISLEFsc/9veKmQZPwAvZMMcN51i8jCAp+17VX3l17hGaeDNiBUGrKRjXp525wzCGSAR78gIzYiS50="}},"function":{"arguments":"{\"location\":\"Seattle, WA\"}","name":"get_current_weather"},"id":"call_83921","type":"function"}]},"index":0}],"created":1793240444,"id":"ea3iapr5MY_Xz7IPtfWruA8","model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+
+        data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"function":{"arguments":"{\"location\":\"San Francisco, CA\"}","name":"get_current_weather"},"id":"call_83927","type":"function"}]},"index":0}],"created":1793240444,"id":"ea3iapr5MY_Xz7IPtfWruA8","model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+
+        data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":"stop","index":0}],"created":1793240444,"id":"ea3iapr5MY_Xz7IPtfWruA8","model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+
+        data: [DONE]
+
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      cache-control:
+      - private
+      content-length:
+      - '1441'
+      content-type:
+      - text/event-stream
+      date:
+      - Thu, 29 Oct 2026 02:20:44 GMT
+      expires:
+      - Thu, 29 Oct 2026 02:20:44 GMT
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      p3p:
+      - CP="This is not a P3P policy! See g.co/p3phelp for more info."
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=2521
+      set-cookie: test_set_cookie
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1
