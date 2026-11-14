@@ -1,0 +1,1 @@
+Stop tracing `with_raw_response` and `with_streaming_response` calls after `uninstrument()` on a client that used the accessor while instrumented.

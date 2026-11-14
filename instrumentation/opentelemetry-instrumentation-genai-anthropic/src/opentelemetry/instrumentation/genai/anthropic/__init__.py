@@ -38,7 +38,7 @@ API
 ---
 """
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any
 
 from wrapt import wrap_function_wrapper
@@ -128,6 +128,26 @@ class AnthropicInstrumentor(BaseInstrumentor):
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
+    def _active(self, wrapper: Callable[..., Any]) -> Callable[..., Any]:
+        """Pass calls through after uninstrument().
+
+        The SDK caches ``with_raw_response`` and
+        ``with_streaming_response`` per client together with the wrapped
+        methods, so those wrappers can outlive ``uninstrument()``.
+        """
+
+        def wrapped_if_active(
+            wrapped: Callable[..., Any],
+            instance: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> Any:
+            if not self._is_instrumented_by_opentelemetry:
+                return wrapped(*args, **kwargs)
+            return wrapper(wrapped, instance, args, kwargs)
+
+        return wrapped_if_active
+
     def _instrument(self, **kwargs: Any) -> None:
         """Enable Anthropic instrumentation.
 
@@ -159,22 +179,22 @@ class AnthropicInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             "anthropic.resources.messages",
             "Messages.create",
-            messages_create(handler),
+            self._active(messages_create(handler)),
         )
         wrap_function_wrapper(
             "anthropic.resources.messages",
             "AsyncMessages.create",
-            async_messages_create(handler),
+            self._active(async_messages_create(handler)),
         )
         wrap_function_wrapper(
             "anthropic.resources.messages",
             "Messages.stream",
-            messages_stream(handler),
+            self._active(messages_stream(handler)),
         )
         wrap_function_wrapper(
             "anthropic.resources.messages",
             "AsyncMessages.stream",
-            async_messages_stream(handler),
+            self._active(async_messages_stream(handler)),
         )
         wrap_function_wrapper(
             "anthropic._response",
@@ -228,12 +248,12 @@ class AnthropicInstrumentor(BaseInstrumentor):
             wrap_function_wrapper(
                 "anthropic.resources.messages",
                 "Messages.parse",
-                messages_create(handler),
+                self._active(messages_create(handler)),
             )
             wrap_function_wrapper(
                 "anthropic.resources.messages",
                 "AsyncMessages.parse",
-                async_messages_create(handler),
+                self._active(async_messages_create(handler)),
             )
 
     def _uninstrument(self, **kwargs: Any) -> None:
