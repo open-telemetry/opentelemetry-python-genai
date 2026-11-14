@@ -455,6 +455,7 @@ def _start_lm_invocation(
     invocation = handler.inference(
         provider=provider,
         request_model=request_model,
+        _attach_to_context=False,
     )
 
     req_config = extract_lm_request_config(req_obj)
@@ -766,6 +767,7 @@ def _start_tool_invocation(
     invocation = handler.tool(
         name=tool_name,
         tool_type="function",
+        _attach_to_context=False,
     )
     if tool_desc is not None:
         invocation.tool_description = str(tool_desc)
@@ -839,7 +841,9 @@ def _start_agent_invocation(
     agent_name: str,
     wrapped: Callable[..., Any],
 ) -> LocalAgentInvocation:
-    invocation = handler.invoke_local_agent(agent_name=agent_name)
+    invocation = handler.invoke_local_agent(
+        agent_name=agent_name, _attach_to_context=False
+    )
     if handler.should_capture_content():
         agent_inputs = _extract_agent_inputs(wrapped, args, kwargs)
         if agent_inputs:
@@ -1061,6 +1065,7 @@ def _start_retrieval_invocation(
         else None,
         server_address=server_address,
         server_port=server_port,
+        _attach_to_context=False,
     )
 
     target_callable: Callable[..., Any] = wrapped
@@ -1299,6 +1304,7 @@ def _start_embedding_invocation(
         request_model=request_model,
         server_address=server_address,
         server_port=server_port,
+        _attach_to_context=False,
     )
 
     invocation.dimension_count = safe_int(kwargs.get("dimensions"))

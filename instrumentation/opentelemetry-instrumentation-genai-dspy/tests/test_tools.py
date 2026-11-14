@@ -12,6 +12,7 @@ from unittest import mock
 import dspy
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
@@ -338,3 +339,67 @@ async def test_sentinel_tool_skips_span_creation_async(
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 0
+
+
+def test_nested_tool_spans_keep_parent_and_do_not_leak(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    inner = dspy.Tool(add, name="inner")
+
+    def outer_fn(x: int) -> int:
+        return inner(x=x, y=1)
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        outer = dspy.Tool(outer_fn, name="outer")
+        with tracer_provider.get_tracer("test").start_as_current_span(
+            "caller"
+        ) as caller:
+            assert outer(x=1) == 2
+            assert trace.get_current_span() is caller
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    caller_span = spans["caller"]
+    outer_span = spans["execute_tool outer"]
+    inner_span = spans["execute_tool inner"]
+    assert outer_span.parent is not None
+    assert outer_span.parent.span_id == caller_span.context.span_id
+    assert inner_span.parent is not None
+    assert inner_span.parent.span_id == outer_span.context.span_id
+
+
+@pytest.mark.anyio
+async def test_async_nested_tool_spans_keep_parent_and_do_not_leak(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    inner = dspy.Tool(async_multiply, name="inner")
+
+    async def outer_fn(a: int) -> int:
+        return await inner.acall(a=a, b=2)
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        outer = dspy.Tool(outer_fn, name="outer")
+        assert await outer.acall(a=3) == 6
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    outer_span = spans["execute_tool outer"]
+    inner_span = spans["execute_tool inner"]
+    assert outer_span.parent is None
+    assert inner_span.parent is not None
+    assert inner_span.parent.span_id == outer_span.context.span_id
