@@ -1,0 +1,1 @@
+Add `override_content_capturing_mode` to change the content capturing mode for operations started inside a `with` block.
