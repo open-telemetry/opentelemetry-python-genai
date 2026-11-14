@@ -1,1 +1,1 @@
-Add instrumentation for the Claude Agent SDK: one `invoke_agent` span per `query()` call and `execute_tool` spans for the tools it runs, with cache-inclusive token usage and optional message capture.
+Add instrumentation for the Claude Agent SDK: one `invoke_agent` span per `query()` call and `execute_tool` spans for the tools it runs, with cache-inclusive token usage, the SDK session id as `gen_ai.conversation.id`, and optional message capture.

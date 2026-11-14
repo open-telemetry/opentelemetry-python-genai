@@ -128,6 +128,30 @@ def test_single_turn_emits_one_agent_span(
     assert span.attributes["gen_ai.agent.name"] == "claude-agent-sdk"
 
 
+def test_session_id_reported_as_conversation_id(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    run_query(single_turn())
+
+    span = agent_spans(span_exporter)[0]
+    assert span.attributes["gen_ai.conversation.id"] == "session-1"
+
+
+def test_conversation_id_falls_back_to_result_message(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # No init message: the ResultMessage still carries the session id.
+    run_query(
+        [
+            assistant([{"type": "text", "text": "hi"}]),
+            result(session_id="session-from-result"),
+        ]
+    )
+
+    span = agent_spans(span_exporter)[0]
+    assert span.attributes["gen_ai.conversation.id"] == "session-from-result"
+
+
 def test_usage_comes_from_result_message(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:

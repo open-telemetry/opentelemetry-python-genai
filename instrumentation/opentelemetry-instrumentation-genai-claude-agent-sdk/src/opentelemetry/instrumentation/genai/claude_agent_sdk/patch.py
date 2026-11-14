@@ -15,6 +15,10 @@ returns its iterator. A stream created in one context and consumed in another
 therefore belongs to the consuming context, and the span excludes the time the
 caller held the stream without reading it.
 
+Conversation: the SDK ``session_id`` (from the ``init`` system message, or the
+``ResultMessage`` if no ``init`` message was seen) is reported as
+``gen_ai.conversation.id``.
+
 Token accounting: the ``ResultMessage`` carries the run totals and is treated
 as authoritative. GenAI input tokens include cache reads and cache writes, so
 both are summed into ``gen_ai.usage.input_tokens``; the local agent span has no
@@ -193,6 +197,22 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
             self._handle_user(chunk)
         elif kind == "ResultMessage":
             self._handle_result(chunk)
+        elif kind == "SystemMessage":
+            self._handle_system(chunk)
+
+    def _set_conversation_id(self, session_id: Any) -> None:
+        # The SDK session id identifies the conversation the run belongs to.
+        # The first one seen wins; the init message and the result carry the same id.
+        if isinstance(session_id, str) and session_id:
+            if self._self_agent.conversation_id is None:
+                self._self_agent.conversation_id = session_id
+
+    def _handle_system(self, chunk: Any) -> None:
+        if getattr(chunk, "subtype", None) != "init":
+            return
+        data = getattr(chunk, "data", None)
+        if isinstance(data, dict):
+            self._set_conversation_id(data.get("session_id"))
 
     def _handle_assistant(self, chunk: Any) -> None:
         usage = _usage_of(chunk)
@@ -255,6 +275,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
             self._self_outputs.append(OutputMessage(role="tool", parts=parts))
 
     def _handle_result(self, chunk: Any) -> None:
+        self._set_conversation_id(getattr(chunk, "session_id", None))
         usage = _usage_of(chunk)
         if usage:
             self._self_result_usage = usage
