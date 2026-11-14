@@ -3,17 +3,15 @@
 
 from __future__ import annotations
 
-import contextvars
 import inspect
 import logging
 import math
 from base64 import b64decode
 from binascii import Error as BinasciiError
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
 from mimetypes import guess_type
 from typing import Any, TypeAlias, cast
-from weakref import WeakKeyDictionary
 
 from llama_index.core.agent.workflow.base_agent import BaseWorkflowAgent
 from llama_index.core.agent.workflow.multi_agent_workflow import AgentWorkflow
@@ -85,47 +83,13 @@ _ACTIVE_WORKFLOW_TOOL: ContextVar[tuple[str, ToolInvocation] | None] = (
 )
 
 
-_MEMBER_AGENT_CONTEXTS: MutableMapping[
-    LocalAgentInvocation, contextvars.Context
-] = WeakKeyDictionary()
-
-
-def _start_member_agent(
-    start: Callable[[], LocalAgentInvocation],
-) -> LocalAgentInvocation:
-    """Open a member-agent invocation inside a context this module owns.
-
-    The invocation stays open across workflow steps, and each step runs in its
-    own asyncio task. ``TelemetryHandler`` attaches the span to whatever context
-    is current when the invocation starts, and that attachment can only be undone
-    from the same context -- so the context is kept and reused to finish in.
-    """
-    context = contextvars.copy_context()
-    invocation = context.run(start)
-    _MEMBER_AGENT_CONTEXTS[invocation] = context
-    return invocation
-
-
 def _finish_member_agent(
     invocation: LocalAgentInvocation, error: BaseException | None = None
 ) -> None:
-    """Finish a member-agent invocation in the context that started it."""
-
-    def finish() -> None:
-        if error is None:
-            invocation.stop()
-        else:
-            invocation.fail(error)
-
-    context = _MEMBER_AGENT_CONTEXTS.pop(invocation, None)
-    if context is None:
-        finish()
-        return
-    try:
-        context.run(finish)
-    except RuntimeError:
-        # Already entered further up the stack; finishing is idempotent.
-        finish()
+    if error is None:
+        invocation.stop()
+    else:
+        invocation.fail(error)
 
 
 def _method_name(span_id: str) -> str:
@@ -581,7 +545,7 @@ class _LlamaIndexInvocation(BaseSpan):
     ] = PrivateAttr()
     _workflow_agent_invocation: LocalAgentInvocation | None = PrivateAttr()
     _workflow_handoff: bool = PrivateAttr()
-    _workflow_agent_context_token: Token[Context] | None = PrivateAttr()
+    _context_token: Token[Context] | None = PrivateAttr()
     _workflow_tool_token: Token[tuple[str, ToolInvocation] | None] | None = (
         PrivateAttr()
     )
@@ -621,7 +585,7 @@ class _LlamaIndexInvocation(BaseSpan):
         self._workflow_invocations_by_key = {}
         self._workflow_agent_invocation = workflow_agent_invocation
         self._workflow_handoff = workflow_handoff
-        self._workflow_agent_context_token = None
+        self._context_token = None
         self._workflow_tool_counts = {}
         self._workflow_return_direct_runs = set()
         self._workflow_tool_errors = {}
@@ -765,18 +729,20 @@ class _LlamaIndexInvocation(BaseSpan):
         """Claim the handing-off agent owed a close, if there is one."""
         return self._workflow_pending_handoffs.pop(run_id, None)
 
-    def activate_workflow_agent(self) -> None:
-        """Make a resumed member-agent span current for this workflow step."""
-        if self._workflow_agent_context_token is None:
-            self._workflow_agent_context_token = attach(
-                self._invocation.context
-            )
+    def activate(self) -> None:
+        """Make the invocation's span current until this dispatcher span exits.
 
-    def reset_workflow_agent(self) -> None:
-        """Detach the temporary context used by a resumed agent step."""
-        if self._workflow_agent_context_token is not None:
-            detach(self._workflow_agent_context_token)
-            self._workflow_agent_context_token = None
+        The dispatcher has no hook that wraps the operation, only enter and
+        exit callbacks, which run in the same context.
+        """
+        if self._context_token is None:
+            self._context_token = attach(self._invocation.context)
+
+    def deactivate(self) -> None:
+        """Restore the context that was current when this dispatcher span entered."""
+        if self._context_token is not None:
+            detach(self._context_token)
+            self._context_token = None
 
     def finalize_workflow_agents(
         self,
@@ -851,7 +817,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         workflow_agent: BaseWorkflowAgent | None = None
         workflow_agent_invocation: LocalAgentInvocation | None = None
         workflow_handoff = False
-        member_agent_step = False
         workflow_tool_token: (
             Token[tuple[str, ToolInvocation] | None] | None
         ) = None
@@ -872,7 +837,9 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                 or workflow_name == default_workflow_name
             ):
                 workflow_name = type(instance).__name__
-            workflow_invocation = self._handler.workflow(name=workflow_name)
+            workflow_invocation = self._handler.workflow(
+                name=workflow_name, _attach_to_context=False
+            )
             workflow_invocation.input_messages = input_messages
             invocation = workflow_invocation
         elif isinstance(instance, BaseWorkflowAgent) and method_name == "run":
@@ -893,6 +860,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             agent_invocation = self._handler.invoke_local_agent(
                 request_model=request_model,
                 agent_name=agent_name,
+                _attach_to_context=False,
             )
             agent_invocation.agent_description = agent_description
             agent_invocation.input_messages = input_messages
@@ -940,13 +908,11 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                 if parent is not None
                 else None
             )
-            member_agent_step = True
             if workflow_agent_invocation is None:
-                workflow_agent_invocation = _start_member_agent(
-                    lambda: self._handler.invoke_local_agent(
-                        request_model=request_model,
-                        agent_name=agent_name,
-                    )
+                workflow_agent_invocation = self._handler.invoke_local_agent(
+                    request_model=request_model,
+                    agent_name=agent_name,
+                    _attach_to_context=False,
                 )
                 workflow_agent_invocation.agent_description = agent_description
                 workflow_agent_invocation.input_messages = input_messages
@@ -968,7 +934,9 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             "retrieve",
             "aretrieve",
         }:
-            retrieval_invocation = self._handler.retrieval()
+            retrieval_invocation = self._handler.retrieval(
+                _attach_to_context=False
+            )
             retrieval_invocation.top_k = _retrieval_top_k(instance)
             if retrieval_invocation.should_capture_content:
                 retrieval_invocation.query_text = _retrieval_query(bound_args)
@@ -1023,6 +991,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                     if active_invocation is not None
                     else None
                 ),
+                _attach_to_context=False,
             )
             workflow_tool_token = _ACTIVE_WORKFLOW_TOOL.set(
                 (tool_call.tool_name, tool_invocation)
@@ -1069,6 +1038,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             tool_invocation = self._handler.tool(
                 metadata.get_name(),
                 tool_type="function",
+                _attach_to_context=False,
             )
             tool_invocation.tool_description = metadata.description or None
             if tool_invocation.should_capture_content:
@@ -1091,8 +1061,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             workflow_agent_invocation=workflow_agent_invocation,
             workflow_handoff=workflow_handoff,
         )
-        if method_name == "run_agent_step" and member_agent_step:
-            adapter.activate_workflow_agent()
+        adapter.activate()
         return adapter
 
     def _expect_workflow_tools(
@@ -1171,6 +1140,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         span = self.open_spans.get(id_)
         if span is None:
             return None
+        span.deactivate()
         if isinstance(span._invocation, WorkflowInvocation):
             capture_content = self._handler.should_capture_content()
             if capture_content:
@@ -1187,7 +1157,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                 else:
                     _set_agent_output(span._invocation, result)
             if span._workflow_agent_invocation is not None:
-                span.reset_workflow_agent()
                 if not _agent_step_is_complete(result):
                     self._expect_workflow_tools(span, result)
                 return span
@@ -1256,6 +1225,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         span = self.open_spans.get(id_)
         if span is None:
             return None
+        span.deactivate()
         span.reset_tool_attributes()
         span.reset_workflow_tool()
         if isinstance(span._invocation, WorkflowInvocation):
@@ -1271,7 +1241,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         else:
             span._invocation.fail(err)
         if isinstance(span._invocation, LocalAgentInvocation):
-            span.reset_workflow_agent()
             self._release_workflow_invocation(span, span._invocation)
         elif isinstance(span._invocation, ToolInvocation):
             self._finish_workflow_tool(
