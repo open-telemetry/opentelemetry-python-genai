@@ -14,7 +14,7 @@
 
 # Latest version requirements for langchain unit tests.
 
-langchain==1.4.9
+langchain==1.4.10
 langchain-openai==1.7.4
 langchain-aws==1.9.2
 langchain-google-genai==4.4.3
