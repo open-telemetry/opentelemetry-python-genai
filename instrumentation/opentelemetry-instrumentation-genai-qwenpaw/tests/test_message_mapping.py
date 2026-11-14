@@ -76,7 +76,9 @@ def test_output_message_from_yield_item():
     assert output.finish_reason is None
     assert output.parts[0].content == "done"
 
-    user = Msg(name="user", role="user", content="hi")
+    user = Msg(
+        name="user", role="user", content=[TextBlock(type="text", text="hi")]
+    )
     assert output_message_from_yield_item((user, True)) is None
     assert output_message_from_yield_item("not-a-tuple") is None
     assert output_message_from_yield_item((None, True)) is None
