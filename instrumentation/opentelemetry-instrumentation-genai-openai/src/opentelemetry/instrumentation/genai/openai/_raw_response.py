@@ -263,10 +263,6 @@ def wrap_stream_result(
         if served_model:
             if hasattr(invocation, "response_model_name"):
                 setattr(invocation, "response_model_name", served_model)
-        # The stream wrapper is built only on ``parse()``, possibly in another
-        # context; suspend now so the span isn't current before then and the
-        # context it detaches is the one ``create()`` ran in.
-        invocation.suspend()
         return RawResponseStreamProxy(
             result,
             lambda stream: wrapper_cls(stream, invocation, capture_content),

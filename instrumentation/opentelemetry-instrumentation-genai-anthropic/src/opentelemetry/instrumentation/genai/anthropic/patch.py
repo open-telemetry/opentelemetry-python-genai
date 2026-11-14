@@ -174,7 +174,7 @@ def messages_create(
             kwargs, "tools", capture_content
         )
         invocation = _create_invocation(handler, instance, args, kwargs)
-        try:
+        with invocation.activate():
             try:
                 # Raw response variants return types outside create's
                 # annotations, so Any keeps the checks below reachable.
@@ -189,9 +189,6 @@ def messages_create(
                 invocation.tool_definitions = tools_capture.extract(
                     get_tool_definitions
                 )
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
 
         is_beta = _is_beta_resource(instance)
 
@@ -264,7 +261,7 @@ def async_messages_create(
             kwargs, "tools", capture_content
         )
         invocation = _create_invocation(handler, instance, args, kwargs)
-        try:
+        with invocation.activate():
             try:
                 # See ``messages_create`` on why this is Any.
                 result: Any = await wrapped(*args, **kwargs)
@@ -278,9 +275,6 @@ def async_messages_create(
                 invocation.tool_definitions = tools_capture.extract(
                     get_tool_definitions
                 )
-        except BaseException as exc:
-            invocation.fail(exc)
-            raise
 
         is_beta = _is_beta_resource(instance)
 
@@ -333,6 +327,7 @@ def _create_invocation(
         request_model=request_model,
         server_address=server_address,
         server_port=server_port,
+        _attach_to_context=False,
     )
     invocation.attributes = attributes
     return invocation

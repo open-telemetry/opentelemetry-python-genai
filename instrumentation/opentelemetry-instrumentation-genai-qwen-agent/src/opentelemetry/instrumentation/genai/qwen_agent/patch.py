@@ -50,10 +50,7 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
         invocation: LocalAgentInvocation,
         capture_content: bool,
     ) -> None:
-        super().__init__(stream)
-        # Deliberately not passed to super().__init__: the base class would
-        # mark the invocation as streamed and record per-chunk LLM streaming
-        # metrics, which don't apply to a local invoke_agent invocation.
+        super().__init__(stream, invocation)
         self._self_agent_invocation = invocation
         self._self_capture_content = capture_content
         self._self_last_response: Any = None
@@ -105,6 +102,7 @@ def wrap_agent_call_tool(
     invocation = handler.tool(
         tool_name,
         tool_type="function",
+        _attach_to_context=False,
     )
     messages_arg: Any = kwargs.get("messages") or bound.get("messages")
     invocation.tool_call_id = find_tool_call_id(messages_arg, tool_name)
@@ -112,13 +110,8 @@ def wrap_agent_call_tool(
     if invocation.should_capture_content:
         invocation.arguments = tool_arguments_to_any_value(tool_args)
 
-    try:
+    with invocation:
         result = wrapped(*args, **kwargs)
-    except BaseException as error:
-        invocation.fail(error)
-        raise
-
-    if invocation.should_capture_content:
-        invocation.tool_result = object_to_any_value(result)
-    invocation.stop()
+        if invocation.should_capture_content:
+            invocation.tool_result = object_to_any_value(result)
     return result

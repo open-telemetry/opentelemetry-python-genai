@@ -337,7 +337,9 @@ class MessagesStreamWrapper(
 
     @property
     def response(self) -> _http_lib.Response:
-        return finalize_on_close(self.stream.response, self._stop)
+        return finalize_on_close(
+            self.stream.response, self._stop, self._execution_context
+        )
 
     @property
     def stream(
@@ -395,7 +397,9 @@ class AsyncMessagesStreamWrapper(
 
     @property
     def response(self) -> _http_lib.Response:
-        return finalize_on_aclose(self.stream.response, self._stop)
+        return finalize_on_aclose(
+            self.stream.response, self._stop, self._execution_context
+        )
 
     @property
     def stream(
@@ -455,18 +459,21 @@ class MessagesStreamManagerWrapper(
     def _enter_manager(
         self, invocation: InferenceInvocation
     ) -> MessageStream[ResponseFormatT] | BetaMessageStream[ResponseFormatT]:
-        try:
-            return super()._enter_manager(invocation)
-        finally:
-            invocation.input_messages = (
-                self._self_messages_capture.extract(get_input_messages) or []
-            )
-            invocation.system_instruction = (
-                self._self_system_capture.extract(get_system_instruction) or []
-            )
-            invocation.tool_definitions = self._self_tools_capture.extract(
-                get_tool_definitions
-            )
+        with invocation.activate():
+            try:
+                return super()._enter_manager(invocation)
+            finally:
+                invocation.input_messages = (
+                    self._self_messages_capture.extract(get_input_messages)
+                    or []
+                )
+                invocation.system_instruction = (
+                    self._self_system_capture.extract(get_system_instruction)
+                    or []
+                )
+                invocation.tool_definitions = self._self_tools_capture.extract(
+                    get_tool_definitions
+                )
 
     def _wrap_stream(
         self,
@@ -524,18 +531,21 @@ class AsyncMessagesStreamManagerWrapper(
         AsyncMessageStream[ResponseFormatT]
         | BetaAsyncMessageStream[ResponseFormatT]
     ):
-        try:
-            return await super()._enter_manager(invocation)
-        finally:
-            invocation.input_messages = (
-                self._self_messages_capture.extract(get_input_messages) or []
-            )
-            invocation.system_instruction = (
-                self._self_system_capture.extract(get_system_instruction) or []
-            )
-            invocation.tool_definitions = self._self_tools_capture.extract(
-                get_tool_definitions
-            )
+        with invocation.activate():
+            try:
+                return await super()._enter_manager(invocation)
+            finally:
+                invocation.input_messages = (
+                    self._self_messages_capture.extract(get_input_messages)
+                    or []
+                )
+                invocation.system_instruction = (
+                    self._self_system_capture.extract(get_system_instruction)
+                    or []
+                )
+                invocation.tool_definitions = self._self_tools_capture.extract(
+                    get_tool_definitions
+                )
 
     def _wrap_stream(
         self,

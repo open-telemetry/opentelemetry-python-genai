@@ -624,28 +624,29 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         self._self_invocation.fail(exc)
 
     async def read(self, amt: int | None = None) -> bytes:
-        try:
-            chunk: bytes = await self.__wrapped__.read(amt)
-        except BaseException as exc:
-            self._finalize_error(exc)
-            raise
+        with self._self_invocation.activate():
+            try:
+                chunk: bytes = await self.__wrapped__.read(amt)
+            except BaseException as exc:
+                self._finalize_error(exc)
+                raise
 
-        if amt == 0:
+            if amt == 0:
+                return chunk
+
+            if chunk:
+                self._self_chunks.append(chunk)
+                self._self_bytes_read += len(chunk)
+
+            reached_content_length = (
+                self._self_content_length is not None
+                and self._self_content_length > 0
+                and self._self_bytes_read >= self._self_content_length
+            )
+            if amt is None or amt < 0 or not chunk or reached_content_length:
+                self._finalize(b"".join(self._self_chunks))
+
             return chunk
-
-        if chunk:
-            self._self_chunks.append(chunk)
-            self._self_bytes_read += len(chunk)
-
-        reached_content_length = (
-            self._self_content_length is not None
-            and self._self_content_length > 0
-            and self._self_bytes_read >= self._self_content_length
-        )
-        if amt is None or amt < 0 or not chunk or reached_content_length:
-            self._finalize(b"".join(self._self_chunks))
-
-        return chunk
 
     async def readinto(self, b: bytearray) -> int:
         # Reimplemented on top of read() because the SDK's readinto pulls from
@@ -684,26 +685,28 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         return self
 
     async def aclose(self) -> None:
-        try:
-            if hasattr(self.__wrapped__, "aclose"):
-                await self.__wrapped__.aclose()
-            elif hasattr(self.__wrapped__, "close"):
-                self.__wrapped__.close()
-        except BaseException as exc:
-            self._finalize_error(exc)
-            raise
-        if not self._self_finalized:
-            self._finalize(b"".join(self._self_chunks))
+        with self._self_invocation.activate():
+            try:
+                if hasattr(self.__wrapped__, "aclose"):
+                    await self.__wrapped__.aclose()
+                elif hasattr(self.__wrapped__, "close"):
+                    self.__wrapped__.close()
+            except BaseException as exc:
+                self._finalize_error(exc)
+                raise
+            if not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
 
     def close(self) -> None:
-        try:
-            if hasattr(self.__wrapped__, "close"):
-                self.__wrapped__.close()
-        except BaseException as exc:
-            self._finalize_error(exc)
-            raise
-        if not self._self_finalized:
-            self._finalize(b"".join(self._self_chunks))
+        with self._self_invocation.activate():
+            try:
+                if hasattr(self.__wrapped__, "close"):
+                    self.__wrapped__.close()
+            except BaseException as exc:
+                self._finalize_error(exc)
+                raise
+            if not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
 
     async def __aexit__(
         self,
@@ -711,20 +714,23 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         exc_val: BaseException | None,
         exc_tb: Any,
     ) -> None:
-        try:
-            if hasattr(self.__wrapped__, "__aexit__"):
-                await self.__wrapped__.__aexit__(exc_type, exc_val, exc_tb)
-            elif hasattr(self.__wrapped__, "aclose"):
-                await self.__wrapped__.aclose()
-            elif hasattr(self.__wrapped__, "close"):
-                self.__wrapped__.close()
-        except BaseException as close_exc:
-            self._finalize_error(exc_val if exc_val is not None else close_exc)
-            raise
-        if exc_val is not None:
-            self._finalize_error(exc_val)
-        elif not self._self_finalized:
-            self._finalize(b"".join(self._self_chunks))
+        with self._self_invocation.activate():
+            try:
+                if hasattr(self.__wrapped__, "__aexit__"):
+                    await self.__wrapped__.__aexit__(exc_type, exc_val, exc_tb)
+                elif hasattr(self.__wrapped__, "aclose"):
+                    await self.__wrapped__.aclose()
+                elif hasattr(self.__wrapped__, "close"):
+                    self.__wrapped__.close()
+            except BaseException as close_exc:
+                self._finalize_error(
+                    exc_val if exc_val is not None else close_exc
+                )
+                raise
+            if exc_val is not None:
+                self._finalize_error(exc_val)
+            elif not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
 
     def __del__(self) -> None:
         if getattr(self, "_self_finalized", True):

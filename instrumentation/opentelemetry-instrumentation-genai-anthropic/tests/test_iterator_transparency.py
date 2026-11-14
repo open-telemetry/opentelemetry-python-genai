@@ -3,6 +3,7 @@
 
 import json
 from collections.abc import Iterator
+from contextlib import contextmanager
 from io import BytesIO
 from typing import Any
 from unittest.mock import MagicMock
@@ -33,6 +34,22 @@ from .test_sync_messages import (
 )
 
 
+def _mock_handler() -> MagicMock:
+    handler = MagicMock()
+    invocation = handler.inference.return_value
+
+    @contextmanager
+    def activate() -> Iterator[None]:
+        try:
+            yield
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+
+    invocation.activate = activate
+    return handler
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "wrapper_name",
@@ -50,7 +67,7 @@ async def test_extraction_failure_preserves_sdk_outcome(
     extractor = MagicMock(side_effect=ValueError("extraction failed"))
     monkeypatch.setattr(patch, "get_input_messages", extractor)
     monkeypatch.setattr(wrappers, "get_input_messages", extractor)
-    handler = MagicMock()
+    handler = _mock_handler()
     handler.should_capture_content.return_value = True
     error = RuntimeError("SDK failed")
     asynchronous = wrapper_name.startswith("async")
@@ -97,7 +114,9 @@ async def test_extraction_failure_preserves_sdk_outcome(
         with pytest.raises(RuntimeError) as caught:
             await invoke()
         assert caught.value is error
-        invocation.fail.assert_called_once_with(error)
+        # Streams also fail in the util manager wrapper; a real invocation
+        # ignores the repeated fail.
+        invocation.fail.assert_called_with(error)
     else:
         result = await invoke()
         if not streaming:
@@ -124,7 +143,7 @@ async def test_extraction_failure_preserves_sdk_outcome(
 async def test_wrappers_leave_iterators_for_sdk(
     wrapper_name: str, capture_content: bool, iterator_failure: bool
 ) -> None:
-    handler = MagicMock()
+    handler = _mock_handler()
     handler.should_capture_content.return_value = capture_content
     consumed: list[str] = []
     error = ValueError("SDK request failed")

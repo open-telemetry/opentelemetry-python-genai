@@ -433,6 +433,7 @@ def create_inference_invocation(
         request_model=str(model) if model is not None else None,
         server_address=address,
         server_port=port,
+        _attach_to_context=False,
     )
     if is_prompt:
         if prompt_id := get_value(kwargs.get("prompt_id")):

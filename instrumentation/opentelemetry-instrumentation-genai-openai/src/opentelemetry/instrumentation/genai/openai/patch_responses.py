@@ -85,11 +85,12 @@ def responses_create(
 
         params = extract_params(**kwargs)
         invocation = handler.inference(
-            **get_inference_creation_kwargs(params, instance)
+            **get_inference_creation_kwargs(params, instance),
+            _attach_to_context=False,
         )
         apply_request_attributes(invocation, params, capture_content)
 
-        try:
+        with invocation.activate():
             result = wrapped(*args, **kwargs)
             if is_streaming(kwargs):
                 return wrap_stream_result(
@@ -108,9 +109,6 @@ def responses_create(
             else:
                 invocation.stop()
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return cast(
         'Callable[..., "ResponseResult" | "ResponseStreamResult" | ResponseStreamWrapper[Any]]',
@@ -158,11 +156,12 @@ def async_responses_create(
 
         params = extract_params(**kwargs)
         invocation = handler.inference(
-            **get_inference_creation_kwargs(params, instance)
+            **get_inference_creation_kwargs(params, instance),
+            _attach_to_context=False,
         )
         apply_request_attributes(invocation, params, capture_content)
 
-        try:
+        with invocation.activate():
             result = await wrapped(*args, **kwargs)
             if is_streaming(kwargs):
                 return wrap_stream_result(
@@ -181,9 +180,6 @@ def async_responses_create(
             else:
                 invocation.stop()
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return cast(
         'Callable[..., Awaitable["ResponseResult" | "AsyncResponseStreamResult" | AsyncResponseStreamWrapper[Any]]]',
@@ -217,6 +213,7 @@ def _start_fetch_response_invocation(
 ) -> FetchResponseInvocation:
     invocation = handler.fetch_response(
         **get_fetch_response_creation_kwargs(response_id, instance),
+        _attach_to_context=False,
     )
     invocation.stream_cursor = _get_stream_cursor(kwargs)
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
@@ -265,7 +262,7 @@ def responses_retrieve(
             handler, instance, response_id, kwargs
         )
 
-        try:
+        with invocation.activate():
             result = wrapped(*args, **kwargs)
             if is_streaming(kwargs):
                 return wrap_stream_result(
@@ -283,9 +280,6 @@ def responses_retrieve(
             )
             invocation.stop()
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return cast(
         'Callable[..., Union["ResponseResult", "ResponseStreamResult", FetchResponseStreamWrapper[Any]]]',
@@ -338,7 +332,7 @@ def async_responses_retrieve(
             handler, instance, response_id, kwargs
         )
 
-        try:
+        with invocation.activate():
             result = await wrapped(*args, **kwargs)
             if is_streaming(kwargs):
                 return wrap_stream_result(
@@ -353,9 +347,6 @@ def async_responses_retrieve(
             )
             invocation.stop()
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return cast(
         'Callable[..., Awaitable[Union["ResponseResult", "AsyncResponseStreamResult", AsyncFetchResponseStreamWrapper[Any]]]]',
@@ -384,7 +375,8 @@ def responses_stream(
         def invocation_factory() -> Any:
             params = extract_params(**kwargs)
             invocation = handler.inference(
-                **get_inference_creation_kwargs(params, instance)
+                **get_inference_creation_kwargs(params, instance),
+                _attach_to_context=False,
             )
             apply_request_attributes(invocation, params, capture_content)
             return invocation
@@ -421,7 +413,8 @@ def async_responses_stream(
         def invocation_factory() -> Any:
             params = extract_params(**kwargs)
             invocation = handler.inference(
-                **get_inference_creation_kwargs(params, instance)
+                **get_inference_creation_kwargs(params, instance),
+                _attach_to_context=False,
             )
             apply_request_attributes(invocation, params, capture_content)
             return invocation

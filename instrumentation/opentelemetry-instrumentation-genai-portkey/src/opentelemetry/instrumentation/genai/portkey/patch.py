@@ -110,7 +110,7 @@ def _sync_completions_create(
         invocation = create_inference_invocation(
             handler, instance, kwargs, is_prompt=is_prompt
         )
-        try:
+        with invocation.activate():
             try:
                 result = wrapped(*args, **kwargs)
             finally:
@@ -128,9 +128,6 @@ def _sync_completions_create(
             set_response_properties(invocation, result, capture_content)
             invocation.stop()
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return traced_method
 
@@ -157,7 +154,7 @@ def _async_completions_create(
         invocation = create_inference_invocation(
             handler, instance, kwargs, is_prompt=is_prompt
         )
-        try:
+        with invocation.activate():
             try:
                 result = await wrapped(*args, **kwargs)
             finally:
@@ -175,8 +172,5 @@ def _async_completions_create(
             set_response_properties(invocation, result, capture_content)
             invocation.stop()
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return cast(Callable[..., Any], traced_method)

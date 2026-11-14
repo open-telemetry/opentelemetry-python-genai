@@ -38,6 +38,7 @@ from llama_index.core.tools import (
 from llama_index.core.workflow.errors import WorkflowRuntimeError
 from openai import RateLimitError
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.llama_index._handler import (
     LlamaIndexSpanHandler,
     _agent_input,
@@ -1292,6 +1293,80 @@ async def test_agent_workflow_error_marks_workflow_and_agent_spans(
         assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
 
 
+def test_nested_tool_spans_keep_parent_and_do_not_leak(
+    span_exporter, tracer_provider, instrument_llama_index
+) -> None:
+    inner = FunctionTool.from_defaults(lambda value: value, name="inner")
+    outer = FunctionTool.from_defaults(
+        lambda value: inner(value=value).raw_output, name="outer"
+    )
+
+    with tracer_provider.get_tracer("test").start_as_current_span(
+        "caller"
+    ) as caller:
+        assert outer(value=1).raw_output == 1
+        assert trace.get_current_span() is caller
+
+    caller_span = _spans_named(span_exporter, "caller")[0]
+    outer_span = _spans_named(span_exporter, "execute_tool outer")[0]
+    inner_span = _spans_named(span_exporter, "execute_tool inner")[0]
+    assert outer_span.parent is not None
+    assert outer_span.parent.span_id == caller_span.context.span_id
+    assert inner_span.parent is not None
+    assert inner_span.parent.span_id == outer_span.context.span_id
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_spans_are_current_only_inside_their_work(
+    span_exporter, instrument_llama_index
+) -> None:
+    current: dict[str, list[int]] = {"llm": [], "tool": []}
+
+    # Older llama-index versions run sync tools in an executor that drops
+    # contextvars.
+    async def echo(value: str) -> str:
+        current["tool"].append(
+            trace.get_current_span().get_span_context().span_id
+        )
+        return value
+
+    generate = _tool_then_answer("echo", "hello")
+
+    def response_generator(messages, **kwargs):
+        current["llm"].append(
+            trace.get_current_span().get_span_context().span_id
+        )
+        return generate(messages, **kwargs)
+
+    worker = FunctionAgent(
+        name="worker",
+        description="Answers using a tool.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True, response_generator=response_generator
+        ),
+        tools=[FunctionTool.from_defaults(async_fn=echo, name="echo")],
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[worker], root_agent="worker")
+
+    handler = workflow.run(user_msg="Start")
+    assert not trace.get_current_span().get_span_context().is_valid
+    await handler
+    assert not trace.get_current_span().get_span_context().is_valid
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    agent_span = _spans_named(span_exporter, "invoke_agent worker")[0]
+    tool_span = _spans_named(span_exporter, "execute_tool echo")[0]
+    assert agent_span.parent is not None
+    assert agent_span.parent.span_id == workflow_span.context.span_id
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == agent_span.context.span_id
+    assert current["llm"] == [agent_span.context.span_id] * 2
+    assert current["tool"] == [tool_span.context.span_id]
+
+
 @pytest.mark.asyncio
 async def test_agent_workflow_instruments_function_and_react_members(
     span_exporter, instrument_llama_index
@@ -1623,10 +1698,9 @@ async def test_agent_workflow_does_not_log_context_detach_failures(
 ) -> None:
     """Member-agent spans outlive the task that opened them.
 
-    ``TelemetryHandler`` attaches the span to the context that was current when
-    the invocation started, and that attachment can only be undone from the same
-    context. Finishing from a later step's task would make
-    ``opentelemetry.context.detach`` raise, which it logs with a traceback.
+    Finishing one from a later step's task must not try to detach a context
+    attached in another task, which ``opentelemetry.context.detach`` logs with a
+    traceback.
     """
 
     class _DetachFailures(logging.Handler):

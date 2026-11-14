@@ -26,7 +26,7 @@ async def test_chat_stream_activates_only_during_reads(
     before = context.get_current()
     invocation = TelemetryHandler(
         tracer_provider=tracer_provider,
-    ).inference("openai", request_model="test-model")
+    ).inference("openai", request_model="test-model", _attach_to_context=False)
     error = ConnectionError("stream failed")
     chunk = ChatCompletionChunk(
         id="test",

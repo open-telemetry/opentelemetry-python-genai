@@ -537,6 +537,7 @@ def _create_instrumented_generate_content(
                 operation_name="generate_content",
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
+                _attach_to_context=False,
             ) as invocation:
                 _apply_request_attributes(
                     wrapped_config,
@@ -731,6 +732,7 @@ def _create_instrumented_generate_content_stream(
                 operation_name="generate_content",
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
+                _attach_to_context=False,
             )
             _apply_request_attributes(
                 wrapped_config,
@@ -754,19 +756,17 @@ def _create_instrumented_generate_content_stream(
                             )
                         )[0]
                     )
-            stream = GenerateContentStreamWrapper(
-                wrapped(
+            with invocation.activate():
+                stream = wrapped(
                     model=model,
                     contents=contents,
                     config=wrapped_config if has_wrapped_tools else config,
                     *_args,
                     **_kwargs,
-                ),
-                invocation,
-                telemetry_handler,
+                )
+            return GenerateContentStreamWrapper(
+                stream, invocation, telemetry_handler
             )
-            invocation.suspend()
-            return stream
 
         return _execute(*args, **kwargs)
 
@@ -805,6 +805,7 @@ def _create_instrumented_async_generate_content(
                 operation_name="generate_content",
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
+                _attach_to_context=False,
             ) as invocation:
                 invocation.attributes.update(
                     _get_extra_generate_content_attributes()
@@ -888,6 +889,7 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 operation_name="generate_content",
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
+                _attach_to_context=False,
             )
             invocation.attributes.update(
                 _get_extra_generate_content_attributes()
@@ -911,19 +913,17 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                             )
                         )[0]
                     )
-            stream = AsyncGenerateContentStreamWrapper(
-                await wrapped(
+            with invocation.activate():
+                stream = await wrapped(
                     model=model,
                     contents=contents,
                     config=wrapped_config if has_wrapped_tools else config,
                     *_args,
                     **_kwargs,
-                ),
-                invocation,
-                telemetry_handler,
+                )
+            return AsyncGenerateContentStreamWrapper(
+                stream, invocation, telemetry_handler
             )
-            invocation.suspend()
-            return stream
 
         return await _execute(*args, **kwargs)
 

@@ -9,8 +9,10 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
+from portkey_ai import Portkey
 
 from opentelemetry import context, trace
 from opentelemetry.instrumentation.genai.portkey.wrappers import (
@@ -18,6 +20,19 @@ from opentelemetry.instrumentation.genai.portkey.wrappers import (
     PortkeyStreamWrapper,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+
+from .test_chat_completions import (
+    AsyncPortkey,
+    _create_mock_chat_completion,
+    _setup_async_mock_chat,
+    _setup_mock_chat,
+)
+from .test_streaming import (
+    _MockAsyncStream,
+    _MockSyncStream,
+    _setup_async_mock_stream,
+    _setup_mock_stream,
+)
 
 
 def _chunk(content: str, finish_reason: str | None = None) -> SimpleNamespace:
@@ -48,7 +63,9 @@ async def test_stream_activates_only_during_reads(
     before = context.get_current()
     invocation = TelemetryHandler(
         tracer_provider=tracer_provider,
-    ).inference("portkey", request_model="test-model")
+    ).inference(
+        "portkey", request_model="test-model", _attach_to_context=False
+    )
     error = ConnectionError("stream failed")
     chunk = _chunk("Hello ", "stop")
 
@@ -168,7 +185,9 @@ async def test_stream_close_activates_invocation(
     before = context.get_current()
     invocation = TelemetryHandler(
         tracer_provider=tracer_provider,
-    ).inference("portkey", request_model="test-model")
+    ).inference(
+        "portkey", request_model="test-model", _attach_to_context=False
+    )
     expected = trace.get_current_span(invocation.context).get_span_context()
     chunk = _chunk("Hello ", "stop")
     underlying = _CloseAssertingStream([chunk], invocation)
@@ -199,3 +218,92 @@ async def test_stream_close_activates_invocation(
         for r in caplog.records
         if r.name == "opentelemetry.context" and r.levelno >= 40
     ]
+
+
+def _record_provider_calls(client: Any) -> list[trace.SpanContext]:
+    seen: list[trace.SpanContext] = []
+    completions = client.chat.completions
+    mocks = [completions._post]
+    if hasattr(completions, "openai_client"):
+        mocks += [
+            completions.openai_client.chat.completions.create,
+            completions.openai_client.with_raw_response.chat.completions.create,
+        ]
+    for mock in mocks:
+        inner, result = mock.side_effect, mock.return_value
+
+        if isinstance(mock, AsyncMock):
+
+            async def effect(
+                *args: Any, _inner=inner, _result=result, **kwargs: Any
+            ) -> Any:
+                seen.append(trace.get_current_span().get_span_context())
+                return await _inner(*args, **kwargs) if _inner else _result
+
+        else:
+
+            def effect(
+                *args: Any, _inner=inner, _result=result, **kwargs: Any
+            ) -> Any:
+                seen.append(trace.get_current_span().get_span_context())
+                return _inner(*args, **kwargs) if _inner else _result
+
+        mock.side_effect = effect
+    return seen
+
+
+def _assert_no_current_span() -> None:
+    assert not trace.get_current_span().get_span_context().is_valid
+
+
+_MESSAGES = [{"role": "user", "content": "Hi"}]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_span_is_current_only_during_the_provider_call(
+    instrument_portkey, span_exporter, stream: bool
+) -> None:
+    client = Portkey(api_key="test_pk", provider="openai")
+    if stream:
+        _setup_mock_stream(client, _MockSyncStream([_chunk("Hi", "stop")]))
+    else:
+        _setup_mock_chat(client, _create_mock_chat_completion())
+    seen = _record_provider_calls(client)
+
+    result = client.chat.completions.create(
+        messages=_MESSAGES, model="gpt-4o", stream=stream
+    )
+    _assert_no_current_span()
+    if stream:
+        for _ in result:
+            _assert_no_current_span()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context]
+
+
+@pytest.mark.skipif(AsyncPortkey is None, reason="AsyncPortkey not available")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_async_span_is_current_only_during_the_provider_call(
+    instrument_portkey, span_exporter, stream: bool
+) -> None:
+    client = AsyncPortkey(api_key="test_pk", provider="openai")
+    if stream:
+        _setup_async_mock_stream(
+            client, _MockAsyncStream([_chunk("Hi", "stop")])
+        )
+    else:
+        _setup_async_mock_chat(client, _create_mock_chat_completion())
+    seen = _record_provider_calls(client)
+
+    result = await client.chat.completions.create(
+        messages=_MESSAGES, model="gpt-4o", stream=stream
+    )
+    _assert_no_current_span()
+    if stream:
+        async for _ in result:
+            _assert_no_current_span()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context]

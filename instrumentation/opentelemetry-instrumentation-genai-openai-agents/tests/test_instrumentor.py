@@ -13,6 +13,7 @@ import agents.tracing
 import pytest
 from openai.types.responses import Response, ResponseCompletedEvent
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.openai_agents import (
     OpenAIAgentsInstrumentor,
 )
@@ -716,3 +717,81 @@ async def test_runner_counts_client_side_tools(
         inference_calls=1 if provider_executed else 2,
         tool_calls=executed_calls,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_spans_are_current_only_inside_their_work(
+    streaming: bool,
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    current: dict[str, list[int]] = {"model": [], "tool": []}
+
+    def _current_span_id() -> int:
+        return trace.get_current_span().get_span_context().span_id
+
+    @agents.function_tool
+    def get_weather(city: str) -> str:
+        current["tool"].append(_current_span_id())
+        return f"The forecast for {city} is sunny."
+
+    tool_call = {
+        "type": "function_call",
+        "id": "fc_weather",
+        "call_id": "call_weather",
+        "name": get_weather.name,
+        "arguments": '{"city":"Barcelona"}',
+    }
+    model = _mock_model([tool_call], [_FINAL_MESSAGE])
+    get_response = model.get_response.side_effect
+    stream_response = model.stream_response.side_effect
+
+    async def recording_get_response(*args: Any, **kwargs: Any) -> Any:
+        current["model"].append(_current_span_id())
+        return next(get_response)
+
+    async def recording_stream_response(
+        *args: Any, **kwargs: Any
+    ) -> AsyncIterator[ResponseCompletedEvent]:
+        current["model"].append(_current_span_id())
+        async for event in stream_response(*args, **kwargs):
+            yield event
+
+    model.get_response.side_effect = recording_get_response
+    model.stream_response.side_effect = recording_stream_response
+    agent = agents.Agent(name="test_agent", model=model, tools=[get_weather])
+
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        with tracer_provider.get_tracer("test").start_as_current_span(
+            "caller"
+        ) as caller:
+            if streaming:
+                result = agents.Runner.run_streamed(agent, "hello")
+                assert trace.get_current_span() is caller
+                async for _ in result.stream_events():
+                    assert trace.get_current_span() is caller
+            else:
+                await agents.Runner.run(agent, "hello")
+            assert trace.get_current_span() is caller
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    caller_span = spans["caller"]
+    workflow_span = spans["invoke_workflow Agent workflow"]
+    agent_span = spans["invoke_agent test_agent"]
+    tool_span = spans["execute_tool get_weather"]
+    assert workflow_span.parent is not None
+    assert workflow_span.parent.span_id == caller_span.context.span_id
+    assert agent_span.parent is not None
+    assert agent_span.parent.span_id == workflow_span.context.span_id
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == agent_span.context.span_id
+    assert current["model"] == [agent_span.context.span_id] * 2
+    assert current["tool"] == [tool_span.context.span_id]
