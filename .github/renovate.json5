@@ -23,7 +23,7 @@
     "managerFilePatterns": [
       "/(^|/)requirements\\.txt$/",
       "/(^|/)requirements\\.latest\\.txt$/",
-      "/(^|/)requirements\\.v\\d+\\.txt$/",
+      "/(^|/)requirements\\.v\\d+(\\.\\d+)?\\.txt$/",
       "/(^|/)requirements\\.[\\w-]+-v\\d+\\.txt$/"
     ]
   },
@@ -83,7 +83,7 @@
     {
       // Keep coverage on the last google-genai release with the legacy Interactions API.
       "matchFileNames": [
-        "instrumentation/opentelemetry-instrumentation-google-genai/tests/requirements.v2.txt"
+        "instrumentation/opentelemetry-instrumentation-google-genai/tests/requirements.v2.8.txt"
       ],
       "matchPackageNames": ["google-genai"],
       "allowedVersions": "<2.9"
