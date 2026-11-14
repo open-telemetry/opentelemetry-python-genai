@@ -219,6 +219,11 @@ def _result_reports_stop_reason() -> bool:
     )
 
 
+def _result_reports_errors() -> bool:
+    """True when this SDK release parses the per-error messages."""
+    return "errors" in inspect.signature(sdk_types.ResultMessage).parameters
+
+
 @pytest.mark.skipif(
     not _result_reports_stop_reason(),
     reason="this claude-agent-sdk release does not report stop_reason",
@@ -467,6 +472,10 @@ def test_result_error_hides_user_text_without_capture(
     assert agent.attributes["error.type"] == "error_during_execution"
 
 
+@pytest.mark.skipif(
+    not _result_reports_errors(),
+    reason="this claude-agent-sdk release does not report errors",
+)
 def test_result_error_description_only_with_capture(
     span_exporter, tracer_provider, monkeypatch
 ) -> None:
