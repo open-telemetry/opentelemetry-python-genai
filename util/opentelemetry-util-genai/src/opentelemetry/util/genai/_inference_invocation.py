@@ -146,7 +146,6 @@ class InferenceInvocation(GenAIInvocation):
     Use handler.inference(provider) rather than constructing this directly.
     """
 
-    _records_stream_telemetry = True
     _exception_event_name = "gen_ai.client.inference.exception"
 
     # Set once the invocation is handed to a stream wrapper.
