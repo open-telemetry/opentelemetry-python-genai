@@ -97,12 +97,14 @@ def _finish_reason(stop_reason: str) -> str:
     return _FINISH_REASONS.get(stop_reason, stop_reason)
 
 
-def _result_error(chunk: Any) -> Error:
+def _result_error(chunk: Any, *, capture: bool) -> Error:
     """Build the run error a ``ResultMessage`` reports without raising."""
     subtype = getattr(chunk, "subtype", None)
     errors: list[object] | None = getattr(chunk, "errors", None)
     message: str | None = None
-    if isinstance(errors, list) and errors:
+    if capture and isinstance(errors, list) and errors:
+        # The per-error text is user data, so it only becomes the status
+        # description when content capture is explicitly enabled.
         message = str(errors[0])
     elif isinstance(subtype, str):
         # Older SDK releases carry no per-error messages; the subtype is the
@@ -292,7 +294,10 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
         # The SDK reports a failed run through ``is_error`` without raising, so
         # the run error has to be kept for finalization.
         if getattr(chunk, "is_error", False):
-            self._self_result_error = _result_error(chunk)
+            self._self_result_error = _result_error(
+                chunk,
+                capture=bool(self._self_agent.should_capture_content),
+            )
 
     def _start_tool(self, block: Any) -> None:
         tool_id = getattr(block, "id", None)

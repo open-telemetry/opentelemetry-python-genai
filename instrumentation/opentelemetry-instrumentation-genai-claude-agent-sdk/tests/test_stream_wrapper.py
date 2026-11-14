@@ -439,17 +439,86 @@ def test_result_error_marks_agent_span_failed(
     agent = agent_spans(span_exporter)[0]
     assert agent.status.status_code.name == "ERROR"
     assert agent.attributes["error.type"] == "error_during_execution"
-    # Releases without per-error messages fall back to the subtype as the
-    # description; either way it must not stay empty.
-    assert agent.status.description in {
-        "the agent run failed",
-        "error_during_execution",
-    }
+    # Capture is off here, so the description can only be the subtype.
+    assert agent.status.description == "error_during_execution"
     # Usage and output still land on the span.
     assert agent.attributes["gen_ai.usage.input_tokens"] == 20
     assert agent.attributes["gen_ai.usage.output_tokens"] == 38
     # No exception happened, so no exception event may be recorded.
     assert exception_events(agent) == []
+
+
+def test_result_error_hides_user_text_without_capture(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # The per-error text is user data, so with capture off it must not reach
+    # the status description; the subtype stays.
+    messages = single_turn()
+    messages[-1] = result(
+        usage=(20, 38),
+        is_error=True,
+        errors=["the agent run failed"],
+    )
+    run_query(messages)
+
+    agent = agent_spans(span_exporter)[0]
+    assert agent.status.status_code.name == "ERROR"
+    assert agent.status.description == "error_during_execution"
+    assert agent.attributes["error.type"] == "error_during_execution"
+
+
+def test_result_error_description_only_with_capture(
+    span_exporter, tracer_provider, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = claude_agent_sdk_instrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+    try:
+        messages = single_turn()
+        messages[-1] = result(
+            usage=(20, 38),
+            is_error=True,
+            errors=["the agent run failed"],
+        )
+        run_query(messages)
+    finally:
+        instrumentor.uninstrument()
+
+    agent = agent_spans(span_exporter)[0]
+    assert agent.status.status_code.name == "ERROR"
+    assert agent.status.description == "the agent run failed"
+
+
+def test_tool_span_omits_arguments_and_result_without_capture(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # Tool arguments and results are content, not structure: with capture off
+    # neither attribute may appear on the span.
+    run_query(single_turn())
+
+    (tool,) = tool_spans(span_exporter)
+    assert "gen_ai.tool.call.arguments" not in tool.attributes
+    assert "gen_ai.tool.call.result" not in tool.attributes
+
+
+def test_tool_span_records_arguments_and_result_with_capture(
+    span_exporter, tracer_provider, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = claude_agent_sdk_instrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+    try:
+        run_query(single_turn())
+    finally:
+        instrumentor.uninstrument()
+
+    (tool,) = tool_spans(span_exporter)
+    assert "/tmp/a.txt" in str(tool.attributes["gen_ai.tool.call.arguments"])
+    assert tool.attributes["gen_ai.tool.call.result"] == "hello"
 
 
 def test_caller_closing_early_ends_span(
