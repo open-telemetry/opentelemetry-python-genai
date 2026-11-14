@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import logging
@@ -17,7 +16,7 @@ from concurrent.futures import (
     ThreadPoolExecutor,
 )
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from functools import partial
 from time import time
 from typing import Any, Final, Literal
@@ -36,7 +35,10 @@ from opentelemetry.util.genai.types import (
     TextPart,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import gen_ai_json_dump
+from opentelemetry.util.genai.utils import (
+    gen_ai_json_dump,
+    object_to_any_value,
+)
 
 GEN_AI_INPUT_MESSAGES_REF: Final = (
     gen_ai_attributes.GEN_AI_INPUT_MESSAGES + "_ref"
@@ -99,9 +101,12 @@ def hash_tool_definitions(
     if not tool_definitions:
         return None
     try:
+        # Hash the same representation that gets uploaded, so two definitions
+        # share a file name only if they produce the same file contents.
         tool_dicts = [
-            {k: v for k, v in dataclasses.asdict(t).items() if v is not None}
+            converted
             for t in tool_definitions
+            if isinstance(converted := object_to_any_value(t), dict)
         ]
 
         encoded_tools = json.dumps(
@@ -334,7 +339,11 @@ class UploadCompletionHook(CompletionHook):
             | list[MessagePart]
             | list[ToolDefinition],
         ) -> JsonEncodeable:
-            return [asdict(dc) for dc in dataclass_list]
+            return [
+                converted
+                for dc in dataclass_list
+                if isinstance(converted := object_to_any_value(dc), dict)
+            ]
 
         references = [
             (ref_name, ref, ref_attr, contents_hashed_to_filename)

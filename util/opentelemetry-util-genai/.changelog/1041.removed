@@ -1,0 +1,1 @@
+Remove `enrich_from_context` from `InferenceInvocation`, `EmbeddingInvocation`, `RetrievalInvocation`, and `FetchResponseInvocation`.

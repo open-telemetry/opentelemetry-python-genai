@@ -5,15 +5,17 @@
 # pylint: disable=redefined-outer-name
 
 import json
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
+import anthropic
 import pytest
 import pytest_asyncio
-from anthropic import Anthropic, AsyncAnthropic
+from anthropic import NOT_GIVEN, Anthropic, AsyncAnthropic
 
 from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
 from opentelemetry.sdk.trace import ReadableSpan
@@ -31,6 +33,52 @@ pytest_plugins = [
 # anthropic >= 2 has built-in tracing on the global tracer provider; keep it off so
 # tests only see spans from this instrumentation.
 os.environ["ANTHROPIC_OPEN_TELEMETRY"] = "false"
+
+
+# Sentinels the SDK uses for "argument not supplied". `omit` only exists in
+# newer SDK versions (the oldest supported release has just NOT_GIVEN).
+UNSET_SENTINELS = [
+    pytest.param(NOT_GIVEN, id="not_given"),
+    pytest.param(
+        getattr(anthropic, "omit", None),
+        id="omit",
+        marks=pytest.mark.skipif(
+            not hasattr(anthropic, "omit"),
+            reason="installed anthropic has no `omit`",
+        ),
+    ),
+]
+
+UNSET_SAMPLING_ATTRIBUTES = (
+    GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES,
+    GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE,
+    GenAIAttributes.GEN_AI_REQUEST_TOP_P,
+    GenAIAttributes.GEN_AI_REQUEST_TOP_K,
+)
+
+
+def unset_sampling_kwargs(unset, supported_params):
+    """Set every sampling kwarg the installed SDK method accepts to `unset`.
+
+    Newer SDK releases dropped some of these parameters from the signature.
+    """
+    return {
+        name: unset
+        for name in ("stop_sequences", "temperature", "top_p", "top_k")
+        if name in supported_params
+    }
+
+
+def assert_unset_sampling_attributes_omitted(span, caplog) -> None:
+    """Unset SDK sentinels must not leak into request attributes or logs."""
+    for attribute in UNSET_SAMPLING_ATTRIBUTES:
+        assert attribute not in span.attributes
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+        and "Invalid type" in record.getMessage()
+    ]
 
 
 def multimodal_input_message():
