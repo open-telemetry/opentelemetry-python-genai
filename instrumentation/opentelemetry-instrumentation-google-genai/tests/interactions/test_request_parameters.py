@@ -9,7 +9,10 @@ from dataclasses import dataclass, field
 from sys import float_info
 from typing import Any
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    import httpx2 as httpx
 import pytest
 from google.genai import Client
 from google.genai.types import HttpOptions
