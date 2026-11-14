@@ -236,9 +236,17 @@ def _sanitize_for_any_value(
         return _OMIT
 
 
+_GENAI_TYPES_MODULE = "opentelemetry.util.genai.types"
+
+
 def _dump_model(value: object) -> object | None:
     if is_dataclass(value) and not isinstance(value, type):
-        return {f.name: getattr(value, f.name) for f in fields(value)}
+        dumped = {f.name: getattr(value, f.name) for f in fields(value)}
+        if type(value).__module__ == _GENAI_TYPES_MODULE:
+            # None means "not set" in util-genai types. User dataclasses, such
+            # as those inside tool payloads, keep their None values.
+            dumped = {k: v for k, v in dumped.items() if v is not None}
+        return dumped
     for method_name in ("model_dump", "dict", "to_dict"):
         fn = getattr(value, method_name, None)
         if callable(fn):

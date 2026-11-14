@@ -16,7 +16,7 @@ interactions:
       User-Agent:
       - python-httpx/0.28.1
     method: POST
-    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent
+    uri: https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent
   response:
     body:
       string: '{"candidates": [{"content": {"parts": [{"text": "The capital of France
