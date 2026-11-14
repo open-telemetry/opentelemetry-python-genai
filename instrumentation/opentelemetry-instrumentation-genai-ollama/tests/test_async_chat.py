@@ -197,3 +197,22 @@ async def test_async_chat_stream_span_is_not_current_between_reads(
 
     (span,) = span_exporter.get_finished_spans()
     assert seen == [span.context.span_id]
+
+
+@pytest.mark.asyncio
+async def test_async_chat_span_is_current_only_during_the_request(
+    instrument_no_content, span_exporter, vcr
+):
+    seen: list[int] = []
+
+    async def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    with vcr.use_cassette("test_async_chat_records_a_chat_span.yaml"):
+        await ollama.AsyncClient(
+            host=HOST, event_hooks={"request": [hook]}
+        ).chat(model=CHAT_MODEL, messages=MESSAGES)
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
