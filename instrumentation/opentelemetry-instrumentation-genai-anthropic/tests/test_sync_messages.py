@@ -4,6 +4,7 @@
 """Tests for sync Messages.create instrumentation."""
 # pylint: disable=too-many-lines
 
+import contextlib
 import inspect
 import json
 import os
@@ -406,6 +407,9 @@ class _FakeInvocation:
 
     def stop(self):
         self._stops.append(True)
+
+    def activate(self):
+        return contextlib.nullcontext()
 
 
 def _build_message():
