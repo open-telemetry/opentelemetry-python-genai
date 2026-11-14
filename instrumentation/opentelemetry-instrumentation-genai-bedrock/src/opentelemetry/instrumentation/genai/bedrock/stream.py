@@ -85,6 +85,89 @@ def _build_stream_parts(
     return parts
 
 
+_CONVERSE_EVENT_KEYS = frozenset(
+    (
+        "messageStart",
+        "contentBlockStart",
+        "contentBlockDelta",
+        "contentBlockStop",
+        "messageStop",
+        "metadata",
+    )
+)
+
+
+def _process_converse_event(
+    stream: _BedrockConverseStreamMixin | _BedrockInvokeModelStreamMixin,
+    chunk: dict[str, Any],
+) -> None:
+    if "messageStart" in chunk and "role" in chunk["messageStart"]:
+        stream._self_role = chunk["messageStart"]["role"]
+
+    if stream._self_capture_content and "contentBlockStart" in chunk:
+        cb_start = chunk["contentBlockStart"]
+        idx = cb_start.get("contentBlockIndex", 0)
+        if idx not in stream._self_all_block_indices:
+            stream._self_all_block_indices.append(idx)
+        start = cb_start.get("start", {})
+        if "toolUse" in start:
+            tool_use = start["toolUse"]
+            stream._self_tool_blocks[idx] = {
+                "toolUseId": tool_use.get("toolUseId"),
+                "name": tool_use.get("name", ""),
+                "input_chunks": [],
+            }
+
+    if stream._self_capture_content and "contentBlockDelta" in chunk:
+        cb_delta = chunk["contentBlockDelta"]
+        idx = cb_delta.get("contentBlockIndex", 0)
+        if idx not in stream._self_all_block_indices:
+            stream._self_all_block_indices.append(idx)
+        delta = cb_delta.get("delta", {})
+        if "text" in delta:
+            stream._self_text_blocks[idx] = (
+                stream._self_text_blocks.get(idx, "") + delta["text"]
+            )
+        elif "reasoningContent" in delta:
+            rc_delta = delta["reasoningContent"]
+            if _is_dict(rc_delta) and "text" in rc_delta:
+                stream._self_reasoning_blocks[idx] = (
+                    stream._self_reasoning_blocks.get(idx, "")
+                    + rc_delta["text"]
+                )
+        elif "toolUse" in delta:
+            tool_delta = delta["toolUse"]
+            input_str = tool_delta.get("input", "")
+            if idx not in stream._self_tool_blocks:
+                stream._self_tool_blocks[idx] = {
+                    "toolUseId": None,
+                    "name": "",
+                    "input_chunks": [],
+                }
+            stream._self_tool_blocks[idx]["input_chunks"].append(input_str)
+
+    if "messageStop" in chunk:
+        msg_stop = chunk["messageStop"]
+        if "stopReason" in msg_stop:
+            stream._self_stop_reason = msg_stop["stopReason"]
+
+    if "metadata" in chunk:
+        metadata = chunk["metadata"]
+        usage = metadata.get("usage", {})
+        if "inputTokens" in usage:
+            stream._self_input_tokens = _safe_int(usage["inputTokens"])
+        if "outputTokens" in usage:
+            stream._self_output_tokens = _safe_int(usage["outputTokens"])
+        if "cacheReadInputTokens" in usage:
+            stream._self_cache_read_input_tokens = _safe_int(
+                usage["cacheReadInputTokens"]
+            )
+        if "cacheWriteInputTokens" in usage:
+            stream._self_cache_creation_input_tokens = _safe_int(
+                usage["cacheWriteInputTokens"]
+            )
+
+
 class _BedrockConverseStreamMixin:
     _self_invocation: InferenceInvocation
     _self_capture_content: bool
@@ -119,71 +202,7 @@ class _BedrockConverseStreamMixin:
         self._self_all_block_indices = []
 
     def _process_chunk(self, chunk: dict[str, Any]) -> None:
-        if "messageStart" in chunk and "role" in chunk["messageStart"]:
-            self._self_role = chunk["messageStart"]["role"]
-
-        if self._self_capture_content and "contentBlockStart" in chunk:
-            cb_start = chunk["contentBlockStart"]
-            idx = cb_start.get("contentBlockIndex", 0)
-            if idx not in self._self_all_block_indices:
-                self._self_all_block_indices.append(idx)
-            start = cb_start.get("start", {})
-            if "toolUse" in start:
-                tool_use = start["toolUse"]
-                self._self_tool_blocks[idx] = {
-                    "toolUseId": tool_use.get("toolUseId"),
-                    "name": tool_use.get("name", ""),
-                    "input_chunks": [],
-                }
-
-        if self._self_capture_content and "contentBlockDelta" in chunk:
-            cb_delta = chunk["contentBlockDelta"]
-            idx = cb_delta.get("contentBlockIndex", 0)
-            if idx not in self._self_all_block_indices:
-                self._self_all_block_indices.append(idx)
-            delta = cb_delta.get("delta", {})
-            if "text" in delta:
-                self._self_text_blocks[idx] = (
-                    self._self_text_blocks.get(idx, "") + delta["text"]
-                )
-            elif "reasoningContent" in delta:
-                rc_delta = delta["reasoningContent"]
-                if _is_dict(rc_delta) and "text" in rc_delta:
-                    self._self_reasoning_blocks[idx] = (
-                        self._self_reasoning_blocks.get(idx, "")
-                        + rc_delta["text"]
-                    )
-            elif "toolUse" in delta:
-                tool_delta = delta["toolUse"]
-                input_str = tool_delta.get("input", "")
-                if idx not in self._self_tool_blocks:
-                    self._self_tool_blocks[idx] = {
-                        "toolUseId": None,
-                        "name": "",
-                        "input_chunks": [],
-                    }
-                self._self_tool_blocks[idx]["input_chunks"].append(input_str)
-
-        if "messageStop" in chunk:
-            msg_stop = chunk["messageStop"]
-            if "stopReason" in msg_stop:
-                self._self_stop_reason = msg_stop["stopReason"]
-
-        if "metadata" in chunk:
-            metadata = chunk["metadata"]
-            usage = metadata.get("usage", {})
-            if "inputTokens" in usage:
-                self._self_input_tokens = _safe_int(usage["inputTokens"])
-            if "outputTokens" in usage:
-                self._self_output_tokens = _safe_int(usage["outputTokens"])
-            if "cacheReadInputTokens" in usage:
-                self._self_cache_read_input_tokens = _safe_int(
-                    usage["cacheReadInputTokens"]
-                )
-            if "cacheWriteInputTokens" in usage:
-                self._self_cache_creation_input_tokens = _safe_int(
-                    usage["cacheWriteInputTokens"]
-                )
+        _process_converse_event(self, chunk)
 
     def _on_stream_end(self) -> None:
         finish_reason = map_finish_reason(self._self_stop_reason)
@@ -307,7 +326,6 @@ class _BedrockInvokeModelStreamMixin:
         if not _is_dict(chunk_data):
             return
 
-        # 1. Check amazon-bedrock-invocationMetrics
         metrics = chunk_data.get("amazon-bedrock-invocationMetrics")
         if _is_dict(metrics):
             if "inputTokenCount" in metrics:
@@ -317,8 +335,18 @@ class _BedrockInvokeModelStreamMixin:
                     metrics["outputTokenCount"]
                 )
 
-        # 2. Anthropic Messages format
         msg_type = chunk_data.get("type")
+        if msg_type is not None:
+            self._process_anthropic_event(msg_type, chunk_data)
+        elif _CONVERSE_EVENT_KEYS.intersection(chunk_data):
+            # Amazon Nova streams the Converse event shapes
+            _process_converse_event(self, chunk_data)
+        else:
+            self._process_legacy_stream_chunk(chunk_data)
+
+    def _process_anthropic_event(
+        self, msg_type: str, chunk_data: dict[str, Any]
+    ) -> None:
         if msg_type == "message_start":
             message = chunk_data.get("message", {})
             if _is_dict(message):
@@ -413,7 +441,8 @@ class _BedrockInvokeModelStreamMixin:
             if _is_dict(usage) and "output_tokens" in usage:
                 self._self_output_tokens = _safe_int(usage["output_tokens"])
 
-        # 3. Legacy Claude / Titan / Llama / Mistral / Cohere stream chunks
+    def _process_legacy_stream_chunk(self, chunk_data: dict[str, Any]) -> None:
+        # Legacy Claude / Titan / Llama / Mistral / Cohere stream chunks
         if "completion" in chunk_data and isinstance(
             chunk_data["completion"], str
         ):
@@ -452,11 +481,7 @@ class _BedrockInvokeModelStreamMixin:
                     out["stop_reason"], str
                 ):
                     self._self_stop_reason = out["stop_reason"]
-        elif (
-            "text" in chunk_data
-            and isinstance(chunk_data["text"], str)
-            and msg_type is None
-        ):
+        elif "text" in chunk_data and isinstance(chunk_data["text"], str):
             if self._self_capture_content:
                 self._self_accumulated_text.append(chunk_data["text"])
             if chunk_data.get("is_finished"):
