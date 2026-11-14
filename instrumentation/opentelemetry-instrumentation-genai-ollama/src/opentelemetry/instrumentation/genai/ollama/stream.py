@@ -88,7 +88,6 @@ class ChatStreamWrapper(_ChatStreamMixin, SyncStreamWrapper[Any]):
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
-        invocation.suspend()
         self._init_buffers(capture_content)
 
 
@@ -103,5 +102,4 @@ class AsyncChatStreamWrapper(_ChatStreamMixin, AsyncStreamWrapper[Any]):
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
-        invocation.suspend()
         self._init_buffers(capture_content)

@@ -11,6 +11,7 @@ import json
 import ollama
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -171,3 +172,28 @@ async def test_async_chat_stream_caller_error_in_async_with_is_recorded(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[error_attributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_async_chat_stream_span_is_not_current_between_reads(
+    instrument_no_content, span_exporter, vcr
+):
+    seen: list[int] = []
+
+    async def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    with vcr.use_cassette(
+        "test_async_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = await ollama.AsyncClient(
+            host=HOST, event_hooks={"request": [hook]}
+        ).chat(model=CHAT_MODEL, messages=MESSAGES, stream=True)
+        assert not trace.get_current_span().get_span_context().is_valid
+        await asyncio.create_task(anext(stream))
+        assert not trace.get_current_span().get_span_context().is_valid
+        async for _ in stream:
+            assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
