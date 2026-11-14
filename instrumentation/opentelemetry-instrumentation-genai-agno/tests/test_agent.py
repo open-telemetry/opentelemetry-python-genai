@@ -735,7 +735,7 @@ def test_content_to_text_structured_types() -> None:
     assert json.loads(content_to_text([MockV1Model("v1_list")])) == [
         {"key": "v1_list"}
     ]
-    assert content_to_text(MockV1Model) == str(MockV1Model)
+    assert content_to_text(MockV1Model) is None
 
 
 def test_set_invocation_output_pydantic_structured_content(

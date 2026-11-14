@@ -208,39 +208,6 @@ def test_async_held_agent_stream_does_not_parent_caller_work(telemetry):
     assert (agent.attributes or {})[ERROR_TYPE] == "_OTHER"
 
 
-def test_sync_stream_tells_exhaustion_from_early_close(telemetry):
-    drained = _AgentStream(
-        _chunks("a"), telemetry.handler.invoke_local_agent(agent_name="a")
-    )
-    list(drained)
-    closed = _AgentStream(
-        _chunks("a", "b"), telemetry.handler.invoke_local_agent(agent_name="b")
-    )
-    next(closed)
-    closed.close()
-
-    assert drained._self_exhausted is True
-    assert closed._self_exhausted is False
-
-
-def test_async_stream_tells_exhaustion_from_early_close(telemetry):
-    async def exercise() -> tuple[bool, bool]:
-        drained = _AsyncAgentStream(
-            _achunks("a"), telemetry.handler.invoke_local_agent(agent_name="a")
-        )
-        async for _ in drained:
-            pass
-        closed = _AsyncAgentStream(
-            _achunks("a", "b"),
-            telemetry.handler.invoke_local_agent(agent_name="b"),
-        )
-        await closed.__anext__()
-        await closed.aclose()
-        return drained._self_exhausted, closed._self_exhausted
-
-    assert asyncio.run(exercise()) == (True, False)
-
-
 @dataclass
 class _Answer:
     city: str
@@ -270,3 +237,22 @@ class _Unserializable:
 )
 def test_content_to_text(content, expected):
     assert content_to_text(content) == expected
+
+
+class _Credentials:
+    def __init__(self, user: str, api_key: str) -> None:
+        self.user = user
+        self._api_key = api_key
+
+    def __repr__(self) -> str:
+        return f"_Credentials(user={self.user!r}, api_key={self._api_key!r})"
+
+
+def test_content_to_text_drops_rejected_structured_content():
+    secret = "sk-test-secret"
+    credentials = _Credentials(user="u", api_key=secret)
+
+    # Non-string keys make the mapping unconvertible; its repr would expose
+    # the private credential.
+    assert content_to_text({1: credentials}) is None
+    assert content_to_text(credentials) == '{"user":"u"}'

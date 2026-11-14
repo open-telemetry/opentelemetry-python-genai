@@ -107,9 +107,6 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     """Finalize-once bookkeeping and telemetry hooks shared by both wrappers."""
 
     _self_finalized: bool
-    # True once iteration ran to the end; ``_on_stream_end`` also runs when the
-    # caller closes a partially read stream, and this tells the two apart.
-    _self_exhausted: bool
 
     def _execution_context(self) -> AbstractContextManager[None]:
         """Scope stream reads and cleanup, restoring context before returning a chunk.
@@ -199,7 +196,6 @@ class SyncStreamWrapper(
     ):
         super().__init__(stream)
         self._self_finalized = False
-        self._self_exhausted = False
         self._self_invocation = invocation
         if _records_stream_telemetry(invocation):
             setattr(invocation, "_request_stream", True)
@@ -283,7 +279,6 @@ class SyncStreamWrapper(
             try:
                 chunk = read()
             except StopIteration:
-                self._self_exhausted = True
                 self._finalize_success()
                 raise
             except BaseException as error:
@@ -333,7 +328,6 @@ class AsyncStreamWrapper(
     ):
         super().__init__(stream)
         self._self_finalized = False
-        self._self_exhausted = False
         self._self_invocation = invocation
         if _records_stream_telemetry(invocation):
             setattr(invocation, "_request_stream", True)
@@ -502,7 +496,6 @@ class AsyncStreamWrapper(
             try:
                 chunk = await read()
             except StopAsyncIteration:
-                self._self_exhausted = True
                 self._finalize_success()
                 raise
             except BaseException as error:

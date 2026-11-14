@@ -1165,18 +1165,19 @@ def test_workflow_stream_empty_session_id_not_set() -> None:
     assert invocation.conversation_id == "wf-sess-456"
 
 
-def test_agent_run_stream_records_finish_reasons(
+def test_agent_run_stream_completion_event_records_stop(
     instrument_agno,
     span_exporter,
 ) -> None:
+    from agno.agent import RunCompletedEvent, RunContentEvent
+
     agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
 
     def fake_stream(*args, **kwargs):
-        yield ModelResponse(content="done")
+        yield RunContentEvent(content="done")
+        yield RunCompletedEvent()
 
-    with patch(
-        "agno.models.base.Model.response_stream", side_effect=fake_stream
-    ):
+    with _patch_agent_stream(fake_stream):
         list(agent.run("hello", stream=True))
 
     (span,) = span_exporter.get_finished_spans()
@@ -1185,7 +1186,47 @@ def test_agent_run_stream_records_finish_reasons(
     ) == ("stop",)
 
 
-def test_agent_run_stream_error_records_error_finish_reason(
+def test_agent_run_stream_without_completion_event_has_no_finish_reason(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk 1"
+        yield "chunk 2"
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in (
+        span.attributes or {}
+    )
+
+
+def test_agent_run_stream_error_event_records_error(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    from agno.agent import RunErrorEvent
+
+    agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk 1"
+        yield RunErrorEvent(content="model failed")
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("error",)
+
+
+def test_agent_run_stream_exception_has_no_finish_reason(
     instrument_agno,
     span_exporter,
 ) -> None:
@@ -1202,9 +1243,10 @@ def test_agent_run_stream_error_records_error_finish_reason(
         list(agent.run("hello", stream=True))
 
     (span,) = span_exporter.get_finished_spans()
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ) == ("error",)
+    assert span.attributes.get("error.type") == "ConnectionError"
+    assert GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in (
+        span.attributes or {}
+    )
 
 
 def test_agent_run_stream_abandoned_does_not_parent_caller_work(

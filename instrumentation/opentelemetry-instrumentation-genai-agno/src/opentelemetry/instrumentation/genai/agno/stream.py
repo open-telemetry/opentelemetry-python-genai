@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
@@ -99,9 +99,6 @@ class _StreamOutput:
     _self_agent_invocation: AgentInvocation | WorkflowInvocation
     _self_output_parts: list[str]
 
-    if TYPE_CHECKING:
-        _self_exhausted: bool
-
     def _start(self, invocation: AgentInvocation | WorkflowInvocation) -> None:
         self._self_agent_invocation = invocation
         self._self_output_parts = []
@@ -185,20 +182,21 @@ class _AgentStreamMixin(_StreamOutput):
             if content is not None:
                 self._add_output(content)
 
-    def _set_finish_reason(self, reason: str) -> None:
-        if isinstance(self._self_agent_invocation, AgentInvocation):
-            self._self_agent_invocation.finish_reasons = [reason]
+    def _record_finish_reason(self) -> None:
+        # Only Agno's own completion and error events report a finish reason.
+        if self._self_finish_reason is not None and isinstance(
+            self._self_agent_invocation, AgentInvocation
+        ):
+            self._self_agent_invocation.finish_reasons = [
+                self._self_finish_reason
+            ]
 
     def _on_stream_end(self) -> None:
-        # A run the caller closed before it completed has no finish reason.
-        if self._self_finish_reason is not None:
-            self._set_finish_reason(self._self_finish_reason)
-        elif self._self_completed or self._self_exhausted:
-            self._set_finish_reason("stop")
+        self._record_finish_reason()
         super()._on_stream_end()
 
     def _on_stream_error(self, error: BaseException) -> None:
-        self._set_finish_reason("error")
+        self._record_finish_reason()
         super()._on_stream_error(error)
 
 

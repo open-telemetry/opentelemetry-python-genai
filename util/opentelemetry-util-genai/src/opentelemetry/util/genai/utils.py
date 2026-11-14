@@ -169,17 +169,17 @@ def object_to_any_value(value: object) -> AnyValue | None:
 def content_to_text(content: object) -> str | None:
     """Convert message content into text, serializing structured objects to JSON.
 
-    Strings are returned unchanged. Models, dataclasses and mappings are
-    converted with ``object_to_any_value`` and serialized to JSON; other
-    objects fall back to ``str()``. Returns None for ``None`` and for content
-    that cannot be converted, without raising.
+    Strings are returned unchanged. Other content is converted with
+    ``object_to_any_value``: scalars it renders as strings are returned as-is,
+    and structured values are serialized to JSON. Returns None for ``None`` and
+    for content ``object_to_any_value`` rejects, without raising.
     """
     if content is None or isinstance(content, str):
         return content
     try:
         any_value = object_to_any_value(content)
         if any_value is None:
-            return str(content)
+            return None
         if isinstance(any_value, str):
             return any_value
         return gen_ai_json_dumps(any_value, ensure_ascii=False)
