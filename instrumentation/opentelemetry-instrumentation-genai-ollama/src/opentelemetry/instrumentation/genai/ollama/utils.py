@@ -202,6 +202,7 @@ def create_chat_invocation(
         request_model=str(model) if model else None,
         server_address=address,
         server_port=port,
+        _attach_to_context=False,
     )
     _apply_options(invocation, kwargs.get("options"))
     if kwargs.get("format"):
@@ -272,6 +273,7 @@ def create_embed_invocation(
         request_model=str(model) if model else None,
         server_address=address,
         server_port=port,
+        _attach_to_context=False,
     )
     invocation.dimension_count = _as_int(_arg(args, kwargs, 5, "dimensions"))
     return invocation

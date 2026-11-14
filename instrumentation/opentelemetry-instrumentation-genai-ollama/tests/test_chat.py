@@ -193,6 +193,46 @@ def test_chat_stream_span_is_not_current_between_reads(
     assert len(span_exporter.get_finished_spans()) == 1
 
 
+def _current_span_ids() -> tuple[list[int], dict[str, Any]]:
+    seen: list[int] = []
+
+    def hook(_request: Any) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    return seen, {"event_hooks": {"request": [hook]}}
+
+
+def test_chat_span_is_current_only_during_the_request(
+    instrument_no_content, span_exporter, vcr
+):
+    seen, hooks = _current_span_ids()
+    with vcr.use_cassette("test_chat_records_a_chat_span.yaml"):
+        ollama.Client(host=HOST, **hooks).chat(
+            model=CHAT_MODEL, messages=MESSAGES
+        )
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+def test_chat_stream_request_runs_under_the_chat_span(
+    instrument_no_content, span_exporter, vcr
+):
+    seen, hooks = _current_span_ids()
+    with vcr.use_cassette(
+        "test_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = ollama.Client(host=HOST, **hooks).chat(
+            model=CHAT_MODEL, messages=MESSAGES, stream=True
+        )
+        for _ in stream:
+            assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
 def test_chat_stream_closed_after_caller_error_ends_span(
     instrument_no_content, span_exporter, vcr
 ):
