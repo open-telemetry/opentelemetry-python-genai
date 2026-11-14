@@ -8,11 +8,16 @@ OpenTelemetry Claude Agent SDK Instrumentation
 Instrumentation for the `Claude Agent SDK
 <https://github.com/anthropics/claude-agent-sdk-python>`_.
 
+Each ``query()`` stream becomes one ``invoke_agent`` span, and each tool call
+observed in that stream an ``execute_tool`` span. This is agent-level tracing:
+LLM requests the CLI makes internally are not reported here.
+
 Usage
 -----
 
 .. code-block:: python
 
+    import claude_agent_sdk
     from opentelemetry.instrumentation.genai.claude_agent_sdk import (
         ClaudeAgentSDKInstrumentor,
     )
@@ -21,10 +26,11 @@ Usage
         AgentDefinition,
         AssistantMessage,
         TextBlock,
-        query,
     )
 
-    # Enable instrumentation
+    # Enable instrumentation. Do this before taking a reference to query():
+    # the function is patched as a module attribute, so ``from claude_agent_sdk
+    # import query`` evaluated first would keep the uninstrumented function.
     ClaudeAgentSDKInstrumentor().instrument()
 
     # Use Claude Agent SDK normally
@@ -43,7 +49,9 @@ Usage
             },
         )
 
-        async for message in query(prompt="Hello!", options=options):
+        async for message in claude_agent_sdk.query(
+            prompt="Hello!", options=options
+        ):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
@@ -116,11 +124,15 @@ class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
             instrumentation_scope_version=__version__,
         )
 
-        # Patching will be added in a follow-up PR
+        from opentelemetry.instrumentation.genai.claude_agent_sdk import patch
+
+        patch.instrument(self._handler)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Claude Agent SDK instrumentation.
 
         This removes all patches applied during instrumentation.
         """
-        # Unpatching will be added in a follow-up PR
+        from opentelemetry.instrumentation.genai.claude_agent_sdk import patch
+
+        patch.uninstrument()
