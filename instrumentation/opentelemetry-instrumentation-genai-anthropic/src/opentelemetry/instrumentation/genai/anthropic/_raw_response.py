@@ -8,7 +8,8 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 try:
@@ -17,6 +18,8 @@ except ImportError:
     import httpx as _http_lib
 from anthropic._models import construct_type
 from anthropic.types import Message as AnthropicMessage
+
+from opentelemetry.context import attach, detach
 
 from .utils import (
     AnthropicBetaMessage,
@@ -48,6 +51,18 @@ else:
     from wrapt import ObjectProxy as _ObjectProxy
 
 _logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _current(invocation: InferenceInvocation) -> Iterator[None]:
+    # Unlike ``activate()``, an error here does not fail the invocation: the
+    # read and close fallbacks decide how the span ends.
+    token = attach(invocation.context)
+    try:
+        yield
+    finally:
+        detach(token)
+
 
 # Distinguishes "a body read owns finalization, stand down" from "no stream
 # wrapper to finalize", which are both falsy but call for opposite handling.
@@ -146,7 +161,8 @@ class RawResponseProxy(_ObjectProxy):
         def _read(*args: object, **kwargs: object) -> Any:
             self._self_reading = True
             try:
-                content = original(*args, **kwargs)
+                with _current(self._self_invocation):
+                    content = original(*args, **kwargs)
             finally:
                 self._self_reading = False
             self._finalize_read_fallback()
@@ -161,7 +177,8 @@ class RawResponseProxy(_ObjectProxy):
         async def _aread(*args: object, **kwargs: object) -> Any:
             self._self_reading = True
             try:
-                content = await original(*args, **kwargs)
+                with _current(self._self_invocation):
+                    content = await original(*args, **kwargs)
             finally:
                 self._self_reading = False
             self._finalize_read_fallback()
@@ -198,7 +215,8 @@ class RawResponseProxy(_ObjectProxy):
         @functools.wraps(original)
         def _close(*args: object, **kwargs: object) -> object:
             try:
-                return original(*args, **kwargs)
+                with _current(self._self_invocation):
+                    return original(*args, **kwargs)
             finally:
                 self._finalize_close_fallback()
 
@@ -210,7 +228,8 @@ class RawResponseProxy(_ObjectProxy):
         @functools.wraps(original)
         async def _aclose(*args: object, **kwargs: object) -> object:
             try:
-                return await original(*args, **kwargs)
+                with _current(self._self_invocation):
+                    return await original(*args, **kwargs)
             finally:
                 await self._afinalize_close_fallback()
 

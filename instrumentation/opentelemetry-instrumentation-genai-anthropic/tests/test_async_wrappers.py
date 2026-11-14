@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,7 @@ def _make_invocation():
         stop=lambda: None,
         fail=lambda error: None,
         _on_stream_chunk=lambda chunk_at: None,
+        activate=nullcontext,
     )
 
 
