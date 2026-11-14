@@ -1,0 +1,1 @@
+Invocations created with ``_attach_to_context=False`` are made current by ``with invocation:``, ``invocation.activate()``, and stream wrappers around each read and close.
