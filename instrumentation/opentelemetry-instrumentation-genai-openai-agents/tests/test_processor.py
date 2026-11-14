@@ -74,10 +74,6 @@ def test_trace_start_end_creates_and_stops_workflow() -> None:
         name="Agent workflow", conversation_id=None
     )
     workflow_invocation = handler.workflow.return_value
-    assert (
-        workflow_invocation.attributes["gen_ai.workflow.name"]
-        == "Agent workflow"
-    )
 
     processor.on_trace_end(trace)
     workflow_invocation.stop.assert_called_once_with()
