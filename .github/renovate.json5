@@ -8,8 +8,13 @@
   // to quarantine compromised releases (e.g. LiteLLM v1.107.0).
   "minimumReleaseAge": "3 days",
   // requirements.oldest.txt pins exist to test against the oldest
-  // supported versions and must not be auto-updated.
-  "ignorePaths": ["**/requirements.oldest.txt"],
+  // supported versions and must not be auto-updated. The openai
+  // requirements.v1.txt pins the last 1.x release before `custom_tool_call`
+  // types (1.99.2).
+  "ignorePaths": [
+    "**/requirements.oldest.txt",
+    "instrumentation/opentelemetry-instrumentation-genai-openai/tests/requirements.v1.txt"
+  ],
   "pip_requirements": {
     // Default pip_requirements fileMatch only allows [\w-]* between
     // "requirements" and ".txt", so per-instrumentation
