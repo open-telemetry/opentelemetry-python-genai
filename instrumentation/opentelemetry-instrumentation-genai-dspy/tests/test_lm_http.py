@@ -16,9 +16,6 @@ from typing import Any
 
 import dspy
 import pytest
-
-pytest.importorskip("genai_mock_server")
-
 from dspy.utils.exceptions import LMInvalidRequestError
 from genai_mock_server import app
 from werkzeug.serving import make_server
