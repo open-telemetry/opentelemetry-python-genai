@@ -1,0 +1,1 @@
+Keep the ``invoke_agent`` span out of the caller's context while an ``Agent.run()`` stream is held unconsumed.

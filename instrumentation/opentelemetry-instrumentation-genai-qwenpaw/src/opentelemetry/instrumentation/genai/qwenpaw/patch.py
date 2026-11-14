@@ -35,9 +35,8 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
         stream: AsyncGenerator[object, None],
         invocation: LocalAgentInvocation,
     ) -> None:
-        super().__init__(stream)
-        # INTERNAL agent invocations must not opt into the base wrapper's
-        # streamed inference timing metrics or gen_ai.request.stream handling.
+        super().__init__(stream, invocation)
+        invocation.suspend()
         self._self_agent_invocation = invocation
         self._self_output_complete = False
         self._self_output_message: OutputMessage | None = None

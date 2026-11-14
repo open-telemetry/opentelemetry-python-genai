@@ -1,0 +1,1 @@
+Close an abandoned streamed run's generator even after its final answer ended the span, and end the span when recording the final answer fails.

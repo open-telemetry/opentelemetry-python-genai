@@ -470,3 +470,38 @@ async def test_uninstrument_restores_query_handler(
 
     assert len(items) == 1
     assert span_exporter.get_finished_spans() == ()
+
+
+@pytest.mark.asyncio
+async def test_held_stream_does_not_parent_caller_work(
+    instrument_no_content, runner_module, span_exporter, tracer_provider
+) -> None:
+    async def multi_chunk(
+        request: object, msgs: object, runner: object
+    ) -> AsyncIterator[tuple[object, bool]]:
+        del request, msgs, runner
+        for i in range(3):
+            yield assistant_reply(f"chunk-{i}"), i == 2
+
+    runner = runner_module.AgentRunner(agent_id="entry-agent")
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("parent") as parent:
+        with patched_command_path(runner_module, multi_chunk):
+            stream = runner.query_handler(user_command_msgs(), make_request())
+            async for _ in stream:
+                break
+            # The caller still holds the partially read stream.
+            assert get_current_span() is parent
+            with tracer.start_as_current_span("caller-work") as caller_work:
+                pass
+            del stream
+            gc.collect()
+            await asyncio.sleep(0)
+
+    spans = span_exporter.get_finished_spans()
+    caller_span = next(
+        span
+        for span in spans
+        if span.context == caller_work.get_span_context()
+    )
+    assert caller_span.parent == parent.get_span_context()

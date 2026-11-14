@@ -16,6 +16,7 @@ from qwen_agent.llm import base as qwen_llm_base
 from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
 from qwen_agent.tools.base import BaseTool, register_tool
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.qwen_agent.utils import (
     convert_to_input_messages,
 )
@@ -562,3 +563,49 @@ def test_agent_run_with_user_list_messages(
     assert output_data[0]["parts"] == [
         {"content": "Answer from UserList", "type": "text"}
     ]
+
+
+def test_agent_run_held_stream_does_not_parent_caller_work(
+    span_exporter, instrument_no_content, tracer_provider
+):
+    """Caller work done while holding a partly read run is not nested under it."""
+    agent = _StubAgent.create(name="HeldBot", llm=_StubLLM())
+    tracer = tracer_provider.get_tracer(__name__)
+    inside = []
+
+    def fake_run(messages, **kwargs):
+        inside.append(trace.get_current_span())
+        yield [Message(role="assistant", content="chunk 1")]
+        yield [Message(role="assistant", content="chunk 2")]
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        run_iter = agent.run([Message(role="user", content="Go")])
+        next(run_iter)
+        with tracer.start_as_current_span("caller-work"):
+            pass
+        list(run_iter)
+
+    (agent_span,) = _spans_named(span_exporter, "invoke_agent HeldBot")
+    (caller_span,) = _spans_named(span_exporter, "caller-work")
+    assert caller_span.parent is None
+    assert inside[0].get_span_context() == agent_span.get_span_context()
+
+
+def test_agent_run_skips_output_conversion_without_content_capture(
+    span_exporter, instrument_no_content
+):
+    agent = _StubAgent.create(name="NoContentBot", llm=_StubLLM())
+
+    def fake_run(messages, **kwargs):
+        yield [Message(role="assistant", content="Done!")]
+
+    with (
+        patch.object(_StubAgent, "_run", side_effect=fake_run),
+        patch(
+            "opentelemetry.instrumentation.genai.qwen_agent.patch.convert_to_final_output_messages"
+        ) as convert,
+    ):
+        list(agent.run([Message(role="user", content="Go")]))
+
+    convert.assert_not_called()
+    assert len(_spans_named(span_exporter, "invoke_agent NoContentBot")) == 1
