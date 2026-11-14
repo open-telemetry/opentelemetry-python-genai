@@ -658,7 +658,10 @@ async def test_react_agent_malformed_response_reaches_max_iterations(
 
     with vcr.use_cassette("react_malformed.yaml"):
         with pytest.raises(WorkflowRuntimeError, match="Max iterations of 1"):
-            await agent.run(user_msg="What is two plus two?", max_iterations=1)
+            await agent.run(
+                user_msg="Reply with only the single word 'hello' and nothing else (do not include Thought: or Answer:).",
+                max_iterations=1,
+            )
 
     span = _spans_named(span_exporter, "invoke_agent malformed-react-agent")[0]
     assert span.status.status_code == StatusCode.ERROR

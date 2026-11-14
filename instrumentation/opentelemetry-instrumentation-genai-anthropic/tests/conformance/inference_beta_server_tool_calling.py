@@ -38,31 +38,38 @@ class InferenceBetaServerToolCallingScenario(Scenario):
             if attribute["name"] == "gen_ai.output.messages"
         ]
         assert len(output_messages) == 1
-        expected_parts = [
-            {
-                "name": "web_search",
-                "server_tool_call": {
-                    "input": {"query": "OpenTelemetry"},
-                    "type": "web_search",
-                },
-                "id": "srvtoolu_01",
-                "type": "server_tool_call",
-            },
-            {
-                "server_tool_call_response": {
-                    "content": {
-                        "type": "web_search_tool_result_error",
-                        "error_code": "unavailable",
-                    },
-                    "type": "web_search",
-                },
-                "id": "srvtoolu_01",
-                "type": "server_tool_call_response",
-            },
+        parts = output_messages[0][0]["parts"]
+        calls = [p for p in parts if p["type"] == "server_tool_call"]
+        responses = [
+            p for p in parts if p["type"] == "server_tool_call_response"
         ]
-        assert output_messages[0][0]["parts"][:2] == expected_parts, (
-            output_messages[0][0]["parts"][:2]
+        assert len(calls) == 1
+        assert calls[0] == {
+            "type": "server_tool_call",
+            "id": "srvtoolu_01PKGW51KPFgUP7K4kSeMtPw",
+            "name": "web_search",
+            "server_tool_call": {
+                "type": "web_search",
+                "input": {"query": "OpenTelemetry"},
+            },
+        }
+        assert len(responses) == 1
+        assert responses[0]["id"] == "srvtoolu_01PKGW51KPFgUP7K4kSeMtPw"
+        assert (
+            responses[0]["server_tool_call_response"]["type"] == "web_search"
         )
+        results = responses[0]["server_tool_call_response"]["content"]
+        assert isinstance(results, list)
+        assert len(results) == 10
+        assert all(r["type"] == "web_search_result" for r in results)
+        assert results[0]["title"] == "What is OpenTelemetry?"
+        assert (
+            results[0]["url"]
+            == "https://cloud.google.com/learn/what-is-opentelemetry"
+        )
+        assert results[0]["page_age"] == "2166 days ago"
+        assert isinstance(results[0]["encrypted_content"], str)
+        assert results[0]["encrypted_content"]
 
     def run(
         self,
@@ -89,7 +96,7 @@ class InferenceBetaServerToolCallingScenario(Scenario):
                     "inference_beta_server_tool_calling_conformance.yaml"
                 ):
                     Anthropic().beta.messages.create(
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5-5",
                         max_tokens=256,
                         messages=[
                             {

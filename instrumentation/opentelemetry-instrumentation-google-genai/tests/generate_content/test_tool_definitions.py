@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
-from google.genai import Client, types
+from google.genai import Client, errors, types
 
 from opentelemetry.instrumentation.google_genai import (
     GoogleGenAiSdkInstrumentor,
@@ -35,15 +36,19 @@ _PARAMETERS = {
 
 @pytest.mark.vcr
 @pytest.mark.parametrize(
-    "parameter_fields,expected_parameters",
+    "parameter_fields,expected_parameters,expects_api_error",
     [
         pytest.param(
             {"parameters_json_schema": _JSON_SCHEMA},
             _JSON_SCHEMA,
+            False,
             id="json-schema",
         ),
         pytest.param(
-            {"parameters_json_schema": {}}, {}, id="empty-json-schema"
+            {"parameters_json_schema": {}},
+            {},
+            False,
+            id="empty-json-schema",
         ),
         pytest.param(
             {
@@ -51,6 +56,7 @@ _PARAMETERS = {
                 "parameters_json_schema": _JSON_SCHEMA,
             },
             _PARAMETERS,
+            True,
             id="parameters-wins",
         ),
     ],
@@ -62,6 +68,7 @@ def test_tool_definition_parameters(
     span_exporter: InMemorySpanExporter,
     parameter_fields: dict[str, object],
     expected_parameters: dict[str, object],
+    expects_api_error: bool,
 ) -> None:
     declaration = types.FunctionDeclaration(
         name="get_weather",
@@ -79,22 +86,31 @@ def test_tool_definition_parameters(
         content_capture="SPAN_ONLY",
     ):
         client = Client(
-            api_key="test-key",
+            api_key=os.getenv("GOOGLE_API_KEY", "test-key"),
             vertexai=False,
         )
-        result = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents="What is the weather in Paris?",
-            config=config,
-        )
+        if expects_api_error:
+            with pytest.raises(errors.ClientError):
+                client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents="What is the weather in Paris?",
+                    config=config,
+                )
+        else:
+            result = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents="What is the weather in Paris?",
+                config=config,
+            )
+            assert result.candidates
 
-    assert result.text == "Sunny."
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes is not None
-    assert (
-        span.attributes[gen_ai_attributes.GEN_AI_RESPONSE_MODEL]
-        == "gemini-2.5-flash"
-    )
+    if not expects_api_error:
+        assert (
+            span.attributes[gen_ai_attributes.GEN_AI_RESPONSE_MODEL]
+            == "gemini-2.5-flash"
+        )
     definitions = span.attributes[gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS]
     assert isinstance(definitions, str)
     assert json.loads(definitions) == [

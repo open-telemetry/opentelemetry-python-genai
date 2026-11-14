@@ -1,0 +1,57 @@
+interactions:
+- request:
+    body: |-
+      {
+        "prompt": "Say this is a test",
+        "max_gen_len": 10,
+        "temperature": 0.8,
+        "top_p": 0.9
+      }
+    headers:
+      Content-Length:
+      - '85'
+      User-Agent:
+      - !!binary |
+        Qm90bzMvMS40My4xMjMgbWQvQm90b2NvcmUjMS40My4xMjMgdWEvMi4xIG9zL2xpbnV4IzcuMS42
+        LTFyb2RldGUxLWFtZDY0IG1kL2FyY2gjeDg2XzY0IGxhbmcvcHl0aG9uIzMuMTQuMyBtZC9weWlt
+        cGwjQ1B5dGhvbiBtL24sYixELFogY2ZnL3JldHJ5LW1vZGUjbGVnYWN5IEJvdG9jb3JlLzEuNDMu
+        MTIz
+      X-Amz-Date:
+      - !!binary |
+        MjAyNjExMDlUMjIwNDM2Wg==
+      amz-sdk-invocation-id:
+      - !!binary |
+        YTZhYjRhNTgtNDE2YS00YTJkLWI5YzYtNWY5Mjc3ZjcyMmI0
+      amz-sdk-request:
+      - !!binary |
+        YXR0ZW1wdD0x
+      authorization:
+      - Bearer test_aws_authorization
+    method: POST
+    uri: https://bedrock-runtime.us-east-1.amazonaws.com/model/meta.llama3-8b-instruct-v1%3A0/invoke
+  response:
+    body:
+      string: |-
+        {
+          "generation": " of the best way to finish a novel.\nThe",
+          "prompt_token_count": 5,
+          "generation_token_count": 10,
+          "stop_reason": "length"
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Mon, 09 Nov 2026 22:04:37 GMT
+      X-Amzn-Bedrock-Input-Token-Count:
+      - '5'
+      X-Amzn-Bedrock-Invocation-Latency:
+      - '345'
+      X-Amzn-Bedrock-Output-Token-Count:
+      - '10'
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -51,7 +51,7 @@ class ToolCallingScenario(Scenario):
             ):
                 with vcr.use_cassette("tool_calling_conformance.yaml"):
                     Anthropic().messages.create(
-                        model="claude-sonnet-4-20250514",
+                        model="claude-sonnet-5-5",
                         max_tokens=256,
                         messages=[
                             {
@@ -70,5 +70,4 @@ class ToolCallingScenario(Scenario):
                                 },
                             }
                         ],
-                        tool_choice={"type": "tool", "name": "get_weather"},
                     )

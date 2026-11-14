@@ -9,11 +9,7 @@ interactions:
             "content": "What is the weather in SF?"
           }
         ],
-        "model": "claude-sonnet-4-6",
-        "tool_choice": {
-          "type": "tool",
-          "name": "get_weather"
-        },
+        "model": "claude-sonnet-5-5",
         "tools": [
           {
             "name": "get_weather",
@@ -42,25 +38,25 @@ interactions:
       connection:
       - keep-alive
       content-length:
-      - '327'
+      - '276'
       content-type:
       - application/json
       host:
       - api.anthropic.com
       user-agent:
-      - Anthropic/Python 1.7.0
+      - Anthropic/Python 1.17.0
       x-api-key:
       - test_anthropic_api_key
       x-stainless-arch:
-      - arm64
+      - x64
       x-stainless-async:
       - 'false'
       x-stainless-lang:
       - python
       x-stainless-os:
-      - MacOS
+      - Linux
       x-stainless-package-version:
-      - 1.7.0
+      - 1.17.0
       x-stainless-read-timeout:
       - '600'
       x-stainless-retry-count:
@@ -68,23 +64,23 @@ interactions:
       x-stainless-runtime:
       - CPython
       x-stainless-runtime-version:
-      - 3.14.6
+      - 3.14.3
       x-stainless-timeout:
       - '600'
     method: POST
-    uri: https://api.anthropic.com/v1/messages?beta=true
+    uri: https://api.anthropic.com/v1/messages
   response:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-6",
-          "id": "msg_011CfLovEozeW7B6vGLqRb7T",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011Cgwinj97creVKgtpAWYJf",
           "type": "message",
           "role": "assistant",
           "content": [
             {
               "type": "tool_use",
-              "id": "toolu_01MaGNMRY1hoB34nBTCPD2rx",
+              "id": "toolu_01KxCn7TWECDPTFAuwN3uJ2S",
               "name": "get_weather",
               "input": {
                 "city": "San Francisco"
@@ -99,17 +95,22 @@ interactions:
           "stop_sequence": null,
           "stop_details": null,
           "usage": {
-            "input_tokens": 660,
+            "input_tokens": 371,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
               "ephemeral_5m_input_tokens": 0,
               "ephemeral_1h_input_tokens": 0
             },
-            "output_tokens": 34,
+            "output_tokens": 52,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
             "service_tier": "standard",
-            "inference_geo": "global"
-          }
+            "inference_geo": "global",
+            "speed": "standard"
+          },
+          "diagnostics": null
         }
     headers:
       anthropic-ratelimit-input-tokens-limit:
@@ -117,47 +118,49 @@ interactions:
       anthropic-ratelimit-input-tokens-remaining:
       - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-09-23T18:01:59Z'
+      - '2026-11-11T19:49:58Z'
       anthropic-ratelimit-output-tokens-limit:
       - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
       - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-09-23T18:01:59Z'
+      - '2026-11-11T19:49:58Z'
       anthropic-ratelimit-requests-limit:
-      - '10000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '9999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-09-23T18:01:58Z'
+      - '2026-11-11T19:49:58Z'
       anthropic-ratelimit-tokens-limit:
       - '12000000'
       anthropic-ratelimit-tokens-remaining:
       - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-09-23T18:01:59Z'
+      - '2026-11-11T19:49:58Z'
       cf-cache-status:
       - DYNAMIC
       cf-ray:
-      - a3fb752cee4170a4-EWR
+      - a58fd2bcddf8c93c-IAD
       connection:
       - keep-alive
       content-length:
-      - '573'
+      - '657'
       content-security-policy:
       - default-src 'none'; frame-ancestors 'none'
       content-type:
       - application/json
       date:
-      - Wed, 23 Sep 2026 18:01:59 GMT
+      - Wed, 11 Nov 2026 19:49:58 GMT
       request-id:
-      - req_011CfLovEKxu4Uyqijm1uVTZ
+      - req_011Cgwinie7QVx2boCeU3KqU
       server:
       - cloudflare
+      server-timing:
+      - x-originResponse;dur=947
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
-      - 00-a44e45426b7a3a8766a404da92b8fd9e-a9e01dc9b7c34660-01
+      - 00-e733c0864e736bff1c85bfd48a9c6a04-4173bdb3abd7ae1d-01
       transfer-encoding:
       - chunked
       vary:

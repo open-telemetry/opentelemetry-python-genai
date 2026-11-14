@@ -1,9 +1,29 @@
 interactions:
 - request:
-    body: '{"contents": [{"parts": [{"text": "What is the capital of France?"}], "role":
-      "user"}], "systemInstruction": {"parts": [{"text": "You are a helpful assistant!"}]},
-      "generationConfig": {"temperature": 0.7, "candidateCount":
-      1}}'
+    body: |-
+      {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "What is the capital of France?"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "candidateCount": 1,
+          "temperature": 0.7
+        },
+        "systemInstruction": {
+          "parts": [
+            {
+              "text": "You are a helpful assistant!"
+            }
+          ]
+        }
+      }
     headers:
       Accept:
       - '*/*'
@@ -11,21 +31,83 @@ interactions:
       - gzip, deflate, zstd
       Connection:
       - keep-alive
+      Content-Length:
+      - '344'
       Content-Type:
       - application/json
       User-Agent:
-      - python-httpx/0.28.1
+      - python-requests/2.34.2
+      x-goog-api-client:
+      - langchain-google-genai/2.1.12-ChatGoogleGenerativeAI:models/gemini-2.5-flash
+        gl-python/3.14.3 grpc/1.85.1 gax/2.44.0 gccl/2.1.12-ChatGoogleGenerativeAI:models/gemini-2.5-flash
+      x-goog-api-key:
+      - test_key
+      x-goog-request-params:
+      - model=models/gemini-2.5-flash
     method: POST
-    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?%24alt=json%3Benum-encoding%3Dint
   response:
     body:
-      string: '{"candidates": [{"content": {"parts": [{"text": "The capital of France
-        is **Paris**."}], "role": "model"}, "finishReason": "STOP", "index": 0}],
-        "usageMetadata": {"promptTokenCount": 15, "candidatesTokenCount": 10, "totalTokenCount":
-        25}, "modelVersion": "gemini-2.5-pro"}'
+      string: |-
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "The capital of France is Paris."
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": 1,
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 14,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 44,
+            "promptTokensDetails": [
+              {
+                "modality": 1,
+                "tokenCount": 14
+              }
+            ],
+            "thoughtsTokenCount": 23,
+            "serviceTier": 1
+          },
+          "modelVersion": "gemini-2.5-flash",
+          "responseId": "bzPyatmoM4WvxdIPkuGyuAk"
+        }
     headers:
       Content-Type:
       - application/json; charset=UTF-8
+      Date:
+      - Mon, 09 Nov 2026 20:56:16 GMT
+      Server:
+      - scaffolding on HTTPServer2
+      Server-Timing:
+      - gfet4t7; dur=710
+      Set-Cookie: test_set_cookie
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Origin
+      - X-Origin
+      - Referer
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - SAMEORIGIN
+      X-Gemini-Service-Tier:
+      - standard
+      X-XSS-Protection:
+      - '0'
+      content-length:
+      - '584'
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
     status:
       code: 200
       message: OK

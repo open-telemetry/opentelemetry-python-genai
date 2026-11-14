@@ -102,7 +102,10 @@ class AgentScenario(Scenario):
             asyncio.run(run_agent(react_agent, "What is two plus two?"))
 
             with patch.dict(
-                os.environ, {"OPENAI_API_KEY": "test_openai_api_key"}
+                os.environ,
+                {}
+                if os.getenv("OPENAI_API_KEY")
+                else {"OPENAI_API_KEY": "test_openai_api_key"},
             ):
                 provider_agent = FunctionAgent(
                     name="provider-agent",

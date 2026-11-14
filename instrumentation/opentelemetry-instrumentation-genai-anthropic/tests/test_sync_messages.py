@@ -198,7 +198,7 @@ _STREAM_SSE_BODY = b"".join(
                     "id": "msg_generator",
                     "type": "message",
                     "role": "assistant",
-                    "model": "claude-sonnet-4-20250514",
+                    "model": "claude-sonnet-5-5",
                     "content": [],
                     "stop_reason": None,
                     "stop_sequence": None,
@@ -266,7 +266,7 @@ def test_sync_messages_create_basic(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test basic sync message creation produces correct span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     response = anthropic_client.messages.create(
@@ -301,7 +301,7 @@ def test_sync_messages_create_with_raw_response(
     ``AttributeError`` into the caller *after* the API call had already
     succeeded. The raw response must be returned to the caller untouched.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     raw_response = anthropic_client.messages.with_raw_response.create(
@@ -334,7 +334,7 @@ def test_sync_messages_raw_response_is_transparent(
 ):
     """The proxy must be indistinguishable from the SDK's raw response."""
     raw_response = anthropic_client.messages.with_raw_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     )
@@ -350,7 +350,7 @@ def test_sync_messages_streaming_response_is_transparent(
 ):
     """The streaming proxy must also keep the SDK's type and its parsed stream."""
     context_manager = anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -375,7 +375,7 @@ def test_sync_messages_with_raw_response_never_parsed(
     span_exporter, anthropic_client, instrument_no_content
 ):
     raw_response = anthropic_client.messages.with_raw_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     )
@@ -486,7 +486,7 @@ def test_sync_messages_create_captures_content(
     span_exporter, anthropic_client, instrument_with_content
 ):
     """Test content capture on non-streaming create."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     anthropic_client.messages.create(
@@ -522,7 +522,7 @@ def test_sync_messages_create_captures_multimodal_content(
         "test_sync_messages_create_captures_multimodal_content.yaml"
     ):
         anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[multimodal_input_message()],
         )
@@ -550,7 +550,7 @@ def test_sync_messages_create_preserves_generator_document_content(
                 "id": "msg_generator_content",
                 "type": "message",
                 "role": "assistant",
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-5-5",
                 "content": [{"type": "text", "text": "Received."}],
                 "stop_reason": "end_turn",
                 "stop_sequence": None,
@@ -566,7 +566,7 @@ def test_sync_messages_create_preserves_generator_document_content(
     with httpx.Client(transport=transport) as http_client:
         client = Anthropic(http_client=http_client)
         client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[
                 {
@@ -604,7 +604,7 @@ def test_sync_messages_create_with_all_params(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test message creation with all optional parameters."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-haiku-4-5"
     messages = [{"role": "user", "content": "Say hello."}]
 
     kwargs = {
@@ -613,7 +613,7 @@ def test_sync_messages_create_with_all_params(
         "messages": messages,
         "stop_sequences": ["STOP"],
     }
-    sampling_params = {"temperature": 0.7, "top_p": 0.9, "top_k": 40}
+    sampling_params = {"temperature": 0.7, "top_k": 40}
     if "temperature" in _create_params:
         kwargs.update(sampling_params)
     else:
@@ -626,7 +626,6 @@ def test_sync_messages_create_with_all_params(
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
     # OpenTelemetry converts lists to tuples when storing as attributes
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
@@ -639,7 +638,7 @@ def test_sync_messages_create_token_usage(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test that token usage is captured correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Count to 5."}]
 
     response = anthropic_client.messages.create(
@@ -668,7 +667,7 @@ def test_sync_messages_create_stop_reason(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test that stop reason is captured as finish_reasons array."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hi."}]
 
     response = anthropic_client.messages.create(
@@ -691,7 +690,7 @@ def test_sync_messages_create_connection_error(
     span_exporter, instrument_no_content
 ):
     """Test that connection errors are handled correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Hello"}]
 
     # Create client with invalid endpoint
@@ -731,7 +730,7 @@ def test_sync_messages_create_malformed_request_reaches_the_client(
     # sees them; these shapes made that extraction raise.
     with pytest.raises(APIConnectionError):
         client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             timeout=0.1,
             **kwargs,
@@ -796,7 +795,7 @@ def test_sync_streaming_response_type_survives_instrumentation_round_trip(
 
     def create_context_manager():
         return client.messages.with_streaming_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Hello"}],
             stream=True,
@@ -857,7 +856,7 @@ def test_sync_messages_create_streaming(  # pylint: disable=too-many-locals
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test streaming message creation produces correct span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     # Collect response data from stream
@@ -917,7 +916,7 @@ def test_sync_messages_create_streaming_captures_content(
     span_exporter, anthropic_client, instrument_with_content
 ):
     """Test content capture on create(stream=True)."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.messages.create(
@@ -961,7 +960,7 @@ def test_sync_messages_stream_records_tool_definitions(
     come from the request, so the recorded response does not matter.
     """
     with anthropic_client.messages.stream(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         tools=[_WEATHER_TOOL],
@@ -984,7 +983,7 @@ def test_sync_messages_create_streaming_captures_multimodal_content(
         "test_sync_messages_create_streaming_captures_multimodal_content.yaml"
     ):
         with anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[multimodal_input_message()],
             stream=True,
@@ -1003,7 +1002,7 @@ def test_sync_messages_stream(  # pylint: disable=too-many-locals
 ):
     """Test Messages.stream produces correct span."""
     _skip_if_cassette_missing_and_no_real_key(request)
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     response_id = None
@@ -1056,7 +1055,7 @@ def test_sync_messages_stream_captures_content(
 ):
     """Test content capture on Messages.stream."""
     _skip_if_cassette_missing_and_no_real_key(request)
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.messages.stream(
@@ -1093,7 +1092,7 @@ def test_sync_messages_stream_delegates_response_attribute(
     _skip_if_cassette_missing_and_no_real_key(request)
 
     with anthropic_client.messages.stream(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hi."}],
     ) as stream:
@@ -1106,7 +1105,7 @@ def test_sync_messages_stream_connection_error(
     span_exporter, instrument_no_content
 ):
     """Test that connection errors from Messages.stream are handled correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Hello"}]
 
     client = Anthropic(base_url="http://localhost:9999")
@@ -1173,7 +1172,7 @@ def test_sync_messages_stream_interrupted_mid_iteration(
         if capture_content
         else "instrument_no_content"
     )
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
     error = ConnectionError("connection reset during stream")
 
@@ -1224,7 +1223,7 @@ def test_sync_messages_stream_interrupted_mid_iteration(
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
     )
     if fail_after:
-        assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+        assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
         assert isinstance(
             span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
         )
@@ -1253,7 +1252,7 @@ def test_sync_messages_stream_closed_early_by_caller(
 ):
     """Caller-closing Messages.stream early finalizes the span without error."""
     _skip_if_cassette_missing_and_no_real_key(request)
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.messages.stream(
@@ -1276,7 +1275,7 @@ def test_sync_messages_create_streaming_iteration(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test streaming with direct iteration (without context manager)."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hi."}]
 
     stream = anthropic_client.messages.create(
@@ -1308,7 +1307,7 @@ def test_sync_messages_create_streaming_delegates_response_attribute(
     _skip_if_cassette_missing_and_no_real_key(request)
 
     stream = anthropic_client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hi."}],
         stream=True,
@@ -1325,7 +1324,7 @@ def test_sync_messages_create_streaming_connection_error(
     span_exporter, instrument_no_content
 ):
     """Test that connection errors during streaming are handled correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Hello"}]
 
     # Create client with invalid endpoint
@@ -1359,7 +1358,7 @@ def test_sync_messages_create_captures_tool_use_content(
 ):
     """Test that tool_use blocks are captured as tool_call parts."""
     _skip_if_cassette_missing_and_no_real_key(request)
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "What is the weather in SF?"}]
 
     anthropic_client.messages.create(
@@ -1367,7 +1366,6 @@ def test_sync_messages_create_captures_tool_use_content(
         max_tokens=256,
         messages=messages,
         tools=[_WEATHER_TOOL],
-        tool_choice={"type": "tool", "name": "get_weather"},
     )
 
     spans = span_exporter.get_finished_spans()
@@ -1403,7 +1401,7 @@ def test_sync_messages_create_tools_generator_reaches_the_sdk(
                 "id": "msg_generator",
                 "type": "message",
                 "role": "assistant",
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-5-5",
                 "content": [{"type": "text", "text": "ok"}],
                 "stop_reason": "end_turn",
                 "stop_sequence": None,
@@ -1417,7 +1415,7 @@ def test_sync_messages_create_tools_generator_reaches_the_sdk(
         http_client=httpx.Client(transport=httpx.MockTransport(respond)),
     )
     client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=256,
         messages=[{"role": "user", "content": "What is the weather in SF?"}],
         tools=(tool for tool in [_WEATHER_TOOL]),
@@ -1448,7 +1446,7 @@ def test_sync_messages_stream_tools_generator_reaches_the_sdk(
         http_client=httpx.Client(transport=httpx.MockTransport(respond)),
     )
     with client.messages.stream(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=256,
         messages=[{"role": "user", "content": "What is the weather in SF?"}],
         tools=(tool for tool in [_WEATHER_TOOL]),
@@ -1472,11 +1470,10 @@ def test_sync_messages_create_omits_tool_definitions_without_content(
 ):
     """Tool definitions are content: they stay off when capture is off."""
     anthropic_client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=256,
         messages=[{"role": "user", "content": "What is the weather in SF?"}],
         tools=[_WEATHER_TOOL],
-        tool_choice={"type": "tool", "name": "get_weather"},
     )
 
     spans = span_exporter.get_finished_spans()
@@ -1497,14 +1494,19 @@ def test_sync_messages_create_captures_thinking_content(
 ):
     """Test that thinking blocks are captured as reasoning parts."""
     _skip_if_cassette_missing_and_no_real_key(request)
-    model = "claude-sonnet-4-20250514"
-    messages = [{"role": "user", "content": "What is 17*19? Think first."}]
+    model = "claude-sonnet-5-5"
+    messages = [
+        {
+            "role": "user",
+            "content": "Solve 347 * 892 + 519 * 743 step by step. Think carefully first.",
+        }
+    ]
 
     response = anthropic_client.messages.create(
         model=model,
         max_tokens=16000,
         messages=messages,
-        thinking={"type": "enabled", "budget_tokens": 10000},
+        thinking={"type": "adaptive"},
     )
 
     spans = span_exporter.get_finished_spans()
@@ -1538,7 +1540,7 @@ def test_stream_wrapper_finalize_idempotent(  # pylint: disable=too-many-locals
     instrument_no_content,
 ):
     """Fully consumed stream plus explicit close should still yield one span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     stream = anthropic_client.messages.create(
@@ -1595,7 +1597,7 @@ def test_sync_messages_create_aggregates_cache_tokens(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Non-streaming response with non-zero cache tokens aggregates correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     response = anthropic_client.messages.create(
@@ -1644,7 +1646,7 @@ def test_sync_messages_create_streaming_aggregates_cache_tokens(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Streaming response with non-zero cache tokens aggregates correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     input_tokens = None
@@ -1717,7 +1719,7 @@ def test_sync_messages_create_stream_propagation_error(
         if capture_content
         else "instrument_no_content"
     )
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
     error = ConnectionError("connection reset during stream")
 
@@ -1768,7 +1770,7 @@ def test_sync_messages_create_stream_propagation_error(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
     assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
     assert isinstance(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
     )
@@ -1796,7 +1798,7 @@ def test_sync_messages_create_streaming_user_exception(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test that user raised exceptions are propagated."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with pytest.raises(ValueError, match="User raised exception"):
@@ -1822,7 +1824,7 @@ def test_sync_messages_stream_user_exception(
 ):
     """Test that user raised exceptions from Messages.stream are propagated."""
     _skip_if_cassette_missing_and_no_real_key(request)
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with pytest.raises(ValueError, match="User raised exception"):
@@ -1852,7 +1854,7 @@ def test_sync_messages_create_event_only_no_content_in_span(
 ):
     """Test that EVENT_ONLY mode does not capture content in span attributes
     but does emit a log event with the content."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     anthropic_client.messages.create(
@@ -1896,7 +1898,7 @@ def test_sync_messages_create_streaming_with_raw_response(
     drained and then populate the span with the response model, usage, and
     finish reason.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     raw_response = anthropic_client.messages.with_raw_response.create(
@@ -1920,7 +1922,7 @@ def test_sync_messages_create_streaming_with_raw_response(
             delta = getattr(chunk, "delta", None)
             if delta and hasattr(delta, "text"):
                 response_text += delta.text
-    assert response_text == "Hello."
+    assert response_text == "Hello!"
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1930,8 +1932,8 @@ def test_sync_messages_create_streaming_with_raw_response(
         spans[0],
         request_model=model,
         response_model=model,
-        input_tokens=13,
-        output_tokens=5,
+        input_tokens=16,
+        output_tokens=6,
         finish_reasons=["stop"],
     )
 
@@ -1947,7 +1949,7 @@ def test_sync_messages_create_streaming_with_raw_response_never_parsed(
     must still be finalized (so it does not leak) exactly once when the
     underlying body is closed, since ``stop()`` is not idempotent.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     raw_response = anthropic_client.messages.with_raw_response.create(
@@ -1982,7 +1984,7 @@ def test_sync_messages_raw_response_read_without_close(
     later close leaked the span. Reading is the last point at which the body is
     available, so it has to finalize there.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     raw_response = anthropic_client.messages.with_raw_response.create(
         model=model,
         max_tokens=100,
@@ -2005,7 +2007,7 @@ def test_sync_messages_raw_response_read_without_parse(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Reading a non-SSE body without parsing still records response attributes."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     with anthropic_client.messages.with_streaming_response.create(
         model=model,
         max_tokens=100,
@@ -2036,7 +2038,7 @@ def test_sync_messages_with_streaming_response_nonstreaming(
     returns instead extracts the message and records the response model, usage,
     and finish reason.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.messages.with_streaming_response.create(
@@ -2085,7 +2087,7 @@ def test_sync_messages_with_streaming_response_streaming(
     ``parse()`` yields a ``Stream``; draining it finalizes the span with the
     response model, token usage, and finish reason accumulated from the stream.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.messages.with_streaming_response.create(
@@ -2105,7 +2107,7 @@ def test_sync_messages_with_streaming_response_streaming(
                 delta = getattr(chunk, "delta", None)
                 if delta and hasattr(delta, "text"):
                     response_text += delta.text
-    assert response_text == "Hello."
+    assert response_text == "Hello!"
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -2113,8 +2115,8 @@ def test_sync_messages_with_streaming_response_streaming(
         spans[0],
         request_model=model,
         response_model=model,
-        input_tokens=13,
-        output_tokens=5,
+        input_tokens=16,
+        output_tokens=6,
         finish_reasons=["stop"],
     )
 
@@ -2132,7 +2134,7 @@ def test_sync_messages_streaming_raw_response_abandoned(
     so closing the body has to drive the wrapper's own finalization instead.
     """
     with anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -2155,7 +2157,7 @@ def test_sync_messages_raw_response_parse_stream_twice(
     the caller draining the same body uninstrumented.
     """
     with anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -2180,7 +2182,7 @@ def test_sync_messages_raw_response_parse_to_honors_cast_target(
     instead of the requested cast target.
     """
     with anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
@@ -2202,7 +2204,7 @@ def test_sync_messages_raw_response_read_before_parse(
     ``parse()`` then wrote into an already-stopped invocation and its response
     telemetry was lost.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     with anthropic_client.messages.with_streaming_response.create(
         model=model,
         max_tokens=100,
@@ -2244,7 +2246,7 @@ def test_sync_messages_with_raw_response_does_not_parse_early(
 
     monkeypatch.setattr(LegacyAPIResponse, "parse", counting_parse)
 
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     raw_response = anthropic_client.messages.with_raw_response.create(
         model=model,
         max_tokens=100,
@@ -2275,7 +2277,7 @@ def test_sync_messages_raw_response_stream_wrap_failure_not_raised(
     monkeypatch.setattr(_raw_response, "_wrap_parsed_stream", boom)
 
     with anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -2299,7 +2301,7 @@ def test_sync_messages_with_streaming_response_user_exception(
     raised by the caller before the stream is drained must propagate unchanged
     and finalize the span with the matching ``error.type``.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with pytest.raises(ValueError, match="User raised exception"):
         with anthropic_client.messages.with_streaming_response.create(
@@ -2326,7 +2328,7 @@ def test_sync_messages_with_streaming_response_user_exception_before_parse(
     """A caller error before parsing still fails the raw-response span once."""
     with pytest.raises(ValueError, match="User raised exception"):
         with anthropic_client.messages.with_streaming_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
             stream=True,
@@ -2346,7 +2348,7 @@ def test_sync_messages_with_streaming_response_user_exception_after_drain(
     """A caller error after draining does not finalize the span twice."""
     with pytest.raises(ValueError, match="User raised exception"):
         with anthropic_client.messages.with_streaming_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
             stream=True,
@@ -2365,7 +2367,7 @@ def test_sync_messages_with_streaming_response_nonstreaming_user_exception(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """A caller error in a non-streaming response context fails the span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with pytest.raises(ValueError, match="User raised exception"):
         with anthropic_client.messages.with_streaming_response.create(
@@ -2387,7 +2389,7 @@ def test_sync_messages_with_raw_response_caller_exception(
 ):
     """A caller error while handling a raw response is separate from the call."""
     raw_response = anthropic_client.messages.with_raw_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     )
@@ -2430,7 +2432,7 @@ def test_sync_messages_with_raw_response_captures_content(
 ):
     """Content capture must work through the raw-response path too."""
     raw_response = anthropic_client.messages.with_raw_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     )
@@ -2454,7 +2456,7 @@ def test_sync_messages_with_streaming_response_captures_content(
 ):
     """Content capture must work through the streamed raw-response path too."""
     with anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -2470,7 +2472,7 @@ def test_sync_messages_with_streaming_response_captures_content(
         span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert input_messages[0]["parts"][0]["content"] == "Say hello in one word."
-    assert output_messages[0]["parts"][0]["content"] == "Hello."
+    assert output_messages[0]["parts"][0]["content"] == "Hello!"
 
 
 @pytest.mark.vcr()
@@ -2480,7 +2482,7 @@ def test_sync_messages_with_streaming_response_parse_twice(
 ):
     """Repeated ``parse()`` calls share one span and one parsed message."""
     with anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
@@ -2502,7 +2504,7 @@ def test_sync_messages_raw_response_parse_to_captures_content(
     message = None
 
     with anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
@@ -2541,7 +2543,7 @@ def test_sync_messages_raw_response_parse_after_read_is_the_sdk_parse(
     monkeypatch.setattr(APIResponse, "parse", counting_parse)
 
     with anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
@@ -2565,7 +2567,7 @@ def test_sync_messages_raw_response_stream_propagation_error(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """A mid-iteration stream error re-raises unchanged and fails the span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with pytest.raises(
         ConnectionError, match="connection reset during stream"
@@ -2607,7 +2609,7 @@ def test_raw_response_body_with_unknown_fields_still_extracted():
                 "id": "msg_1",
                 "type": "message",
                 "role": "assistant",
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-5-5",
                 "content": [{"type": "brand_new_block", "foo": 1}],
                 "stop_reason": "brand_new_reason",
                 "stop_sequence": None,
@@ -2622,7 +2624,7 @@ def test_raw_response_body_with_unknown_fields_still_extracted():
 
     assert message is not None
     assert message.id == "msg_1"
-    assert message.model == "claude-sonnet-4-20250514"
+    assert message.model == "claude-sonnet-5-5"
     assert message.usage.input_tokens == 13
     assert message.usage.output_tokens == 5
 
@@ -2674,7 +2676,7 @@ def test_raw_response_deserializes_beta_message_body():
                 "id": "msg_beta_1",
                 "type": "message",
                 "role": "assistant",
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-5-5",
                 "content": [{"type": "text", "text": "hello"}],
                 "usage": {
                     "input_tokens": 10,
@@ -2686,7 +2688,7 @@ def test_raw_response_deserializes_beta_message_body():
 
     assert message is not None
     assert message.id == "msg_beta_1"
-    assert message.model == "claude-sonnet-4-20250514"
+    assert message.model == "claude-sonnet-5-5"
     assert message.usage.input_tokens == 10
     assert message.usage.output_tokens == 5
     if _beta_supported and BetaMessage is not None:
@@ -2731,7 +2733,7 @@ def test_sync_messages_raw_response_only_parse_to_records_telemetry(
     nothing of its own, so the span was finalized on close with request
     attributes only, even though the body it read was a ``Message``.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with anthropic_client.messages.with_streaming_response.create(
         model=model,
@@ -2765,7 +2767,7 @@ def test_sync_messages_raw_response_parse_to_on_a_stream_defers(
     without reading, so settling telemetry there would end the span early with
     nothing to record.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with anthropic_client.messages.with_streaming_response.create(
         model=model,
@@ -2788,7 +2790,7 @@ def test_sync_messages_raw_response_parse_after_exit(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """A parse after the block still works, and the span is already complete."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with anthropic_client.messages.with_streaming_response.create(
         model=model,
@@ -2810,7 +2812,7 @@ def test_sync_messages_stream_text_stream_records_response(
     span_exporter, anthropic_client, instrument_with_content
 ):
     """``stream.text_stream`` records the response the same as event iteration."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with anthropic_client.messages.stream(
         model=model,
@@ -2827,10 +2829,10 @@ def test_sync_messages_stream_text_stream_records_response(
     assert_span_attributes(
         span,
         request_model=model,
-        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_id="msg_011CgwjfMs7kzbGi4KwkwpwR",
         response_model=model,
-        input_tokens=13,
-        output_tokens=5,
+        input_tokens=16,
+        output_tokens=6,
         finish_reasons=["stop"],
     )
     assert isinstance(span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID], str)
@@ -2855,7 +2857,7 @@ def test_sync_messages_stream_get_final_message_records_response(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """``get_final_message()`` drains the SDK's iterator and still records."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with anthropic_client.messages.stream(
         model=model,
@@ -2883,7 +2885,7 @@ def test_sync_messages_stream_get_final_text_records_response(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """``get_final_text()`` drains the SDK's iterator and still records."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with anthropic_client.messages.stream(
         model=model,
@@ -2899,10 +2901,10 @@ def test_sync_messages_stream_get_final_text_records_response(
     assert_span_attributes(
         spans[0],
         request_model=model,
-        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_id="msg_011CgwjfMs7kzbGi4KwkwpwR",
         response_model=model,
-        input_tokens=13,
-        output_tokens=5,
+        input_tokens=16,
+        output_tokens=6,
         finish_reasons=["stop"],
     )
 
@@ -2913,7 +2915,7 @@ def test_sync_messages_stream_until_done_records_response(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """``until_done()`` drains the SDK's iterator and still records."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with anthropic_client.messages.stream(
         model=model,
@@ -2927,10 +2929,10 @@ def test_sync_messages_stream_until_done_records_response(
     assert_span_attributes(
         spans[0],
         request_model=model,
-        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_id="msg_011CgwjfMs7kzbGi4KwkwpwR",
         response_model=model,
-        input_tokens=13,
-        output_tokens=5,
+        input_tokens=16,
+        output_tokens=6,
         finish_reasons=["stop"],
     )
 
@@ -2947,7 +2949,7 @@ def test_sync_messages_stream_text_stream_user_exception(
         if capture_content
         else "instrument_no_content"
     )
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     error = ValueError("caller failed")
 
     with pytest.raises(ValueError, match="caller failed") as raised:
@@ -2966,7 +2968,7 @@ def test_sync_messages_stream_text_stream_user_exception(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
     assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
     assert isinstance(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
     )
@@ -2998,7 +3000,7 @@ def test_sync_beta_messages_create_basic(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test basic sync beta message creation produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     response = anthropic_client.beta.messages.create(
@@ -3030,7 +3032,7 @@ def test_sync_beta_messages_create_with_content(
     span_exporter, anthropic_client, instrument_with_content
 ):
     """Test sync beta message creation captures input and output content."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     prompt = "Say hello in one word."
     messages = [{"role": "user", "content": prompt}]
 
@@ -3108,7 +3110,7 @@ def test_sync_beta_messages_create_streaming(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test streaming beta message creation produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.beta.messages.create(
@@ -3127,10 +3129,10 @@ def test_sync_beta_messages_create_streaming(
     assert_span_attributes(
         span,
         request_model=model,
-        response_id="msg_01VY8H3oPFs4WWVnJXFDxNhU",
+        response_id="msg_011CgwhbVknX1RjKefjL29oq",
         response_model=model,
-        input_tokens=13,
-        output_tokens=5,
+        input_tokens=16,
+        output_tokens=6,
         finish_reasons=["stop"],
     )
 
@@ -3144,7 +3146,7 @@ def test_sync_beta_messages_stream(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test beta message stream produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.beta.messages.stream(
@@ -3162,10 +3164,10 @@ def test_sync_beta_messages_stream(
     assert_span_attributes(
         span,
         request_model=model,
-        response_id="msg_01VY8H3oPFs4WWVnJXFDxNhU",
+        response_id="msg_011CgwhbbZ39HNS9DZmGZYRx",
         response_model=model,
-        input_tokens=13,
-        output_tokens=5,
+        input_tokens=16,
+        output_tokens=6,
         finish_reasons=["stop"],
     )
 
@@ -3179,7 +3181,7 @@ def test_sync_beta_messages_with_raw_response(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test that with_raw_response.create on beta messages produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     raw_response = anthropic_client.beta.messages.with_raw_response.create(
@@ -3213,7 +3215,7 @@ def test_sync_beta_messages_with_streaming_response(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test sync beta message creation with streaming response produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.beta.messages.with_streaming_response.create(
@@ -3231,10 +3233,10 @@ def test_sync_beta_messages_with_streaming_response(
     assert_span_attributes(
         spans[0],
         request_model=model,
-        response_id="msg_01VY8H3oPFs4WWVnJXFDxNhU",
+        response_id="msg_011CgwhbVknX1RjKefjL29oq",
         response_model=model,
-        input_tokens=13,
-        output_tokens=5,
+        input_tokens=16,
+        output_tokens=6,
         finish_reasons=["stop"],
     )
 
@@ -3249,7 +3251,7 @@ def test_sync_beta_messages_stream_interrupted_mid_iteration(
     monkeypatch, span_exporter, anthropic_client, instrument_no_content
 ):
     """Test that mid-stream network failures in beta stream propagate and record error.type."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     class ErrorInjectingStreamDelegate:
@@ -3305,7 +3307,7 @@ def test_sync_beta_messages_stream_user_exception(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test that user raised exceptions from beta.messages.stream are propagated."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with pytest.raises(ValueError, match="User raised exception"):
@@ -3334,7 +3336,7 @@ def test_sync_beta_messages_create_streaming_with_content(
     span_exporter, anthropic_client, instrument_with_content
 ):
     """Test content capture on beta create(stream=True)."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.beta.messages.create(
@@ -3359,7 +3361,7 @@ def test_sync_beta_messages_create_streaming_with_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"] == [
-        {"type": "text", "content": "Hello"}
+        {"type": "text", "content": "Hello!"}
     ]
 
 
@@ -3373,7 +3375,7 @@ def test_sync_beta_messages_stream_with_content(
     span_exporter, anthropic_client, instrument_with_content
 ):
     """Test content capture on beta.messages.stream()."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.beta.messages.stream(
@@ -3397,7 +3399,7 @@ def test_sync_beta_messages_stream_with_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"] == [
-        {"type": "text", "content": "Hello"}
+        {"type": "text", "content": "Hello!"}
     ]
 
 
@@ -3411,7 +3413,7 @@ def test_sync_beta_messages_create_streaming_interrupted_mid_iteration(
     monkeypatch, span_exporter, anthropic_client, instrument_no_content
 ):
     """Test that mid-stream network failures in beta create(stream=True) propagate and record error.type."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     class ErrorInjectingStreamDelegate:
@@ -3468,7 +3470,7 @@ def test_sync_beta_messages_create_streaming_user_exception(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Test that user raised exceptions in beta create(stream=True) are propagated."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with pytest.raises(ValueError, match="User raised exception"):
@@ -3498,7 +3500,7 @@ def test_sync_beta_messages_stream_closed_early_by_caller(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """Caller-closing beta.messages.stream early finalizes the span without error."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with anthropic_client.beta.messages.stream(

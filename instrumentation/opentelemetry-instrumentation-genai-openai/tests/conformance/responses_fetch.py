@@ -16,7 +16,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
-RESPONSE_ID = "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237025"
+RESPONSE_ID = "resp_0a7ce3756805d7b1006af3356ea88087d2a5d9d1c9f9a62de4"
 
 
 class ResponsesFetchScenario(Scenario):

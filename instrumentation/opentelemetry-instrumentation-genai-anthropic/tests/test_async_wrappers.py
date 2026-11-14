@@ -204,11 +204,11 @@ def test_stream_wrapper_finalization_records_thinking_tokens(
     )
     invocation = handler.inference(
         provider="anthropic",
-        request_model="claude-sonnet-4-20250514",
+        request_model="claude-sonnet-5-5",
     )
     snapshot = SimpleNamespace(
         id="msg_stream",
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         stop_reason="end_turn",
         usage=SimpleNamespace(
             input_tokens=10,

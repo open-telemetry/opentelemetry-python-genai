@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from google.genai import Client
@@ -49,20 +50,20 @@ class GenerateContentServerToolCallingScenario(Scenario):
             {
                 "name": "code_execution",
                 "server_tool_call": {
-                    "code": "print(1)",
+                    "code": 'print("one")\n',
                     "language": "PYTHON",
                     "type": "code_execution",
                 },
-                "id": "code-1",
+                "id": None,
                 "type": "server_tool_call",
             },
             {
                 "server_tool_call_response": {
                     "outcome": "OUTCOME_OK",
-                    "output": "1",
+                    "output": "one\n",
                     "type": "code_execution",
                 },
-                "id": "code-1",
+                "id": None,
                 "type": "server_tool_call_response",
             },
         ]
@@ -86,7 +87,10 @@ class GenerateContentServerToolCallingScenario(Scenario):
                 "generate_content_server_tool_calling_conformance.yaml"
             ):
                 client = Client(
-                    api_key="test_google_genai_api_key", vertexai=False
+                    api_key=os.getenv(
+                        "GOOGLE_API_KEY", "test_google_genai_api_key"
+                    ),
+                    vertexai=False,
                 )
                 client.models.generate_content(
                     model="gemini-2.5-flash",
@@ -110,27 +114,37 @@ class InteractionsServerToolCallingScenario(Scenario):
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
-        assert _output_parts(report)[:2] == [
-            {
-                "name": "google_search",
-                "server_tool_call": {
-                    "arguments": {"queries": ["OpenTelemetry"]},
-                    "search_type": "web_search",
-                    "type": "google_search",
-                },
-                "id": "search-1",
-                "type": "server_tool_call",
-            },
-            {
-                "server_tool_call_response": {
-                    "is_error": False,
-                    "result": [],
-                    "type": "google_search",
-                },
-                "id": "search-1",
-                "type": "server_tool_call_response",
-            },
+        parts = _output_parts(report)
+        calls = [p for p in parts if p["type"] == "server_tool_call"]
+        responses = [
+            p for p in parts if p["type"] == "server_tool_call_response"
         ]
+        assert len(calls) == 1
+        assert calls[0] == {
+            "type": "server_tool_call",
+            "id": "zpsqtr34",
+            "name": "google_search",
+            "server_tool_call": {
+                "type": "google_search",
+                "search_type": "web_search",
+                "arguments": {"queries": ["OpenTelemetry"]},
+            },
+        }
+        assert len(responses) == 1
+        assert responses[0]["id"] == "zpsqtr34"
+        assert (
+            responses[0]["server_tool_call_response"]["type"]
+            == "google_search"
+        )
+        assert responses[0]["server_tool_call_response"]["is_error"] is False
+        results = responses[0]["server_tool_call_response"]["result"]
+        assert isinstance(results, list)
+        assert len(results) == 5
+        assert all(
+            isinstance(r.get("search_suggestions"), str)
+            and "OpenTelemetry" in r["search_suggestions"]
+            for r in results
+        )
 
     def run(
         self,
@@ -151,7 +165,10 @@ class InteractionsServerToolCallingScenario(Scenario):
                 "interactions_server_tool_calling_conformance.yaml"
             ):
                 client = Client(
-                    api_key="test_google_genai_api_key", vertexai=False
+                    api_key=os.getenv(
+                        "GOOGLE_API_KEY", "test_google_genai_api_key"
+                    ),
+                    vertexai=False,
                 )
                 client.interactions.create(
                     model="gemini-2.5-flash",

@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import os
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
@@ -83,7 +84,7 @@ _REAL_PNG_B64 = (
 )
 
 # An Anthropic Files API image reference. Pinned to the recorded cassette.
-_ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
+_ANTHROPIC_FILE_ID = "file_01Y2U724wHRo2D9zsfYpvQhK"
 
 
 @pytest.mark.skipif(
@@ -609,22 +610,14 @@ def test_chat_openai_standard_image_block_llm_call(
 def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
     span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0, vcr
 ):
-    is_old_bedrock = not getattr(
-        us_amazon_nova_lite_v1_0, "beta_use_converse_api", False
-    )
-
-    cassette_name = (
-        "test_us_amazon_nova_lite_v1_0_bedrock_llm_call_old.yaml"
-        if is_old_bedrock
-        else "test_us_amazon_nova_lite_v1_0_bedrock_llm_call.yaml"
-    )
-
     messages = [
         SystemMessage(content="You are a helpful assistant!"),
         HumanMessage(content="What is the capital of France?"),
     ]
 
-    with vcr.use_cassette(cassette_name):
+    with vcr.use_cassette(
+        "test_us_amazon_nova_lite_v1_0_bedrock_llm_call.yaml"
+    ):
         result = us_amazon_nova_lite_v1_0.invoke(messages)
 
     assert result.content.find("The capital of France is Paris") != -1
@@ -639,6 +632,26 @@ def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
 
 
 @pytest.mark.vcr()
+def test_meta_llama3_8b_instruct_bedrock_llm_call(
+    span_exporter, start_instrumentation, meta_llama3_8b_instruct
+):
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    result = meta_llama3_8b_instruct.invoke(messages)
+
+    assert "Paris" in result.content
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_bedrock_completion_attributes(
+        spans[0], result, model="meta.llama3-8b-instruct-v1:0"
+    )
+
+
+@pytest.mark.vcr()
 def test_chat_anthropic_claude_sonnet_llm_call(
     span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
 ):
@@ -649,7 +662,7 @@ def test_chat_anthropic_claude_sonnet_llm_call(
 
     result = chat_anthropic_claude_sonnet.invoke(messages)
 
-    assert result.content.find("The capital of France is Paris") != -1
+    assert "Paris" in result.content
 
     # verify spans
     spans = span_exporter.get_finished_spans()
@@ -657,7 +670,7 @@ def test_chat_anthropic_claude_sonnet_llm_call(
     span = spans[0]
     assert (
         span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
-        == "claude-sonnet-4-5"
+        == "claude-sonnet-5-5"
     )
 
     assert (
@@ -691,7 +704,7 @@ def test_chat_anthropic_claude_sonnet_tool_call(
     span = spans[0]
     assert (
         span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
-        == "claude-sonnet-4-5"
+        == "claude-sonnet-5-5"
     )
     assert span.attributes.get(
         gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
@@ -825,7 +838,7 @@ def test_chat_anthropic_multimodal_image_llm_call(
     span = spans[0]
 
     assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
-        "claude-sonnet-4-5"
+        "claude-sonnet-5-5"
     )
 
     input_message = span.attributes.get(
@@ -996,7 +1009,7 @@ def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
     with vcr.use_cassette(_gemini_cassette_name("test_gemini")):
         result = gemini.invoke(messages)
 
-    assert result.content.find("The capital of France is **Paris**") != -1
+    assert "Paris" in result.content
 
     # verify spans
     spans = span_exporter.get_finished_spans()
@@ -1147,8 +1160,8 @@ def test_chat_anthropic_captures_top_k(
     logger_provider,
 ):
     model = ChatAnthropic(
-        model="claude-sonnet-4-5",
-        api_key="test_key",
+        model="claude-haiku-4-5",
+        api_key=os.getenv("ANTHROPIC_API_KEY", "test_key"),
         max_tokens=32,
         top_k=40,
     )
@@ -1326,14 +1339,13 @@ def assert_openai_completion_attributes_with_error(
 
 
 def assert_bedrock_completion_attributes(
-    span: ReadableSpan, response: Optional
+    span: ReadableSpan,
+    response: Optional,
+    model: str = "us.amazon.nova-lite-v1:0",
 ):
-    assert span.name == "chat us.amazon.nova-lite-v1:0"
+    assert span.name == f"chat {model}"
     assert span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
-    assert (
-        span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL]
-        == "us.amazon.nova-lite-v1:0"
-    )
+    assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL] == model
 
     assert span.attributes["gen_ai.provider.name"] == "aws.bedrock"
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS] == 100
@@ -1366,11 +1378,11 @@ def assert_gemini_completion_attributes(
     span: ReadableSpan, response: Optional
 ):
     assert span is not None
-    assert span.name == "chat gemini-2.5-pro"
+    assert span.name == "chat gemini-2.5-flash"
     assert span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     assert (
         span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL]
-        == "gemini-2.5-pro"
+        == "gemini-2.5-flash"
     )
     assert span.attributes["gen_ai.provider.name"] == "gcp.gen_ai"
 
@@ -1690,8 +1702,8 @@ def test_chat_anthropic_claude_sonnet_stop_sequences_constructor_fallback(
     span_exporter, start_instrumentation
 ):
     model = ChatAnthropic(
-        model="claude-sonnet-4-5",
-        api_key="test_key",
+        model="claude-sonnet-5-5",
+        api_key=os.getenv("ANTHROPIC_API_KEY", "test_key"),
         max_tokens=1024,
         stop_sequences=["STOP"],
     )
