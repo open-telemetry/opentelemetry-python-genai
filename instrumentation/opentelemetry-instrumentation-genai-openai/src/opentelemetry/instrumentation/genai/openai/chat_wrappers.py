@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import json
 import logging
+from contextvars import ContextVar
+from types import TracebackType
+from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 from openai import AsyncStream, Stream
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionChunk
+from wrapt import ObjectProxy
 
 from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
@@ -17,6 +21,8 @@ from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    finalize_on_aclose,
+    finalize_on_close,
 )
 from opentelemetry.util.genai.types import (
     OutputMessage,
@@ -25,13 +31,38 @@ from opentelemetry.util.genai.types import (
     ToolCallRequestPart,
 )
 
+from ._raw_response import _http_lib
 from .chat_buffers import ChoiceBuffer
 from .utils import (
     map_finish_reason,
     set_chat_usage,
 )
 
+if TYPE_CHECKING:
+    from openai.lib.streaming.chat import (  # pylint: disable=no-name-in-module
+        AsyncChatCompletionStream,
+        AsyncChatCompletionStreamManager,
+        ChatCompletionStream,
+        ChatCompletionStreamManager,
+    )
+
 _logger = logging.getLogger(__name__)
+
+ResponseFormatT = TypeVar("ResponseFormatT")
+
+# Collects the stream wrappers the patched create() builds while a
+# chat.completions.stream() manager is being entered.
+_entered_chat_streams: ContextVar[
+    list[ChatStreamWrapper | AsyncChatStreamWrapper] | None
+] = ContextVar("_entered_chat_streams", default=None)
+
+
+def _register_entered_chat_stream(
+    stream_wrapper: ChatStreamWrapper | AsyncChatStreamWrapper,
+) -> None:
+    entered = _entered_chat_streams.get()
+    if entered is not None:
+        entered.append(stream_wrapper)
 
 
 class _ChatStreamMixin:
@@ -207,6 +238,18 @@ class ChatStreamWrapper(
         self._self_response_id = None
         self._self_service_tier = None
         self._self_usage = None
+        _register_entered_chat_stream(self)
+
+    @property
+    def response(self) -> _http_lib.Response:
+        # ChatCompletionStream (chat.completions.stream()) closes this HTTP
+        # response directly instead of the stream, so that close has to
+        # finalize telemetry too.
+        return finalize_on_close(
+            self._self_stream.response,
+            self._finalize_success,
+            execution_context=self._execution_context,
+        )
 
 
 class AsyncChatStreamWrapper(
@@ -227,9 +270,97 @@ class AsyncChatStreamWrapper(
         self._self_response_id = None
         self._self_service_tier = None
         self._self_usage = None
+        _register_entered_chat_stream(self)
+
+    @property
+    def response(self) -> _http_lib.Response:
+        # See ChatStreamWrapper.response.
+        return finalize_on_aclose(
+            self._self_stream.response,
+            self._finalize_success,
+            execution_context=self._execution_context,
+        )
+
+
+class ChatStreamManagerWrapper(ObjectProxy, Generic[ResponseFormatT]):
+    """Wrapper for the manager returned by ``chat.completions.stream()``.
+
+    The SDK manager's ``__exit__`` only closes the stream and drops the
+    caller's exception, so it is recorded on the chat stream wrapper first.
+    """
+
+    def __init__(
+        self, manager: ChatCompletionStreamManager[ResponseFormatT]
+    ) -> None:
+        super().__init__(manager)
+        self._self_stream_wrapper: ChatStreamWrapper | None = None
+
+    def __enter__(self) -> ChatCompletionStream[ResponseFormatT]:
+        entered: list[ChatStreamWrapper | AsyncChatStreamWrapper] = []
+        token = _entered_chat_streams.set(entered)
+        try:
+            stream = cast(
+                "ChatCompletionStream[ResponseFormatT]",
+                self.__wrapped__.__enter__(),
+            )
+        finally:
+            _entered_chat_streams.reset(token)
+        if entered and isinstance(entered[0], ChatStreamWrapper):
+            self._self_stream_wrapper = entered[0]
+        return stream
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool | None:
+        stream_wrapper = self._self_stream_wrapper
+        self._self_stream_wrapper = None
+        if stream_wrapper is not None and exc_val is not None:
+            stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
+        return self.__wrapped__.__exit__(exc_type, exc_val, exc_tb)
+
+
+class AsyncChatStreamManagerWrapper(ObjectProxy, Generic[ResponseFormatT]):
+    """Async counterpart of ``ChatStreamManagerWrapper``."""
+
+    def __init__(
+        self, manager: AsyncChatCompletionStreamManager[ResponseFormatT]
+    ) -> None:
+        super().__init__(manager)
+        self._self_stream_wrapper: AsyncChatStreamWrapper | None = None
+
+    async def __aenter__(self) -> AsyncChatCompletionStream[ResponseFormatT]:
+        entered: list[ChatStreamWrapper | AsyncChatStreamWrapper] = []
+        token = _entered_chat_streams.set(entered)
+        try:
+            stream = cast(
+                "AsyncChatCompletionStream[ResponseFormatT]",
+                await self.__wrapped__.__aenter__(),
+            )
+        finally:
+            _entered_chat_streams.reset(token)
+        if entered and isinstance(entered[0], AsyncChatStreamWrapper):
+            self._self_stream_wrapper = entered[0]
+        return stream
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool | None:
+        stream_wrapper = self._self_stream_wrapper
+        self._self_stream_wrapper = None
+        if stream_wrapper is not None and exc_val is not None:
+            await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
+        return await self.__wrapped__.__aexit__(exc_type, exc_val, exc_tb)
 
 
 __all__ = [
+    "AsyncChatStreamManagerWrapper",
     "AsyncChatStreamWrapper",
+    "ChatStreamManagerWrapper",
     "ChatStreamWrapper",
 ]

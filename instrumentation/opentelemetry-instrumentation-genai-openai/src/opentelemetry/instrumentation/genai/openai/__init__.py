@@ -75,8 +75,10 @@ from opentelemetry.util.genai.handler import (
 
 from .patch import (
     async_chat_completions_create_v_new,
+    async_chat_completions_stream,
     async_embeddings_create,
     chat_completions_create_v_new,
+    chat_completions_stream,
     embeddings_create,
 )
 from .patch_responses import (
@@ -100,6 +102,18 @@ def _is_parse_supported():
         )
 
         return hasattr(Completions, "parse")
+    except ImportError:
+        return False
+
+
+def _is_stream_supported() -> bool:
+    """Check if the stream() helper is available on the Completions class."""
+    try:
+        from openai.resources.chat.completions import (  # pylint: disable=import-outside-toplevel
+            Completions,
+        )
+
+        return hasattr(Completions, "stream")
     except ImportError:
         return False
 
@@ -204,6 +218,21 @@ class OpenAIInstrumentor(BaseInstrumentor):
                 self._active(async_chat_completions_create_v_new(handler)),
             )
 
+        # stream() enters by calling the instrumented create(), which owns
+        # the span; these only forward caller exceptions to it.
+        self._stream_supported = _is_stream_supported()
+        if self._stream_supported:
+            wrap_function_wrapper(
+                "openai.resources.chat.completions",
+                "Completions.stream",
+                self._active(chat_completions_stream),
+            )
+            wrap_function_wrapper(
+                "openai.resources.chat.completions",
+                "AsyncCompletions.stream",
+                self._active(async_chat_completions_stream),
+            )
+
         responses_module = _get_responses_module()
         if responses_module is not None:
             wrap_function_wrapper(
@@ -265,6 +294,11 @@ class OpenAIInstrumentor(BaseInstrumentor):
         if self._parse_supported:
             unwrap(openai.resources.chat.completions.Completions, "parse")
             unwrap(openai.resources.chat.completions.AsyncCompletions, "parse")
+        if self._stream_supported:
+            unwrap(openai.resources.chat.completions.Completions, "stream")
+            unwrap(
+                openai.resources.chat.completions.AsyncCompletions, "stream"
+            )
         responses_module = _get_responses_module()
         if responses_module is not None:
             unwrap(responses_module.Responses, "create")
