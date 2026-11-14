@@ -338,13 +338,15 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Make this invocation's span the current span inside the block.
 
         Restores the previous context on exit. An exception escaping the block
-        fails the invocation; leaving the block normally does not stop it. A
-        no-op once the invocation has finished.
+        fails the invocation; leaving the block normally does not stop it. Does
+        not change the context once the invocation has finished, while it is
+        already attached, or when it does not own a span.
         """
-        if self._finished:
-            yield
-            return
-        token = attach(self.context)
+        token = (
+            attach(self.context)
+            if self._needs_activation and not self._finished
+            else None
+        )
         try:
             yield
         # Stream wrappers read inside this block: end of iteration and
@@ -355,7 +357,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             self.fail(error)
             raise
         finally:
-            detach(token)
+            if token is not None:
+                detach(token)
 
     def _get_attributes(self) -> dict[str, AttributeValue]:  # pylint: disable=no-self-use
         """Return typed attributes for span/event recording."""
