@@ -13,11 +13,13 @@ import pytest
 from agno.agent import Agent
 from agno.models.response import ModelResponse
 from agno.team import Team
+from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.trace import INVALID_SPAN, get_current_span
 from opentelemetry.trace.status import StatusCode
 
 
@@ -1162,3 +1164,95 @@ def test_workflow_stream_empty_session_id_not_set() -> None:
     FakeChunk.session_id = "wf-sess-456"
     mixin._process_chunk(FakeChunk())
     assert mixin._self_workflow_invocation.conversation_id == "wf-sess-456"
+
+
+def _tool_call() -> FunctionCall:
+    def sample_tool(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    return FunctionCall(
+        function=Function.from_callable(sample_tool), arguments={"x": 1}
+    )
+
+
+def _assert_scoped(span_exporter, seen: list[int], parent_name: str) -> None:
+    spans = span_exporter.get_finished_spans()
+    (parent,) = [s for s in spans if s.name == parent_name]
+    tools = [s for s in spans if s.name == "execute_tool sample_tool"]
+    assert len(tools) == 2
+    assert seen == [parent.context.span_id] * 2
+    for tool in tools:
+        assert tool.parent.span_id == parent.context.span_id
+
+
+def test_agent_run_stream_is_current_only_while_read(
+    instrument_agno, span_exporter
+) -> None:
+    """Tool spans nest under invoke_agent; caller code between chunks doesn't."""
+    agent = Agent(name="scoped-agent", model=MockModel(id="mock-model"))
+    seen: list[int] = []
+
+    def fake_stream(*args, **kwargs):
+        for text in ("chunk 1", "chunk 2"):
+            seen.append(get_current_span().get_span_context().span_id)
+            _tool_call().execute()
+            yield ModelResponse(content=text)
+
+    with patch(
+        "agno.models.base.Model.response_stream", side_effect=fake_stream
+    ):
+        stream = agent.run("hello", stream=True)
+        assert get_current_span() is INVALID_SPAN
+        for _ in stream:
+            assert get_current_span() is INVALID_SPAN
+
+    _assert_scoped(span_exporter, seen, "invoke_agent scoped-agent")
+
+
+def test_agent_arun_stream_is_current_only_while_read(
+    instrument_agno, span_exporter
+) -> None:
+    agent = Agent(name="scoped-async-agent", model=MockModel(id="mock-model"))
+    seen: list[int] = []
+
+    async def fake_astream(*args, **kwargs):
+        for text in ("chunk 1", "chunk 2"):
+            seen.append(get_current_span().get_span_context().span_id)
+            await _tool_call().aexecute()
+            yield ModelResponse(content=text)
+
+    async def _run() -> None:
+        with patch(
+            "agno.models.base.Model.aresponse_stream", side_effect=fake_astream
+        ):
+            stream = agent.arun("hello", stream=True)
+            assert get_current_span() is INVALID_SPAN
+            async for _ in stream:
+                assert get_current_span() is INVALID_SPAN
+
+    asyncio.run(_run())
+
+    _assert_scoped(span_exporter, seen, "invoke_agent scoped-async-agent")
+
+
+def test_workflow_run_stream_is_current_only_while_read(
+    instrument_agno, span_exporter
+) -> None:
+    pytest.importorskip("agno.workflow.workflow")
+    from agno.workflow.workflow import Workflow
+
+    seen: list[int] = []
+
+    def step(step_input):
+        seen.append(get_current_span().get_span_context().span_id)
+        _tool_call().execute()
+        return "step output"
+
+    workflow = Workflow(name="scoped-workflow", steps=[step, step])
+    stream = workflow.run("hello", stream=True)
+    assert get_current_span() is INVALID_SPAN
+    for _ in stream:
+        assert get_current_span() is INVALID_SPAN
+
+    _assert_scoped(span_exporter, seen, "invoke_workflow scoped-workflow")
