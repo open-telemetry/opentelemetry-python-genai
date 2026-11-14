@@ -16,9 +16,9 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
     _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
@@ -46,7 +46,7 @@ _GEN_AI_RESPONSE_STATUS: Final = "gen_ai.response.status"
 
 
 @dataclass
-class FetchResponseData(_ContextData):
+class FetchResponseData(ContextData):
     """Typed data passed from inner fetch response invocations to the outer invocation."""
 
     provider_name: str | None = None
@@ -289,7 +289,7 @@ class FetchResponseInvocation(GenAIInvocation):
             list(value) if value is not None else None
         )
 
-    def enrich_from_context(self, data: FetchResponseData) -> None:
+    def _enrich_from_context(self, data: FetchResponseData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
@@ -299,7 +299,7 @@ class FetchResponseInvocation(GenAIInvocation):
         system_instructions = self._data.system_instructions
         tool_definitions = self._data.tool_definitions
 
-        self._data.merge(data, overwrite=False)
+        self._merge_context_data(self._data, data)
 
         if data.capture_content:
             self._data.output_messages = (
@@ -359,7 +359,7 @@ class FetchResponseInvocation(GenAIInvocation):
             CLIENT_FETCH_RESPONSE_CONTEXT_KEY, context=self._span_context
         )
         if isinstance(ctx_data, FetchResponseData):
-            self.enrich_from_context(ctx_data)
+            self._enrich_from_context(ctx_data)
         self._data.attributes = self.attributes
         self._data.metric_attributes = self.metric_attributes
         attributes = self._get_attributes()

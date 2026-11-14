@@ -410,6 +410,33 @@ class TestUploadCompletionHookIntegration(TestBase):
         # Content should not have been overwritten.
         self.assert_fsspec_equal(expected_file_name, "asg")
 
+    def test_tool_definitions_with_different_uploads_get_different_refs(self):
+        def tool_definitions_ref(parameters: Any) -> str:
+            record = LogRecord()
+            self.hook.on_completion(
+                inputs=[],
+                outputs=[],
+                system_instruction=[],
+                tool_definitions=[
+                    types.FunctionToolDefinition(
+                        name="some_tool",
+                        description=None,
+                        parameters=parameters,
+                        type="function",
+                    ),
+                ],
+                log_record=record,
+            )
+            assert record.attributes is not None
+            return record.attributes["gen_ai.tool.definitions_ref"]
+
+        # json.dumps writes both keys as "1", but the upload drops the
+        # mapping with a non-str key, so the two files differ.
+        self.assertNotEqual(
+            tool_definitions_ref({1: "x"}), tool_definitions_ref({"1": "x"})
+        )
+        self.hook.shutdown()
+
     def test_upload_completions(self):
         tracer = self.tracer_provider.get_tracer(__name__)
         log_record = LogRecord()
@@ -444,11 +471,11 @@ class TestUploadCompletionHookIntegration(TestBase):
 
         self.assert_fsspec_equal(
             span.attributes["gen_ai.input.messages_ref"],
-            '[{"role":"user","parts":[{"content":"What is the capital of France?","type":"text"}],"name":null},{"role":"assistant","parts":[{"arguments":{"city":"Paris"},"name":"get_capital","id":"get_capital_0","type":"tool_call"}],"name":null},{"role":"user","parts":[{"response":{"capital":"Paris"},"id":"get_capital_0","type":"tool_call_response"}],"name":null}]\n',
+            '[{"role":"user","parts":[{"content":"What is the capital of France?","type":"text"}]},{"role":"assistant","parts":[{"arguments":{"city":"Paris"},"name":"get_capital","id":"get_capital_0","type":"tool_call"}]},{"role":"user","parts":[{"response":{"capital":"Paris"},"id":"get_capital_0","type":"tool_call_response"}]}]\n',
         )
         self.assert_fsspec_equal(
             span.attributes["gen_ai.output.messages_ref"],
-            '[{"role":"assistant","parts":[{"content":"Paris","type":"text"}],"finish_reason":"stop","name":null}]\n',
+            '[{"role":"assistant","parts":[{"content":"Paris","type":"text"}],"finish_reason":"stop"}]\n',
         )
         self.assert_fsspec_equal(
             span.attributes["gen_ai.system_instructions_ref"],
@@ -456,7 +483,7 @@ class TestUploadCompletionHookIntegration(TestBase):
         )
         self.assert_fsspec_equal(
             span.attributes["gen_ai.tool.definitions_ref"],
-            '[{"name":"test_tool","description":"does something","parameters":null,"type":"function"}]\n',
+            '[{"name":"test_tool","description":"does something","type":"function"}]\n',
         )
 
     def test_stamps_empty_log(self):
@@ -498,7 +525,7 @@ class TestUploadCompletionHookIntegration(TestBase):
 
         self.assert_fsspec_equal(
             log_record.attributes["gen_ai.input.messages_ref"],
-            '[{"role":"user","parts":[{"content":"What is the capital of France?","type":"text"},{"type":"generic_bytes","bytes":"aGVsbG8="}],"name":null}]\n',
+            '[{"role":"user","parts":[{"content":"What is the capital of France?","type":"text"},{"type":"generic_bytes","bytes":"aGVsbG8="}]}]\n',
         )
 
     def test_upload_json(self) -> None:
@@ -522,7 +549,7 @@ class TestUploadCompletionHookIntegration(TestBase):
 
         self.assert_fsspec_equal(
             ref_uri,
-            '[{"role":"user","parts":[{"content":"What is the capital of France?","type":"text"}],"name":null},{"role":"assistant","parts":[{"arguments":{"city":"Paris"},"name":"get_capital","id":"get_capital_0","type":"tool_call"}],"name":null},{"role":"user","parts":[{"response":{"capital":"Paris"},"id":"get_capital_0","type":"tool_call_response"}],"name":null}]\n',
+            '[{"role":"user","parts":[{"content":"What is the capital of France?","type":"text"}]},{"role":"assistant","parts":[{"arguments":{"city":"Paris"},"name":"get_capital","id":"get_capital_0","type":"tool_call"}]},{"role":"user","parts":[{"response":{"capital":"Paris"},"id":"get_capital_0","type":"tool_call_response"}]}]\n',
         )
 
     def test_upload_jsonlines(self) -> None:
@@ -547,9 +574,9 @@ class TestUploadCompletionHookIntegration(TestBase):
         self.assert_fsspec_equal(
             ref_uri,
             """\
-{"role":"user","parts":[{"content":"What is the capital of France?","type":"text"}],"name":null,"index":0}
-{"role":"assistant","parts":[{"arguments":{"city":"Paris"},"name":"get_capital","id":"get_capital_0","type":"tool_call"}],"name":null,"index":1}
-{"role":"user","parts":[{"response":{"capital":"Paris"},"id":"get_capital_0","type":"tool_call_response"}],"name":null,"index":2}
+{"role":"user","parts":[{"content":"What is the capital of France?","type":"text"}],"index":0}
+{"role":"assistant","parts":[{"arguments":{"city":"Paris"},"name":"get_capital","id":"get_capital_0","type":"tool_call"}],"index":1}
+{"role":"user","parts":[{"response":{"capital":"Paris"},"id":"get_capital_0","type":"tool_call_response"}],"index":2}
 """,
         )
 
