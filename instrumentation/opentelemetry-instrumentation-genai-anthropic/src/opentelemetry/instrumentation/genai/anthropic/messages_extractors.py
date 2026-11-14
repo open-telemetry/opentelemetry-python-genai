@@ -261,7 +261,6 @@ _UNSET_TYPES = (NotGiven, Omit)
 
 
 def _none_if_unset(value: _T) -> _T | None:
-    """Map the SDK's NotGiven/Omit "unset" sentinels to None."""
     return None if isinstance(value, _UNSET_TYPES) else value
 
 
