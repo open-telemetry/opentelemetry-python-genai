@@ -109,6 +109,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
         self._self_outputs: list[OutputMessage] = []
         self._self_result_usage: dict[str, Any] | None = None
         self._self_result_error: Error | None = None
+        self._self_result_seen = False
         self._self_sdk_session_seen = False
         self._self_assistant_input: int | None = None
         self._self_assistant_output: int | None = None
@@ -190,6 +191,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
     def _handle_result(self, chunk: ResultMessage) -> None:
         if chunk.session_id:
             self._set_conversation_id(chunk.session_id)
+        self._self_result_seen = True
         if chunk.usage:
             self._self_result_usage = dict(chunk.usage)
         # ``stop_reason`` only exists in newer SDK releases.
@@ -205,10 +207,13 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
         # The ResultMessage carries the run totals; AssistantMessage usage is
         # only a fallback for runs that end without one, because counting both
         # would double count.
-        if self._self_result_usage is not None:
+        if self._self_result_seen:
             usage = self._self_result_usage
-            self._self_invocation.input_tokens = _input_tokens(usage)
-            self._self_invocation.output_tokens = usage.get("output_tokens")
+            if usage is not None:
+                self._self_invocation.input_tokens = _input_tokens(usage)
+                self._self_invocation.output_tokens = usage.get(
+                    "output_tokens"
+                )
             return
         if self._self_assistant_input is not None or (
             self._self_assistant_output is not None

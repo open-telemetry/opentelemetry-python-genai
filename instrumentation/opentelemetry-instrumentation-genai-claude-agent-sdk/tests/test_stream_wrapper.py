@@ -310,6 +310,20 @@ def test_usage_falls_back_to_assistant_messages(
     )
 
 
+def test_result_without_usage_exports_no_tokens(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # Assistant messages report usage, but the terminal ResultMessage carries
+    # none: the fallback must not turn unavailable totals into token counts.
+    messages = single_turn()
+    messages[-1] = result(usage=None)
+    run_query(messages)
+
+    span = agent_spans(span_exporter)[0]
+    assert "gen_ai.usage.input_tokens" not in span.attributes
+    assert "gen_ai.usage.output_tokens" not in span.attributes
+
+
 def test_result_error_marks_agent_span_failed(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:

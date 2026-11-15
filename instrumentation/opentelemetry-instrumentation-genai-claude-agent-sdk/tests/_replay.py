@@ -87,7 +87,7 @@ def tool_result(
 
 def result(
     *,
-    usage: tuple[int, int] = (20, 38),
+    usage: tuple[int, int] | None = (20, 38),
     cache_read: int | None = None,
     cache_creation: int | None = None,
     session_id: str = "session-1",
@@ -96,14 +96,16 @@ def result(
     errors: list[str] | None = None,
     stop_reason: str | None = "end_turn",
 ) -> dict[str, Any]:
-    tokens: dict[str, Any] = {
-        "input_tokens": usage[0],
-        "output_tokens": usage[1],
-    }
-    if cache_read is not None:
-        tokens["cache_read_input_tokens"] = cache_read
-    if cache_creation is not None:
-        tokens["cache_creation_input_tokens"] = cache_creation
+    tokens: dict[str, Any] | None = None
+    if usage is not None:
+        tokens = {
+            "input_tokens": usage[0],
+            "output_tokens": usage[1],
+        }
+        if cache_read is not None:
+            tokens["cache_read_input_tokens"] = cache_read
+        if cache_creation is not None:
+            tokens["cache_creation_input_tokens"] = cache_creation
     message: dict[str, Any] = {
         "type": "result",
         "subtype": subtype
