@@ -8,9 +8,8 @@ OpenTelemetry Claude Agent SDK Instrumentation
 Instrumentation for the `Claude Agent SDK
 <https://github.com/anthropics/claude-agent-sdk-python>`_.
 
-Each ``query()`` stream becomes one ``invoke_agent`` span, and each tool call
-observed in that stream an ``execute_tool`` span. This is agent-level tracing:
-LLM requests the CLI makes internally are not reported here.
+Each ``query()`` stream becomes one ``invoke_agent`` span. This is agent-level
+tracing: LLM requests the CLI makes internally are not reported here.
 
 Usage
 -----
