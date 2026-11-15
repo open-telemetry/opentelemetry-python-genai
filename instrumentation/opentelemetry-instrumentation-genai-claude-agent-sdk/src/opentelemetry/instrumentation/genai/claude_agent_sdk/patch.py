@@ -27,6 +27,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.stream import AsyncStreamWrapper
 from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
     Error,
     InputMessage,
     OutputMessage,
@@ -35,6 +36,7 @@ from opentelemetry.util.genai.types import (
     ToolCallRequestPart,
     ToolCallResponsePart,
 )
+from opentelemetry.util.genai.utils import get_content_capturing_mode
 
 DEFAULT_AGENT_NAME = "claude-agent-sdk"
 
@@ -69,13 +71,17 @@ def _input_tokens(usage: dict[str, Any]) -> int | None:
     return sum(component or 0 for component in components)
 
 
-def _result_error(chunk: ResultMessage, *, capture: bool) -> Error:
+def _result_error(chunk: ResultMessage) -> Error:
     message: str | None = None
-    # ``errors`` only exists in newer SDK releases.
+    # ``errors`` only exists in newer SDK releases. Its text is user data, so
+    # only a span-inclusive capture mode may put it in the status description;
+    # a completion hook or EVENT_ONLY still keeps it out of the span.
     errors = getattr(chunk, "errors", None)
-    if capture and isinstance(errors, list) and errors:
-        # The per-error text is user data, so it only becomes the status
-        # description when content capture is enabled.
+    span_capture = get_content_capturing_mode() in (
+        ContentCapturingMode.SPAN_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    )
+    if span_capture and isinstance(errors, list) and errors:
         message = str(cast("list[object]", errors)[0])
     else:
         message = chunk.subtype
@@ -193,10 +199,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
                 _finish_reason(stop_reason)
             ]
         if chunk.is_error:
-            self._self_result_error = _result_error(
-                chunk,
-                capture=self._self_invocation.should_capture_content,
-            )
+            self._self_result_error = _result_error(chunk)
 
     def _apply_usage(self) -> None:
         # The ResultMessage carries the run totals; AssistantMessage usage is

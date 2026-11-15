@@ -40,6 +40,13 @@ class CallerError(Exception):
     """A caller-side failure raised while the stream is being consumed."""
 
 
+class _RecordingHook:
+    """A completion hook that is not the no-op, so content capture turns on."""
+
+    def on_completion(self, **kwargs: Any) -> None:
+        return None
+
+
 def claude_agent_sdk_instrumentor():
     from opentelemetry.instrumentation.genai.claude_agent_sdk import (
         ClaudeAgentSDKInstrumentor,
@@ -347,6 +354,44 @@ def test_result_error_description_gated_by_capture(
     assert agent.status.description == (
         "the agent run failed" if capture else "error_during_execution"
     )
+
+
+@pytest.mark.skipif(
+    not _result_reports_errors(),
+    reason="this claude-agent-sdk release does not report errors",
+)
+@pytest.mark.parametrize(
+    ("mode", "hook"),
+    [("EVENT_ONLY", False), ("NO_CONTENT", True)],
+)
+def test_result_error_description_stays_safe_without_span_capture(
+    span_exporter, tracer_provider, monkeypatch, mode, hook
+) -> None:
+    # EVENT_ONLY and a completion hook both turn on should_capture_content
+    # without allowing span content; the raw error text must stay out of the
+    # status description.
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", mode
+    )
+    instrumentor = claude_agent_sdk_instrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        completion_hook=_RecordingHook() if hook else None,
+    )
+    try:
+        messages = single_turn()
+        messages[-1] = result(
+            usage=(20, 38),
+            is_error=True,
+            errors=["the agent run failed"],
+        )
+        run_query(messages)
+    finally:
+        instrumentor.uninstrument()
+
+    agent = agent_spans(span_exporter)[0]
+    assert agent.status.status_code.name == "ERROR"
+    assert agent.status.description == "error_during_execution"
 
 
 def test_stream_error_marks_agent_span_failed(
