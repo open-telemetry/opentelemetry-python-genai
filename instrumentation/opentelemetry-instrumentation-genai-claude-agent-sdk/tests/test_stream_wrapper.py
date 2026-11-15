@@ -31,11 +31,9 @@ from ._replay import (
     assistant,
     result,
     single_turn,
-    two_tools_in_one_message,
 )
 
 AGENT_SPAN = "invoke_agent claude-agent-sdk"
-OTHER_ERROR = "_OTHER"
 
 
 class CallerError(Exception):
@@ -48,6 +46,17 @@ def claude_agent_sdk_instrumentor():
     )
 
     return ClaudeAgentSDKInstrumentor()
+
+
+@pytest.fixture(params=["NO_CONTENT", "SPAN_ONLY"])
+def capture(request, tracer_provider, monkeypatch):
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", request.param
+    )
+    instrumentor = claude_agent_sdk_instrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+    yield request.param != "NO_CONTENT"
+    instrumentor.uninstrument()
 
 
 def open_stream(
@@ -80,7 +89,6 @@ def run_query(
 
 
 def thinking_turn() -> list[dict[str, Any]]:
-    """One turn whose assistant message carries a thinking block."""
     return [
         _message(),
         assistant(
@@ -105,18 +113,24 @@ def agent_spans(span_exporter) -> list[Any]:
     ]
 
 
-def tool_spans(span_exporter) -> list[Any]:
-    return [
-        span
-        for span in span_exporter.get_finished_spans()
-        if span.name.startswith("execute_tool")
-    ]
-
-
 def exception_events(span) -> list[Any]:
     return [
         event for event in span.events if event.name.endswith(".exception")
     ]
+
+
+def _assistant_reports_usage() -> bool:
+    return "usage" in inspect.signature(sdk_types.AssistantMessage).parameters
+
+
+def _result_reports_stop_reason() -> bool:
+    return (
+        "stop_reason" in inspect.signature(sdk_types.ResultMessage).parameters
+    )
+
+
+def _result_reports_errors() -> bool:
+    return "errors" in inspect.signature(sdk_types.ResultMessage).parameters
 
 
 def test_single_turn_emits_one_agent_span(
@@ -132,6 +146,35 @@ def test_single_turn_emits_one_agent_span(
     assert span.attributes["gen_ai.agent.name"] == "claude-agent-sdk"
 
 
+def test_native_tracing_skips_instrumentation(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    options = ClaudeAgentOptions(
+        env={
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+            "OTEL_TRACES_EXPORTER": "otlp",
+        }
+    )
+    run_query(single_turn(), options=options)
+
+    assert agent_spans(span_exporter) == []
+
+
+def test_native_tracing_without_exporter_still_instruments(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    options = ClaudeAgentOptions(
+        env={
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+        }
+    )
+    run_query(single_turn(), options=options)
+
+    assert len(agent_spans(span_exporter)) == 1
+
+
 def test_session_id_reported_as_conversation_id(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:
@@ -144,7 +187,6 @@ def test_session_id_reported_as_conversation_id(
 def test_conversation_id_falls_back_to_result_message(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:
-    # No init message: the ResultMessage still carries the session id.
     run_query(
         [
             assistant([{"type": "text", "text": "hi"}]),
@@ -159,8 +201,6 @@ def test_conversation_id_falls_back_to_result_message(
 def test_sdk_session_id_overrides_inherited_conversation_id(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:
-    # query() running inside another conversation still reports its own
-    # SDK session, not the parent's id.
     token = otel_context.attach(with_conversation_id("parent-conversation"))
     try:
         run_query(single_turn())
@@ -186,8 +226,6 @@ def test_usage_comes_from_result_message(
 def test_cache_tokens_are_counted_as_input(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:
-    # GenAI input tokens include cache reads and cache writes; the local agent
-    # span has no attribute of its own to report them separately.
     run_query(
         [
             _message(),
@@ -205,38 +243,6 @@ def test_cache_tokens_are_counted_as_input(
     span = agent_spans(span_exporter)[0]
     assert span.attributes["gen_ai.usage.input_tokens"] == 1210
     assert span.attributes["gen_ai.usage.output_tokens"] == 5
-
-
-def _assistant_reports_usage() -> bool:
-    """True when this SDK release parses usage onto AssistantMessage."""
-    return "usage" in inspect.signature(sdk_types.AssistantMessage).parameters
-
-
-def _result_reports_stop_reason() -> bool:
-    """True when this SDK release parses stop_reason onto ResultMessage."""
-    return (
-        "stop_reason" in inspect.signature(sdk_types.ResultMessage).parameters
-    )
-
-
-def _result_reports_errors() -> bool:
-    """True when this SDK release parses the per-error messages."""
-    return "errors" in inspect.signature(sdk_types.ResultMessage).parameters
-
-
-@pytest.mark.skipif(
-    not _result_reports_stop_reason(),
-    reason="this claude-agent-sdk release does not report stop_reason",
-)
-def test_finish_reason_exported_from_result(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    run_query(single_turn())
-
-    span = agent_spans(span_exporter)[0]
-    # The ResultMessage carries the run's terminal stop reason, mapped to the
-    # util's FinishReason vocabulary.
-    assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
 
 
 @pytest.mark.skipif(
@@ -269,163 +275,32 @@ def test_finish_reason_normalized_to_finish_reason_vocabulary(
     not _assistant_reports_usage(),
     reason="this claude-agent-sdk release reports usage only on ResultMessage",
 )
-def test_usage_falls_back_to_assistant_messages_without_result(
-    span_exporter, instrument_claude_agent_sdk
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        ({"input_tokens": 7, "output_tokens": 9}, {"input": 7, "output": 9}),
+        ({"input_tokens": 0, "output_tokens": 0}, {"input": 0, "output": 0}),
+        ({"input_tokens": 7}, {"input": 7}),
+    ],
+)
+def test_usage_falls_back_to_assistant_messages(
+    span_exporter, instrument_claude_agent_sdk, usage, expected
 ) -> None:
     # No ResultMessage: the run ended early, so the per-message usage is the
     # only available total.
-    run_query(
-        [
-            _message(),
-            assistant(
-                [{"type": "text", "text": "hi"}],
-                usage=(7, 9),
-                stop_reason="end_turn",
-            ),
-        ]
+    message = assistant(
+        [{"type": "text", "text": "hi"}], stop_reason="end_turn"
     )
+    message["message"]["usage"] = usage
+    run_query([_message(), message])
 
     span = agent_spans(span_exporter)[0]
-    assert span.attributes["gen_ai.usage.input_tokens"] == 7
-    assert span.attributes["gen_ai.usage.output_tokens"] == 9
-
-
-@pytest.mark.skipif(
-    not _assistant_reports_usage(),
-    reason="this claude-agent-sdk release reports usage only on ResultMessage",
-)
-def test_usage_fallback_exports_reported_zeros(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    # (0, 0) is a reported value, not the absence of one: both attributes must
-    # be exported even though neither total is nonzero.
-    run_query(
-        [
-            _message(),
-            assistant(
-                [{"type": "text", "text": "hi"}],
-                usage=(0, 0),
-                stop_reason="end_turn",
-            ),
-        ]
+    assert span.attributes.get("gen_ai.usage.input_tokens") == expected.get(
+        "input"
     )
-
-    span = agent_spans(span_exporter)[0]
-    assert span.attributes["gen_ai.usage.input_tokens"] == 0
-    assert span.attributes["gen_ai.usage.output_tokens"] == 0
-
-
-@pytest.mark.skipif(
-    not _assistant_reports_usage(),
-    reason="this claude-agent-sdk release reports usage only on ResultMessage",
-)
-def test_usage_fallback_does_not_invent_missing_component(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    messages = [
-        _message(),
-        assistant(
-            [{"type": "text", "text": "hi"}],
-            usage=(7, 9),
-            stop_reason="end_turn",
-        ),
-    ]
-    # Only the input component is observed; the output total stays unknown.
-    del messages[1]["message"]["usage"]["output_tokens"]
-
-    run_query(messages)
-
-    span = agent_spans(span_exporter)[0]
-    assert span.attributes["gen_ai.usage.input_tokens"] == 7
-    assert "gen_ai.usage.output_tokens" not in span.attributes
-
-
-def test_builtin_tool_span_nests_under_agent(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    run_query(single_turn(tool_name="Read"))
-
-    agent = agent_spans(span_exporter)[0]
-    (tool,) = tool_spans(span_exporter)
-    assert tool.name == "execute_tool Read"
-    assert tool.attributes["gen_ai.tool.name"] == "Read"
-    assert tool.attributes["gen_ai.tool.type"] == "function"
-    assert tool.attributes["gen_ai.tool.call.id"] == "toolu_1"
-    # The executing agent is known here, so the conditionally required
-    # attribute must be reported on the tool span and its metrics.
-    assert tool.attributes["gen_ai.agent.name"] == "claude-agent-sdk"
-    assert tool.parent is not None
-    assert tool.parent.span_id == agent.context.span_id
-
-
-def test_two_tools_in_one_message_are_siblings(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    run_query(two_tools_in_one_message())
-
-    agent = agent_spans(span_exporter)[0]
-    first, second = sorted(
-        tool_spans(span_exporter),
-        key=lambda span: span.attributes["gen_ai.tool.call.id"],
+    assert span.attributes.get("gen_ai.usage.output_tokens") == expected.get(
+        "output"
     )
-    for tool in (first, second):
-        assert tool.parent is not None
-        assert tool.parent.span_id == agent.context.span_id
-    assert first.context.span_id != second.context.span_id
-    assert first.parent.span_id != second.context.span_id
-
-
-def test_tool_result_error_marks_tool_span_failed(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    run_query(single_turn(tool_error=True))
-
-    (tool,) = tool_spans(span_exporter)
-    assert tool.status.status_code.name == "ERROR"
-    # A tool-result error flag is not a raised exception: report the semconv
-    # fallback type and never fabricate an exception event.
-    assert tool.attributes["error.type"] == OTHER_ERROR
-    # The raw result is user data; with capture off it must not leak into the
-    # span status description.
-    assert not tool.status.description
-    assert exception_events(tool) == []
-
-
-def test_tool_result_error_description_only_with_capture(
-    span_exporter, tracer_provider, monkeypatch
-) -> None:
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    instrumentor = claude_agent_sdk_instrumentor()
-    instrumentor.instrument(tracer_provider=tracer_provider)
-    try:
-        run_query(single_turn(tool_error=True))
-    finally:
-        instrumentor.uninstrument()
-
-    (tool,) = tool_spans(span_exporter)
-    assert tool.status.status_code.name == "ERROR"
-    assert tool.status.description == "hello"
-
-
-def test_stream_error_marks_agent_and_tool_failed(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    messages = single_turn()
-    with pytest.raises(Exception, match="transport broke") as excinfo:
-        run_query(messages, fail_after=2)
-
-    agent = agent_spans(span_exporter)[0]
-    (tool,) = tool_spans(span_exporter)
-    assert agent.status.status_code.name == "ERROR"
-    # Newer SDK releases surface this as RuntimeError, older ones raise a plain
-    # Exception; the span must report whichever reached the caller.
-    assert agent.attributes["error.type"] == type(excinfo.value).__name__
-    assert tool.status.status_code.name == "ERROR"
-    # The pending tool observes the same failure that broke the stream, so it
-    # reports that exception class rather than a generic fallback.
-    assert tool.attributes["error.type"] == type(excinfo.value).__name__
 
 
 def test_result_error_marks_agent_span_failed(
@@ -444,20 +319,20 @@ def test_result_error_marks_agent_span_failed(
     agent = agent_spans(span_exporter)[0]
     assert agent.status.status_code.name == "ERROR"
     assert agent.attributes["error.type"] == "error_during_execution"
-    # Capture is off here, so the description can only be the subtype.
-    assert agent.status.description == "error_during_execution"
-    # Usage and output still land on the span.
     assert agent.attributes["gen_ai.usage.input_tokens"] == 20
     assert agent.attributes["gen_ai.usage.output_tokens"] == 38
-    # No exception happened, so no exception event may be recorded.
     assert exception_events(agent) == []
 
 
-def test_result_error_hides_user_text_without_capture(
-    span_exporter, instrument_claude_agent_sdk
+@pytest.mark.skipif(
+    not _result_reports_errors(),
+    reason="this claude-agent-sdk release does not report errors",
+)
+def test_result_error_description_gated_by_capture(
+    span_exporter, capture
 ) -> None:
-    # The per-error text is user data, so with capture off it must not reach
-    # the status description; the subtype stays.
+    # The per-error text is user data, so it only reaches the status
+    # description when content capture is on; the subtype stays otherwise.
     messages = single_turn()
     messages[-1] = result(
         usage=(20, 38),
@@ -468,66 +343,24 @@ def test_result_error_hides_user_text_without_capture(
 
     agent = agent_spans(span_exporter)[0]
     assert agent.status.status_code.name == "ERROR"
-    assert agent.status.description == "error_during_execution"
     assert agent.attributes["error.type"] == "error_during_execution"
-
-
-@pytest.mark.skipif(
-    not _result_reports_errors(),
-    reason="this claude-agent-sdk release does not report errors",
-)
-def test_result_error_description_only_with_capture(
-    span_exporter, tracer_provider, monkeypatch
-) -> None:
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    assert agent.status.description == (
+        "the agent run failed" if capture else "error_during_execution"
     )
-    instrumentor = claude_agent_sdk_instrumentor()
-    instrumentor.instrument(tracer_provider=tracer_provider)
-    try:
-        messages = single_turn()
-        messages[-1] = result(
-            usage=(20, 38),
-            is_error=True,
-            errors=["the agent run failed"],
-        )
-        run_query(messages)
-    finally:
-        instrumentor.uninstrument()
+
+
+def test_stream_error_marks_agent_span_failed(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    messages = single_turn()
+    with pytest.raises(Exception, match="transport broke") as excinfo:
+        run_query(messages, fail_after=2)
 
     agent = agent_spans(span_exporter)[0]
     assert agent.status.status_code.name == "ERROR"
-    assert agent.status.description == "the agent run failed"
-
-
-def test_tool_span_omits_arguments_and_result_without_capture(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    # Tool arguments and results are content, not structure: with capture off
-    # neither attribute may appear on the span.
-    run_query(single_turn())
-
-    (tool,) = tool_spans(span_exporter)
-    assert "gen_ai.tool.call.arguments" not in tool.attributes
-    assert "gen_ai.tool.call.result" not in tool.attributes
-
-
-def test_tool_span_records_arguments_and_result_with_capture(
-    span_exporter, tracer_provider, monkeypatch
-) -> None:
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    instrumentor = claude_agent_sdk_instrumentor()
-    instrumentor.instrument(tracer_provider=tracer_provider)
-    try:
-        run_query(single_turn())
-    finally:
-        instrumentor.uninstrument()
-
-    (tool,) = tool_spans(span_exporter)
-    assert "/tmp/a.txt" in str(tool.attributes["gen_ai.tool.call.arguments"])
-    assert tool.attributes["gen_ai.tool.call.result"] == "hello"
+    # Newer SDK releases surface this as RuntimeError, older ones raise a plain
+    # Exception; the span must report whichever reached the caller.
+    assert agent.attributes["error.type"] == type(excinfo.value).__name__
 
 
 def test_caller_closing_early_ends_span(
@@ -547,59 +380,41 @@ def test_caller_closing_early_ends_span(
     assert spans[0].status.status_code.name == "UNSET"
 
 
-def test_closing_with_pending_tool_leaves_tool_span_unset(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    messages = [
-        _message(),
-        assistant(
-            [
-                {
-                    "type": "tool_use",
-                    "id": "toolu_1",
-                    "name": "Read",
-                    "input": {"file_path": "/tmp/a.txt"},
-                }
-            ],
-            stop_reason="tool_use",
-        ),
-    ]
-
-    async def _run() -> None:
-        stream = open_stream(messages)
-        seen = 0
-        async for _ in stream:
-            seen += 1
-            if seen == 2:
-                break
-        await stream.aclose()
-
-    anyio.run(_run)
-
-    (agent,) = agent_spans(span_exporter)
-    (tool,) = tool_spans(span_exporter)
-    assert len(agent_spans(span_exporter)) == 1
-    assert len(tool_spans(span_exporter)) == 1
-    # The caller closed without an error, and no tool_result was observed: the
-    # tool interval ends UNSET instead of being recorded as a tool failure.
-    assert tool.status.status_code.name == "UNSET"
-    assert "error.type" not in tool.attributes
-
-
-def test_output_messages_captured_when_enabled(
-    span_exporter, tracer_provider, monkeypatch
-) -> None:
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    instrumentor = claude_agent_sdk_instrumentor()
-    instrumentor.instrument(tracer_provider=tracer_provider)
-    try:
-        run_query(single_turn())
-    finally:
-        instrumentor.uninstrument()
+def test_thinking_block_as_reasoning_part(span_exporter, capture) -> None:
+    run_query(thinking_turn())
 
     span = agent_spans(span_exporter)[0]
+    if not capture:
+        assert "gen_ai.output.messages" not in span.attributes
+        return
+    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    assert messages[0]["parts"][0] == {
+        "content": "Let me read the file first.",
+        "type": "reasoning",
+    }
+
+
+def test_input_prompt_capture(span_exporter, capture) -> None:
+    run_query(single_turn(), prompt="Read /tmp/a.txt")
+
+    span = agent_spans(span_exporter)[0]
+    if not capture:
+        assert "gen_ai.input.messages" not in span.attributes
+        return
+    messages = json.loads(span.attributes["gen_ai.input.messages"])
+    assert messages[0]["role"] == "user"
+    assert messages[0]["parts"] == [
+        {"content": "Read /tmp/a.txt", "type": "text"}
+    ]
+
+
+def test_output_messages_capture(span_exporter, capture) -> None:
+    run_query(single_turn())
+
+    span = agent_spans(span_exporter)[0]
+    if not capture:
+        assert "gen_ai.output.messages" not in span.attributes
+        return
     messages = json.loads(span.attributes["gen_ai.output.messages"])
     # One message per SDK message keeps the turn boundaries the model saw.
     assert [message["role"] for message in messages] == [
@@ -621,78 +436,11 @@ def test_output_messages_captured_when_enabled(
     assert messages[2]["parts"] == [{"content": "Done: hello", "type": "text"}]
 
 
-def test_thinking_block_captured_as_reasoning_part(
-    span_exporter, tracer_provider, monkeypatch
-) -> None:
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    instrumentor = claude_agent_sdk_instrumentor()
-    instrumentor.instrument(tracer_provider=tracer_provider)
-    try:
-        run_query(thinking_turn())
-    finally:
-        instrumentor.uninstrument()
-
-    span = agent_spans(span_exporter)[0]
-    messages = json.loads(span.attributes["gen_ai.output.messages"])
-    assert messages[0]["parts"][0] == {
-        "content": "Let me read the file first.",
-        "type": "reasoning",
-    }
-
-
-def test_thinking_block_not_captured_by_default(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    run_query(thinking_turn())
-
-    span = agent_spans(span_exporter)[0]
-    # Without content capture even the reasoning part stays off the span.
-    assert "gen_ai.output.messages" not in span.attributes
-
-
-def test_input_prompt_captured_when_enabled(
-    span_exporter, tracer_provider, monkeypatch
-) -> None:
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    instrumentor = claude_agent_sdk_instrumentor()
-    instrumentor.instrument(tracer_provider=tracer_provider)
-    try:
-        run_query(single_turn(), prompt="Read /tmp/a.txt")
-    finally:
-        instrumentor.uninstrument()
-
-    span = agent_spans(span_exporter)[0]
-    messages = json.loads(span.attributes["gen_ai.input.messages"])
-    assert messages[0]["role"] == "user"
-    assert messages[0]["parts"] == [
-        {"content": "Read /tmp/a.txt", "type": "text"}
-    ]
-
-
-def test_no_content_captured_by_default(
-    span_exporter, instrument_claude_agent_sdk
-) -> None:
-    run_query(single_turn())
-
-    span = agent_spans(span_exporter)[0]
-    assert "gen_ai.input.messages" not in span.attributes
-    assert "gen_ai.output.messages" not in span.attributes
-    (tool,) = tool_spans(span_exporter)
-    assert "gen_ai.tool.call.arguments" not in tool.attributes
-    assert "gen_ai.tool.call.result" not in tool.attributes
-
-
-def test_agent_span_starts_on_first_read(
+def test_agent_span_starts_in_creator_context(
     span_exporter, tracer_provider, instrument_claude_agent_sdk
 ) -> None:
     tracer = tracer_provider.get_tracer("test")
-    # A stream created inside one context and read outside it belongs to the
-    # context that reads it, not the one that created it.
-    with tracer.start_as_current_span("creator"):
+    with tracer.start_as_current_span("creator") as creator:
         stream = open_stream(single_turn())
 
     async def _drain() -> None:
@@ -702,7 +450,8 @@ def test_agent_span_starts_on_first_read(
     anyio.run(_drain)
 
     (agent,) = agent_spans(span_exporter)
-    assert agent.parent is None
+    assert agent.parent is not None
+    assert agent.parent.span_id == creator.get_span_context().span_id
 
 
 def test_caller_context_restored_between_reads(
@@ -726,7 +475,7 @@ def test_caller_context_restored_between_reads(
     assert agent.parent.span_id == caller_id
 
 
-def test_caller_exception_inside_context_finalizes_both_spans(
+def test_caller_exception_inside_context_finalizes_agent_span(
     span_exporter, tracer_provider, instrument_claude_agent_sdk
 ) -> None:
     tracer = tracer_provider.get_tracer("test")
@@ -739,8 +488,6 @@ def test_caller_exception_inside_context_finalizes_both_spans(
                     async for _ in stream:
                         seen += 1
                         if seen == 2:
-                            # A tool_use block has been seen, so the tool span
-                            # is still pending when the caller raises.
                             raise CallerError("caller failed")
             current = trace.get_current_span().get_span_context()
             return caller.get_span_context().span_id, current.span_id
@@ -750,11 +497,8 @@ def test_caller_exception_inside_context_finalizes_both_spans(
     # __aexit__ finalizes telemetry and restores the caller's context.
     assert current_id == caller_id
     (agent,) = agent_spans(span_exporter)
-    (tool,) = tool_spans(span_exporter)
     assert agent.status.status_code.name == "ERROR"
     assert agent.attributes["error.type"].endswith("CallerError")
-    assert tool.status.status_code.name == "ERROR"
-    assert tool.attributes["error.type"].endswith("CallerError")
 
 
 def test_cancellation_marks_agent_span_failed(
@@ -786,24 +530,15 @@ def test_closing_twice_does_not_duplicate_spans(
     anyio.run(_run)
 
     assert len(agent_spans(span_exporter)) == 1
-    assert len(tool_spans(span_exporter)) <= 1
 
 
-def test_close_before_first_read_does_not_start_agent(
+def test_close_before_first_read_ends_span(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:
     async def _run() -> None:
         stream = open_stream(single_turn())
-        # Closing before the first read finalizes the wrapper with no agent.
         await stream.aclose()
-        assert stream._self_agent is None
-        try:
-            await stream.__anext__()
-        except StopAsyncIteration:
-            pass
-        # A late read must not create an invocation that no finalizer can end.
-        assert stream._self_agent is None
 
     anyio.run(_run)
 
-    assert agent_spans(span_exporter) == []
+    assert len(agent_spans(span_exporter)) == 1

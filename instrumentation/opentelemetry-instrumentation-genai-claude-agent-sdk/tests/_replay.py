@@ -124,43 +124,6 @@ def result(
     return message
 
 
-def two_tools_in_one_message(
-    *,
-    first_id: str = "toolu_1",
-    second_id: str = "toolu_2",
-) -> list[dict[str, Any]]:
-    """One assistant message that requests two tools at once."""
-    return [
-        _message(),
-        assistant(
-            [
-                {"type": "text", "text": "Reading both files."},
-                {
-                    "type": "tool_use",
-                    "id": first_id,
-                    "name": "Read",
-                    "input": {"file_path": "/tmp/a.txt"},
-                },
-                {
-                    "type": "tool_use",
-                    "id": second_id,
-                    "name": "Read",
-                    "input": {"file_path": "/tmp/b.txt"},
-                },
-            ],
-            stop_reason="tool_use",
-        ),
-        tool_result(first_id, "a"),
-        tool_result(second_id, "b"),
-        assistant(
-            [{"type": "text", "text": "Done."}],
-            usage=(8, 8),
-            stop_reason="end_turn",
-        ),
-        result(),
-    ]
-
-
 def single_turn(
     *,
     assistant_usage: tuple[int, int] = (12, 30),
@@ -191,42 +154,6 @@ def single_turn(
             stop_reason="end_turn",
         ),
         result(usage=result_usage),
-    ]
-
-
-def two_turns(
-    *,
-    first_usage: tuple[int, int] = (32, 38),
-    second_usage: tuple[int, int] = (10, 9),
-) -> list[dict[str, Any]]:
-    """Two turns in one stream: each ends with its own ResultMessage."""
-    return [
-        _message(),
-        assistant(
-            [
-                {"type": "text", "text": "Reading the file."},
-                {
-                    "type": "tool_use",
-                    "id": "toolu_1",
-                    "name": "Read",
-                    "input": {"file_path": "/tmp/a.txt"},
-                },
-            ],
-            usage=(12, 30),
-        ),
-        tool_result("toolu_1"),
-        assistant(
-            [{"type": "text", "text": "Done: hello"}],
-            usage=(8, 8),
-            stop_reason="end_turn",
-        ),
-        result(usage=first_usage),
-        assistant(
-            [{"type": "text", "text": "Second turn"}],
-            usage=(10, 9),
-            stop_reason="end_turn",
-        ),
-        result(usage=second_usage),
     ]
 
 
@@ -285,11 +212,3 @@ class ReplayTransport(Transport):
 
     async def end_input(self) -> None:
         return None
-
-
-def spans_by_name(span_exporter) -> dict[str, list[Any]]:
-    """Group finished spans by name for assertions."""
-    grouped: dict[str, list[Any]] = {}
-    for span in span_exporter.get_finished_spans():
-        grouped.setdefault(span.name, []).append(span)
-    return grouped
