@@ -1,0 +1,1 @@
+Streamed agent runs no longer raise into the application when the run's output can't be serialized.

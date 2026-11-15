@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Generator, Mapping
-from contextlib import AbstractContextManager, ExitStack
+from contextlib import ExitStack
 from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 from smolagents import AgentMaxStepsError
@@ -419,77 +419,58 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
         stream: Generator[_RunStreamChunk, None, None],
         invocation: LocalAgentInvocation,
         agent: MultiStepAgent,
-        *,
-        capture_content: bool,
     ) -> None:
-        # Model-stream metrics do not apply to agent steps, so do not pass the
-        # invocation to the base class.
-        super().__init__(stream)
-        self._self_agent_invocation = invocation
+        super().__init__(stream, invocation)
         invocation.suspend()
+        self._self_agent_invocation = invocation
         self._self_agent = agent
-        self._self_capture_content = capture_content
         self._self_final_output: object = None
         self._self_saw_final = False
-        self._self_finished = False
-
-    def _execution_context(self) -> AbstractContextManager[None]:
-        return self._self_agent_invocation.activate()
 
     def __del__(self) -> None:
+        # An abandoned run is treated as finished; close its generator inside
+        # the agent span so the run's own cleanup is parented under it. The
+        # span may already have ended at the final answer, but the generator
+        # still needs closing.
+        stream = getattr(self, "_self_stream", None)
+        if stream is None:
+            return
         try:
             with self._execution_context():
                 try:
-                    self._self_stream.close()
+                    stream.close()
                 finally:
                     self._finalize_success()
         except BaseException:  # pylint: disable=broad-except
             pass
 
-    def _finish_once(self, error: BaseException | None = None) -> None:
-        if self._self_finished:
-            return
-        self._self_finished = True
-        _finish(self._self_agent_invocation, error)
-
-    # The base wrapper finalizes on StopIteration and on an Exception, but not
-    # on an interrupt, which would leave the span open.
-    def __next__(self) -> _RunStreamChunk:
-        try:
-            return super().__next__()
-        except StopIteration:
-            raise
-        except BaseException as error:
-            self._finish_once(error)
-            raise
-
-    def close(self) -> None:
-        try:
-            super().close()
-        except BaseException as error:
-            self._finish_once(error)
-            raise
-
     def _process_chunk(self, chunk: _RunStreamChunk) -> None:
+        # The run is over at the final answer even if the caller stops reading
+        # without draining the generator.
         if isinstance(chunk, FinalAnswerStep):
             self._self_final_output = chunk.output
             self._self_saw_final = True
             self._finalize_success()
 
     def _on_stream_end(self) -> None:
+        invocation = self._self_agent_invocation
         try:
             if self._self_saw_final:
                 _record_run_answer(
-                    self._self_agent_invocation,
+                    invocation,
                     self._self_agent,
                     self._self_final_output,
-                    capture_content=self._self_capture_content,
+                    capture_content=invocation.should_capture_content,
                 )
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug(
+                "Failed to record smolagents run answer", exc_info=True
+            )
         finally:
-            self._finish_once()
+            invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
-        self._finish_once(error)
+        self._self_agent_invocation.fail(error)
 
 
 def _record_agent(
@@ -526,12 +507,7 @@ def _record_agent_run(
         )
 
     if bound.get("stream") and isinstance(result, Generator):
-        return _AgentRunStreamWrapper(
-            result,
-            invocation,
-            agent,
-            capture_content=capture_content,
-        )
+        return _AgentRunStreamWrapper(result, invocation, agent)
 
     # ``return_full_result`` can be set on the agent, so ``run(task)`` can
     # return ``RunResult``.
