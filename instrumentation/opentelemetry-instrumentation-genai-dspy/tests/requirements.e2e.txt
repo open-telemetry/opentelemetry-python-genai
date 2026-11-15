@@ -1,0 +1,4 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+opentelemetry-genai-mock-server @ git+https://github.com/open-telemetry/semantic-conventions-conformance.git@8e27bddedbd332d370a4235a0fcf7fadc7692b86#subdirectory=tools/gen-ai/mock-server
