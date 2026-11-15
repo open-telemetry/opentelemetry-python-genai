@@ -394,7 +394,7 @@ def test_extract_converse_response_no_content(tracer_provider) -> None:
         assert invocation.input_tokens == 15
         assert invocation.output_tokens == 2
         assert invocation.cache_read_input_tokens == 3
-        assert invocation.cache_creation_input_tokens == 7
+        assert invocation.cache_write_input_tokens == 7
 
 
 def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:

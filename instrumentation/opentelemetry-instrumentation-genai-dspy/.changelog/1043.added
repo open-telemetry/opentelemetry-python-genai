@@ -1,0 +1,1 @@
+Capture modality token usage breakdowns and additional cache/reasoning token fields on `InferenceInvocation`.

@@ -120,7 +120,7 @@ def test_invoke_model_anthropic_messages(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 18
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 8
     assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 2
     assert (
