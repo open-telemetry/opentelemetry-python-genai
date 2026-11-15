@@ -408,6 +408,21 @@ def test_stream_error_marks_agent_span_failed(
     assert agent.attributes["error.type"] == type(excinfo.value).__name__
 
 
+def test_query_argument_error_ends_span_and_restores_context(
+    span_exporter, tracer_provider, instrument_claude_agent_sdk
+) -> None:
+    tracer = tracer_provider.get_tracer("test")
+    with tracer.start_as_current_span("caller") as caller:
+        with pytest.raises(TypeError):
+            claude_agent_sdk.query()
+        # The failed invocation must not stay current in the caller's context.
+        assert trace.get_current_span() is caller
+
+    (agent,) = agent_spans(span_exporter)
+    assert agent.status.status_code.name == "ERROR"
+    assert agent.attributes["error.type"] == "TypeError"
+
+
 def test_caller_closing_early_ends_span(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:

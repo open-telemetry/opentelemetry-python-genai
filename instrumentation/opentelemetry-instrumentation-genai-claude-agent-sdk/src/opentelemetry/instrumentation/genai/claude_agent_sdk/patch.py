@@ -254,7 +254,13 @@ def _wrap_query(handler: TelemetryHandler) -> Any:
             invocation.input_messages = [
                 InputMessage(role="user", parts=[TextPart(content=prompt)])
             ]
-        return ClaudeAgentStreamWrapper(wrapped(*args, **kwargs), invocation)
+        try:
+            stream = wrapped(*args, **kwargs)
+        except BaseException as exc:
+            # Argument binding happens here, so a bad call still owns the span.
+            invocation.fail(exc)
+            raise
+        return ClaudeAgentStreamWrapper(stream, invocation)
 
     return wrapper
 
