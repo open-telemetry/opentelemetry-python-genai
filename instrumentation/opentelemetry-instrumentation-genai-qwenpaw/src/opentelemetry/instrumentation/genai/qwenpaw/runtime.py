@@ -229,7 +229,6 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         ] = {}
         self._self_message_types: dict[str, object] = {}
         self._self_message_roles: dict[str, str] = {}
-        self._self_complete = False
         self._self_error: Error | None = None
 
     def _process_chunk(self, chunk: object) -> None:
@@ -239,14 +238,17 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
             if session_id:
                 invocation.conversation_id = session_id
             status = _field(chunk, "status")
-            self._self_complete = status == "completed"
             if status in ("failed", "cancelled"):
                 error = _field(chunk, "error")
                 self._self_error = Error(
                     type=non_empty_str(_field(error, "code")) or str(status),
                     message=non_empty_str(_field(error, "message")),
                 )
-            if invocation.should_capture_content:
+            if invocation.should_capture_content and status in (
+                "completed",
+                "failed",
+                "cancelled",
+            ):
                 for message in _items(_field(chunk, "output")):
                     self._capture_message(message)
         elif invocation.should_capture_content:
@@ -325,8 +327,6 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         if self._self_error is not None:
             invocation.fail(self._self_error)
         else:
-            if self._self_complete:
-                invocation.finish_reasons = ["stop"]
             invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:

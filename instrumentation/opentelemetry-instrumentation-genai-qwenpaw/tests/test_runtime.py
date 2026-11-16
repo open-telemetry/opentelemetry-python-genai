@@ -25,13 +25,24 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import SpanKind, StatusCode, get_current_span
 from opentelemetry.util.genai.handler import TelemetryHandler
 
-from .harness import make_runtime, runtime_request
+from .harness import make_runtime, patched_runtime_agent, runtime_request
 
 pytestmark = pytest.mark.usefixtures("runtime_module")
 
 
 async def drain(stream: Any) -> list[Any]:
     return [event async for event in stream]
+
+
+async def _close_runtime_stream(stream: Any) -> None:
+    if version("qwenpaw") == "2.0.0":
+        # QwenPaw 2.0.0 catches GeneratorExit and yields an error envelope.
+        with pytest.raises(RuntimeError, match="ignored GeneratorExit"):
+            await stream.aclose()
+        with suppress(GeneratorExit):
+            await anext(stream.__wrapped__)
+    else:
+        await stream.aclose()
 
 
 def output_text(span: Any) -> list[str]:
@@ -76,7 +87,7 @@ async def test_runtime_turn(
         "parts"
     ] == [{"type": "text", "content": "/test"}]
     assert output_text(span) == ["Runtime reply."]
-    assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
+    assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
     assert GenAI.GEN_AI_REQUEST_STREAM not in span.attributes
     metrics = [
         metric
@@ -101,6 +112,119 @@ async def test_disabled_capture(
     (span,) = span_exporter.get_finished_spans()
     assert GenAI.GEN_AI_INPUT_MESSAGES not in span.attributes
     assert GenAI.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_runtime_iteration_limit_has_no_model_finish_reason(
+    instrument_with_content: Any, span_exporter: Any
+) -> None:
+    from types import SimpleNamespace
+
+    from agentscope.event import EventType
+
+    async def reply_stream(*, inputs: Any) -> Any:
+        assert inputs
+        yield SimpleNamespace(
+            type=EventType.EXCEED_MAX_ITERS, name="Friday", metadata={}
+        )
+
+    with patched_runtime_agent(reply_stream) as runtime:
+        events = await drain(runtime.run(runtime_request("Run the agent.")))
+    assert events[-1].status == "completed"
+    (span,) = span_exporter.get_finished_spans()
+    assert output_text(span) == [
+        "[Warning] Agent 'Friday' has reached the maximum number of iterations."
+    ]
+    assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_mode", ["NO_CONTENT", "SPAN_ONLY"])
+async def test_runtime_heartbeats_do_not_recapture_completed_media(
+    tracer_provider: Any,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    capture_mode: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from agentscope.event import EventType
+    from qwenpaw.runtime import executor
+
+    from opentelemetry.instrumentation.genai.qwenpaw import (
+        runtime as telemetry,
+    )
+
+    decode_media = MagicMock(wraps=telemetry.image_from_url)
+    monkeypatch.setattr(telemetry, "image_from_url", decode_media)
+    heartbeat_work = []
+
+    async def heartbeat_ticks(agent_iter: Any, interval: float) -> Any:
+        del interval
+        async for event in agent_iter:
+            yield event
+            if event.type == EventType.TOOL_RESULT_END:
+                for _ in range(3):
+                    before = decode_media.call_count
+                    yield executor._HEARTBEAT_TICK
+                    heartbeat_work.append(decode_media.call_count - before)
+
+    monkeypatch.setattr(executor, "_iter_with_heartbeat", heartbeat_ticks)
+
+    async def reply_stream(*, inputs: Any) -> Any:
+        assert inputs
+        for kind in (
+            EventType.DATA_BLOCK_START,
+            EventType.DATA_BLOCK_DELTA,
+            EventType.DATA_BLOCK_END,
+            EventType.TOOL_CALL_START,
+            EventType.TOOL_CALL_END,
+            EventType.TOOL_RESULT_START,
+            EventType.TOOL_RESULT_END,
+        ):
+            yield SimpleNamespace(
+                type=kind,
+                block_id="image",
+                media_type="image/png",
+                data="YWJj",
+                tool_call_id="call-1",
+                tool_call_name="weather",
+                metadata={},
+            )
+
+    with (
+        instrument(
+            QwenPawInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture=capture_mode,
+        ),
+        patched_runtime_agent(reply_stream) as runtime,
+    ):
+        await drain(runtime.run(runtime_request("Describe the image.")))
+    assert heartbeat_work == [0, 0, 0]
+    (span,) = span_exporter.get_finished_spans()
+    if capture_mode == "SPAN_ONLY":
+        assert decode_media.call_count > 0
+        parts = [
+            part
+            for message in json.loads(
+                span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
+            )
+            for part in message["parts"]
+        ]
+        assert parts[0] == {
+            "type": "blob",
+            "content": "YWJj",
+            "mime_type": "image/png",
+            "modality": "image",
+        }
+    else:
+        decode_media.assert_not_called()
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.asyncio
@@ -220,13 +344,8 @@ async def test_early_close(
     if read:
         await anext(stream)
         await anext(stream)
-    if read and version("qwenpaw") == "2.0.0":
-        # QwenPaw 2.0.0 catches GeneratorExit and yields an error envelope.
-        # Preserve its close failure rather than masking it in instrumentation.
-        with pytest.raises(RuntimeError, match="ignored GeneratorExit"):
-            await stream.aclose()
-        with suppress(GeneratorExit):
-            await anext(stream.__wrapped__)
+    if read:
+        await _close_runtime_stream(stream)
     else:
         await stream.aclose()
     await stream.aclose()
@@ -477,7 +596,6 @@ async def test_output_message_parts(
 )
 async def test_real_envelope_parts(
     instrument_with_content: Any,
-    tracer_provider: Any,
     span_exporter: Any,
     monkeypatch: pytest.MonkeyPatch,
     part_kind: str,
@@ -485,7 +603,6 @@ async def test_real_envelope_parts(
     from types import SimpleNamespace
 
     from agentscope.event import EventType
-    from qwenpaw.runtime.envelope import Envelope
 
     from opentelemetry.instrumentation.genai.qwenpaw import runtime
 
@@ -512,34 +629,48 @@ async def test_real_envelope_parts(
                 (EventType.TOOL_RESULT_END, {}),
             ]
 
-    async def events(request: object) -> Any:
-        envelope = Envelope("sess-2")
+    async def reply_stream(*, inputs: Any) -> Any:
+        assert inputs
+        assert get_current_span().get_span_context().is_valid
         for kind, extra in event_fields:
-            event = SimpleNamespace(
+            yield SimpleNamespace(
                 type=kind,
                 tool_call_id="call-1",
                 block_id="thinking-1",
                 metadata={},
                 **extra,
             )
-            async for chunk in envelope.translate_event(event):
-                yield chunk
-        if part_kind == "tool_result":
-            async for chunk in envelope.finalize():
-                yield chunk
 
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
-    stream = runtime.make_runtime_wrapper(handler)(
-        events, make_runtime(), (runtime_request(),), {}
-    )
-    if part_kind == "tool_result":
-        await drain(stream)
-    else:
-        for _ in range(4 if part_kind == "tool_call" else 3):
-            await anext(stream)
-        parse_arguments.assert_not_called()
-        await stream.aclose()
+    request = runtime_request("Describe the weather.", session_id=None)
+    with patched_runtime_agent(reply_stream) as agent_runtime:
+        stream = agent_runtime.run(request.model_dump(mode="json"))
+        assert span_exporter.get_finished_spans() == ()
+        if part_kind == "tool_result":
+            await drain(stream)
+        else:
+            async for chunk in stream:
+                if part_kind == "reasoning":
+                    if (getattr(chunk, "text", "") or "").endswith("world"):
+                        break
+                else:
+                    arguments = (getattr(chunk, "data", None) or {}).get(
+                        "arguments", ""
+                    )
+                    if (
+                        part_kind == "partial_tool_call"
+                        and arguments == '{"city":'
+                    ) or (
+                        part_kind == "tool_call"
+                        and arguments.endswith('"Paris"}')
+                    ):
+                        break
+            parse_arguments.assert_not_called()
+            await _close_runtime_stream(stream)
     (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAI.GEN_AI_CONVERSATION_ID]
+    assert json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])[0][
+        "parts"
+    ] == [{"type": "text", "content": "Describe the weather."}]
     messages = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
     parts = [part for msg in messages for part in msg["parts"]]
     if part_kind == "reasoning":
@@ -842,25 +973,23 @@ async def test_real_envelope_inline_media(
 @pytest.mark.parametrize("ending", ["complete", "close", "error"])
 async def test_real_envelope_mixed_content(
     tracer_provider: Any,
+    logger_provider: Any,
+    meter_provider: Any,
     span_exporter: Any,
-    monkeypatch: Any,
     mime_type: str,
     ending: str,
 ) -> None:
     from types import SimpleNamespace
 
     from agentscope.event import EventType
-    from qwenpaw.runtime.envelope import Envelope
 
-    from opentelemetry.instrumentation.genai.qwenpaw.runtime import (
-        make_runtime_wrapper,
-    )
     from opentelemetry.util.genai.types import BlobPart, TextPart
 
     error = ConnectionError("mixed content interrupted")
 
-    async def events(request: object) -> Any:
-        envelope = Envelope("sess-2")
+    async def reply_stream(*, inputs: Any) -> Any:
+        assert inputs
+        assert get_current_span().get_span_context().is_valid
         for kind, block_id, fields in [
             (EventType.TEXT_BLOCK_START, "before", {}),
             (EventType.TEXT_BLOCK_DELTA, "before", {"delta": "before"}),
@@ -872,48 +1001,44 @@ async def test_real_envelope_mixed_content(
             (EventType.TEXT_BLOCK_DELTA, "after", {"delta": "af"}),
             (EventType.TEXT_BLOCK_DELTA, "after", {"delta": "ter"}),
         ]:
-            async for chunk in envelope.translate_event(
-                SimpleNamespace(
-                    type=kind, block_id=block_id, metadata={}, **fields
-                )
-            ):
-                yield chunk
-        if ending == "error":
-            async for chunk in envelope.error_envelope(
-                "interrupted", "ConnectionError"
-            ):
-                yield chunk
-            raise error
-        async for chunk in envelope.translate_event(
-            SimpleNamespace(
-                type=EventType.TEXT_BLOCK_END, block_id="after", metadata={}
+            yield SimpleNamespace(
+                type=kind, block_id=block_id, metadata={}, **fields
             )
-        ):
-            yield chunk
-        async for chunk in envelope.finalize():
-            yield chunk
+        if ending == "error":
+            raise error
+        yield SimpleNamespace(
+            type=EventType.TEXT_BLOCK_END, block_id="after", metadata={}
+        )
 
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
     hook = MagicMock()
-    handler = TelemetryHandler(
-        tracer_provider=tracer_provider, completion_hook=hook
-    )
-    stream = make_runtime_wrapper(handler)(
-        events, make_runtime(), (runtime_request(),), {}
-    )
-    if ending == "close":
-        async for chunk in stream:
-            if getattr(chunk, "text", None) == "ter":
-                break
-        await stream.aclose()
-    elif ending == "error":
-        with pytest.raises(ConnectionError) as caught:
+    with (
+        instrument(
+            QwenPawInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+            completion_hook=hook,
+        ),
+        patched_runtime_agent(reply_stream) as runtime,
+    ):
+        stream = runtime.run(
+            runtime_request("Describe the media.", session_id=None).model_dump(
+                mode="json"
+            )
+        )
+        assert span_exporter.get_finished_spans() == ()
+        if ending == "close":
+            async for chunk in stream:
+                if getattr(chunk, "text", None) == "ter":
+                    break
+            await _close_runtime_stream(stream)
+        elif ending == "error":
+            with pytest.raises(ConnectionError) as caught:
+                await drain(stream)
+            assert caught.value is error
+        else:
             await drain(stream)
-        assert caught.value is error
-    else:
-        await drain(stream)
     expected = [
         TextPart(content="before"),
         BlobPart(
@@ -927,6 +1052,10 @@ async def test_real_envelope_mixed_content(
     (message,) = hook.on_completion.call_args.kwargs["outputs"]
     assert message.parts == expected
     (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAI.GEN_AI_CONVERSATION_ID]
+    assert json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])[0][
+        "parts"
+    ] == [{"type": "text", "content": "Describe the media."}]
     (recorded,) = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
     assert recorded["role"] == "assistant"
     assert recorded["parts"] == [
@@ -940,5 +1069,8 @@ async def test_real_envelope_mixed_content(
         {"type": "text", "content": "after"},
     ]
     assert span.status.status_code is (
-        StatusCode.ERROR if ending == "error" else StatusCode.UNSET
+        StatusCode.ERROR
+        if ending == "error"
+        or (ending == "close" and version("qwenpaw") == "2.0.0")
+        else StatusCode.UNSET
     )

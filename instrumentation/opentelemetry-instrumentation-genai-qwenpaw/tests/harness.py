@@ -1,17 +1,19 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared helpers to drive ``AgentRunner.query_handler`` without a real agent.
+"""Drive both QwenPaw runtime generations without a real agent.
 
 Tests route a slash-command turn (``/stop``) through ``query_handler`` and
 replace the module-level ``run_command_path`` coroutine with a canned async
-generator, so no model, tool, or network access is involved.
+generator. Runtime tests inject an agent reply stream through the real builder,
+so no model, tool, or network access is involved.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from importlib import import_module
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -139,3 +141,28 @@ def make_runtime(response_text: str = "Runtime reply.") -> Any:
         ),
     )
     return Runtime(workspace=workspace, app_services=None)
+
+
+@contextmanager
+def patched_runtime_agent(
+    reply_stream: Callable[..., AsyncGenerator[Any, None]],
+) -> Iterator[Any]:
+    runtime_module = import_module("qwenpaw.runtime.runtime")
+    runtime = make_runtime()
+    runtime.workspace.plugins.modes = []
+    agent = SimpleNamespace(reply_stream=reply_stream, close=mock.AsyncMock())
+    with ExitStack() as stack:
+        stack.enter_context(
+            mock.patch.object(
+                runtime_module.AgentBuilder,
+                "build",
+                mock.AsyncMock(return_value=agent),
+            )
+        )
+        if hasattr(runtime_module, "record_agent_activity"):
+            stack.enter_context(
+                mock.patch.object(
+                    runtime_module, "record_agent_activity", mock.AsyncMock()
+                )
+            )
+        yield runtime
