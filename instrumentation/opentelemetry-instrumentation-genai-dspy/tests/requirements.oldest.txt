@@ -6,3 +6,4 @@
 # DSPy Embedder requires numpy when called (dspy.clients.embedding.np).
 numpy >= 1.26.0
 
+-r requirements.e2e.txt
