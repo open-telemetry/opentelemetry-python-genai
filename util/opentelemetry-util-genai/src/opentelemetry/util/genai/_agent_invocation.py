@@ -456,7 +456,9 @@ class LocalAgentInvocation(AgentInvocation):
         self.tool_calls: int | None = None
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs: dict[str, AttributeValue] = {}
+        attrs: dict[str, AttributeValue] = {
+            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+        }
         if self._data.agent_name is not None:
             attrs[GenAI.GEN_AI_AGENT_NAME] = self._data.agent_name
         if self._data.request_model is not None:
@@ -491,7 +493,9 @@ class LocalAgentInvocation(AgentInvocation):
             attributes=attributes,
             context=self._span_context,
         )
-        call_attributes: dict[str, AttributeValue] = {}
+        call_attributes: dict[str, AttributeValue] = {
+            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+        }
         if self._agent_name is not None:
             call_attributes[GenAI.GEN_AI_AGENT_NAME] = self._agent_name
         self._record_call_metrics(call_attributes)

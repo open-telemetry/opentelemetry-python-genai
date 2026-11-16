@@ -52,7 +52,12 @@ class WorkflowInvocation(GenAIInvocation):
     and retrieval invocations). A workflow groups multiple operations together,
     accepting input(s) and producing final output(s).
 
+    The workflow name is recorded as ``gen_ai.agent.name``.
+
     Use handler.workflow(name) rather than constructing this directly.
+
+    Reference:
+        https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-internal-span
     """
 
     def __init__(
@@ -71,7 +76,7 @@ class WorkflowInvocation(GenAIInvocation):
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
         start_attributes: dict[str, AttributeValue] = (
-            {GenAI.GEN_AI_WORKFLOW_NAME: name} if name is not None else {}
+            {GenAI.GEN_AI_AGENT_NAME: name} if name is not None else {}
         )
         self._data: WorkflowData = WorkflowData(
             workflow_name=name,
@@ -158,9 +163,11 @@ class WorkflowInvocation(GenAIInvocation):
         }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs: dict[str, AttributeValue] = {}
+        attrs: dict[str, AttributeValue] = {
+            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+        }
         if self._data.workflow_name is not None:
-            attrs[GenAI.GEN_AI_WORKFLOW_NAME] = self._data.workflow_name
+            attrs[GenAI.GEN_AI_AGENT_NAME] = self._data.workflow_name
         attrs.update(self.metric_attributes)
         return attrs
 
@@ -174,7 +181,7 @@ class WorkflowInvocation(GenAIInvocation):
         if conv_id is not None:
             attributes[GenAI.GEN_AI_CONVERSATION_ID] = conv_id
         if self._data.workflow_name is not None:
-            attributes[GenAI.GEN_AI_WORKFLOW_NAME] = self._data.workflow_name
+            attributes[GenAI.GEN_AI_AGENT_NAME] = self._data.workflow_name
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._call_completion_hook(
@@ -188,7 +195,7 @@ class WorkflowInvocation(GenAIInvocation):
             timeit.default_timer() - self._monotonic_start_s,
             0.0,
         )
-        self._instruments.invoke_workflow_duration.record(
+        self._instruments.invoke_agent_duration.record(
             duration_seconds,
             attributes=self._get_metric_attributes(),
             context=self._span_context,

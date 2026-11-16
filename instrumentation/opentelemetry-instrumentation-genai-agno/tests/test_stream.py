@@ -460,7 +460,7 @@ def test_workflow_run_stream_spans(
         == "invoke_workflow"
     )
     assert (
-        span.attributes.get(GenAIAttributes.GEN_AI_WORKFLOW_NAME)
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
         == "test-stream-workflow"
     )
     assert span.status.status_code != StatusCode.ERROR
@@ -563,7 +563,7 @@ def test_workflow_arun_stream_spans(
         == "invoke_workflow"
     )
     assert (
-        span.attributes.get(GenAIAttributes.GEN_AI_WORKFLOW_NAME)
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
         == "test-async-stream-workflow"
     )
     assert span.status.status_code != StatusCode.ERROR

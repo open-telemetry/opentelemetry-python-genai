@@ -100,23 +100,24 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         self.assertEqual(invocation._monotonic_start_s, 500.0)
         invocation.stop()
 
-    def test_workflow_sets_workflow_name_attribute(self) -> None:
+    def test_workflow_records_name_as_agent_name(self) -> None:
         invocation = self.handler.workflow(name="my_pipeline")
         invocation.stop()
 
         spans = self._get_finished_spans()
-        value = spans[0].attributes[GenAI.GEN_AI_WORKFLOW_NAME]
+        value = spans[0].attributes[GenAI.GEN_AI_AGENT_NAME]
         self.assertEqual(value, "my_pipeline")
         self.assertIsInstance(value, str)
+        self.assertNotIn(GenAI.GEN_AI_WORKFLOW_NAME, spans[0].attributes)
 
-    def test_workflow_without_name_omits_workflow_name_attribute(
+    def test_workflow_without_name_omits_agent_name_attribute(
         self,
     ) -> None:
         invocation = self.handler.workflow(name=None)
         invocation.stop()
 
         spans = self._get_finished_spans()
-        self.assertNotIn(GenAI.GEN_AI_WORKFLOW_NAME, spans[0].attributes)
+        self.assertNotIn(GenAI.GEN_AI_AGENT_NAME, spans[0].attributes)
 
     # ------------------------------------------------------------------
     # stop_workflow
@@ -311,7 +312,7 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
             captured_attributes[GenAI.GEN_AI_OPERATION_NAME], "invoke_workflow"
         )
         self.assertEqual(
-            captured_attributes[GenAI.GEN_AI_WORKFLOW_NAME], "my-workflow"
+            captured_attributes[GenAI.GEN_AI_AGENT_NAME], "my-workflow"
         )
 
         spans = self._get_finished_spans()
@@ -387,12 +388,40 @@ class TestWorkflowInvocationMetrics(TestBase):
             invocation.stop()
 
         metrics = self._harvest_metrics()
-        self.assertIn("gen_ai.invoke_workflow.duration", metrics)
-        duration_points = metrics["gen_ai.invoke_workflow.duration"]
+        self.assertNotIn("gen_ai.invoke_workflow.duration", metrics)
+        duration_points = metrics["gen_ai.invoke_agent.duration"]
         self.assertEqual(len(duration_points), 1)
         duration_point = duration_points[0]
         self.assertEqual(
-            duration_point.attributes[GenAI.GEN_AI_WORKFLOW_NAME],
-            "test-workflow",
+            dict(duration_point.attributes),
+            {
+                GenAI.GEN_AI_OPERATION_NAME: "invoke_workflow",
+                GenAI.GEN_AI_AGENT_NAME: "test-workflow",
+            },
         )
         self.assertAlmostEqual(duration_point.sum, 2.0, places=3)
+        self.assertEqual(
+            tuple(duration_point.explicit_bounds),
+            (
+                0.1,
+                0.2,
+                0.4,
+                0.8,
+                1.6,
+                3.2,
+                6.4,
+                12.8,
+                25.6,
+                51.2,
+                102.4,
+                204.8,
+                409.6,
+                900,
+                1800,
+                3600,
+                7200,
+                14400,
+                43200,
+                86400,
+            ),
+        )
