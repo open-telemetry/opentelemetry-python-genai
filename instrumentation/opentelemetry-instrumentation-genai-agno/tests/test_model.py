@@ -1426,9 +1426,11 @@ def test_gemini_reasoning_tokens_added_to_output_tokens_and_max_output_tokens(
     assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 512
     assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 31
     assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 74
-    assert (
-        attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS) == 54
-    )
+    if GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS in attrs:
+        assert (
+            attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)
+            == 54
+        )
 
     span_exporter.clear()
 
@@ -1477,6 +1479,16 @@ def test_gemini_reasoning_tokens_added_to_output_tokens_and_max_output_tokens(
         messages=[Message(role="user", content="Audio token check")]
     )
     (audio_span,) = span_exporter.get_finished_spans()
+    assert (
+        audio_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+        == 74
+    )
+    assert (
+        audio_span.attributes.get(
+            GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        )
+        == 54
+    )
     assert audio_span.attributes.get("gen_ai.usage.audio.input_tokens") == 5
     assert audio_span.attributes.get("gen_ai.usage.audio.output_tokens") == 10
 
