@@ -2924,29 +2924,40 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test that stream.throw() and stream.athrow() on response_stream/aresponse_stream finalize the inner span with the injected error."""
+    """Test that stream.throw() and stream.athrow() on response_stream/aresponse_stream finalize and close the inner stream."""
     import gc
+
+    sync_closed = False
+    async_closed = False
 
     class _ThrowStreamModel(MockModel):
         def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
-            yield ModelResponse(
-                content="chunk 1",
-                provider_data={
-                    "id": "resp-throw-1",
-                    "finish_reason": "length",
-                },
-            )
-            yield ModelResponse(content="chunk 2")
+            nonlocal sync_closed
+            try:
+                yield ModelResponse(
+                    content="chunk 1",
+                    provider_data={
+                        "id": "resp-throw-1",
+                        "finish_reason": "length",
+                    },
+                )
+                yield ModelResponse(content="chunk 2")
+            finally:
+                sync_closed = True
 
         async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
-            yield ModelResponse(
-                content="async chunk 1",
-                provider_data={
-                    "id": "resp-athrow-1",
-                    "stop_reason": "max_tokens",
-                },
-            )
-            yield ModelResponse(content="async chunk 2")
+            nonlocal async_closed
+            try:
+                yield ModelResponse(
+                    content="async chunk 1",
+                    provider_data={
+                        "id": "resp-athrow-1",
+                        "stop_reason": "max_tokens",
+                    },
+                )
+                yield ModelResponse(content="async chunk 2")
+            finally:
+                async_closed = True
 
     model = _ThrowStreamModel(id="throw-model", provider="OpenAI")
     stream = model.response_stream(
@@ -2957,6 +2968,8 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
 
     with pytest.raises(ValueError, match="Injected sync error"):
         stream.throw(ValueError("Injected sync error"))
+    assert sync_closed
+    assert stream._self_inner_stream._self_stream.gi_frame is None
     del stream
     gc.collect()
 
@@ -2980,6 +2993,7 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
 
         with pytest.raises(ValueError, match="Injected async error"):
             await astream.athrow(ValueError("Injected async error"))
+        assert astream._self_inner_stream._self_stream.ag_frame is None
         del astream
         gc.collect()
 

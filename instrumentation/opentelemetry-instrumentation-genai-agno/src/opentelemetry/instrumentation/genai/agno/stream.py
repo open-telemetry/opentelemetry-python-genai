@@ -561,6 +561,21 @@ class AsyncAgnoOuterStreamWrapper(_OuterStreamMixin, AsyncStreamWrapper[Any]):
         finally:
             _CURRENT_OUTER_ASTREAM.reset(token)
 
+    async def _advance(self, read: Callable[[], Awaitable[Any]]) -> Any:
+        try:
+            return await super()._advance(read)
+        except StopAsyncIteration:
+            if self._self_inner_stream is not None:
+                await self._self_inner_stream._close_stream()
+            raise
+        except BaseException:
+            if self._self_inner_stream is not None:
+                try:
+                    await self._self_inner_stream._close_stream()
+                except Exception:
+                    pass
+            raise
+
     async def _close_stream(self) -> None:
         try:
             if self._self_inner_stream is not None:
