@@ -2499,3 +2499,144 @@ def test_agent_continue_run_unresolved_tool_has_none_response(
     )
     assert len(messages) == 1
     assert messages[0]["parts"][0]["response"] is None
+
+
+def test_agent_run_captures_message_list_input(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that input=[Message, ...] records each Message with its role."""
+    from agno.models.message import Message
+
+    agent = Agent(name="test-msg-agent", model=MockModel(id="mock-model"))
+    mock_output = ModelResponse(content="Response text")
+
+    with patch("agno.models.base.Model.response", return_value=mock_output):
+        agent.run(
+            input=[
+                Message(role="system", content="Be brief"),
+                Message(role="user", content="Hi"),
+                Message(role="assistant", content="Hello"),
+                Message(role="user", content="Weather?"),
+            ]
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    raw_messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert raw_messages is not None
+    messages = json.loads(raw_messages)
+    assert len(messages) == 4
+
+    assert messages[0]["role"] == "system"
+    assert messages[0]["parts"] == [{"type": "text", "content": "Be brief"}]
+
+    assert messages[1]["role"] == "user"
+    assert messages[1]["parts"] == [{"type": "text", "content": "Hi"}]
+
+    assert messages[2]["role"] == "assistant"
+    assert messages[2]["parts"] == [{"type": "text", "content": "Hello"}]
+
+    assert messages[3]["role"] == "user"
+    assert messages[3]["parts"] == [{"type": "text", "content": "Weather?"}]
+
+    # Ensure internal Agno Message fields are not leaked in prompt content
+    assert "compressed_content" not in raw_messages
+    assert "provider_data" not in raw_messages
+    assert "add_to_agent_memory" not in raw_messages
+
+
+def test_agent_run_captures_single_message_with_role(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that input=Message(...) records the message's specific role."""
+    from agno.models.message import Message
+
+    agent = Agent(
+        name="test-single-msg-agent", model=MockModel(id="mock-model")
+    )
+    mock_output = ModelResponse(content="Response text")
+
+    with patch("agno.models.base.Model.response", return_value=mock_output):
+        agent.run(input=Message(role="system", content="Single system prompt"))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    raw_messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert raw_messages is not None
+    messages = json.loads(raw_messages)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "system"
+    assert messages[0]["parts"] == [
+        {"type": "text", "content": "Single system prompt"}
+    ]
+
+
+def test_agent_arun_captures_message_list_input(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that Agent.arun records input=[Message, ...] with respective roles."""
+    from agno.models.message import Message
+
+    agent = Agent(
+        name="test-async-msg-agent", model=MockModel(id="mock-model")
+    )
+    mock_output = ModelResponse(content="Async response")
+
+    async def _run_async() -> None:
+        with patch(
+            "agno.models.base.Model.aresponse", return_value=mock_output
+        ):
+            await agent.arun(
+                input=[
+                    Message(role="system", content="Async sys"),
+                    Message(role="user", content="Async hi"),
+                ]
+            )
+
+    asyncio.run(_run_async())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    raw_messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert raw_messages is not None
+    messages = json.loads(raw_messages)
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[0]["parts"] == [{"type": "text", "content": "Async sys"}]
+    assert messages[1]["role"] == "user"
+    assert messages[1]["parts"] == [{"type": "text", "content": "Async hi"}]
+
+
+def test_agent_run_captures_dict_message_list(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that input=[{'role': ...}, ...] records messages with their roles."""
+    agent = Agent(name="test-dict-msg-agent", model=MockModel(id="mock-model"))
+    mock_output = ModelResponse(content="Dict response")
+
+    with patch("agno.models.base.Model.response", return_value=mock_output):
+        agent.run(
+            input=[
+                {"role": "user", "content": "hello dict"},
+                {"role": "assistant", "content": "world dict"},
+            ]
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    raw_messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert raw_messages is not None
+    messages = json.loads(raw_messages)
+    assert len(messages) == 2
+    assert messages[0]["role"] == "user"
+    assert messages[0]["parts"] == [{"type": "text", "content": "hello dict"}]
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["parts"] == [{"type": "text", "content": "world dict"}]
