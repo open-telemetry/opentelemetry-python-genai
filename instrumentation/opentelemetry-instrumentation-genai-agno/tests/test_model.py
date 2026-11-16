@@ -2433,10 +2433,12 @@ def test_real_openai_request_params_override_and_zero_max_tokens(
     model = OpenAIChat(
         id="gpt-4o",
         temperature=0.7,
+        top_p=0.9,
         max_tokens=0,
         max_completion_tokens=100,
         request_params={
             "temperature": 0,
+            "top_p": None,
             "frequency_penalty": 0.25,
             "stop": ["STOP_HERE"],
         },
@@ -2445,6 +2447,7 @@ def test_real_openai_request_params_override_and_zero_max_tokens(
     model.response(messages=[Message(role="user", content="Hi")])
 
     assert sent_bodies[0]["temperature"] == 0
+    assert sent_bodies[0]["top_p"] is None
     assert sent_bodies[0]["max_tokens"] == 0
     assert sent_bodies[0]["frequency_penalty"] == 0.25
     assert sent_bodies[0]["stop"] == ["STOP_HERE"]
@@ -2453,6 +2456,7 @@ def test_real_openai_request_params_override_and_zero_max_tokens(
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.0
     )
+    assert GenAIAttributes.GEN_AI_REQUEST_TOP_P not in span.attributes
     assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 0
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_FREQUENCY_PENALTY)
@@ -2461,6 +2465,22 @@ def test_real_openai_request_params_override_and_zero_max_tokens(
     assert span.attributes.get(
         GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES
     ) == ("STOP_HERE",)
+
+    span_exporter.clear()
+    null_temp_model = OpenAIChat(
+        id="gpt-4o",
+        temperature=0.7,
+        request_params={"temperature": None},
+        client=client,
+    )
+    null_temp_model.response(messages=[Message(role="user", content="Hi 2")])
+
+    assert sent_bodies[1]["temperature"] is None
+    (null_temp_span,) = span_exporter.get_finished_spans()
+    assert (
+        GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE
+        not in null_temp_span.attributes
+    )
 
 
 def test_model_stream_defers_invocation_until_first_read(
@@ -2698,3 +2718,56 @@ def test_real_openai_chat_audio_response_and_stream_not_double_encoded(
     ]
     assert len(stream_audio_blobs) == 1
     assert stream_audio_blobs[0]["content"] == "AAE="
+
+    span_exporter.clear()
+
+    from base64 import b64encode
+
+    from agno.media import Audio
+
+    raw_b64_looking_audio = b"AAAA"
+
+    class _RawAudioModel(MockModel):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(
+                content="Raw PCM audio",
+                audio=Audio(content=raw_b64_looking_audio, format="wav"),
+            )
+
+    raw_model = _RawAudioModel(id="gemini-2.5-flash", provider="Google")
+    raw_model.response(
+        messages=[
+            Message(
+                role="user",
+                content="Check raw audio",
+                audio=[Audio(content=raw_b64_looking_audio, format="wav")],
+            )
+        ]
+    )
+
+    (raw_span,) = span_exporter.get_finished_spans()
+    raw_in = json.loads(
+        str(raw_span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    )
+    raw_in_blobs = [
+        p
+        for p in raw_in[0]["parts"]
+        if p.get("type") == "blob" and p.get("modality") == "audio"
+    ]
+    assert len(raw_in_blobs) == 1
+    assert raw_in_blobs[0]["content"] == b64encode(
+        raw_b64_looking_audio
+    ).decode("ascii")
+
+    raw_out = json.loads(
+        str(raw_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    )
+    raw_out_blobs = [
+        p
+        for p in raw_out[0]["parts"]
+        if p.get("type") == "blob" and p.get("modality") == "audio"
+    ]
+    assert len(raw_out_blobs) == 1
+    assert raw_out_blobs[0]["content"] == b64encode(
+        raw_b64_looking_audio
+    ).decode("ascii")

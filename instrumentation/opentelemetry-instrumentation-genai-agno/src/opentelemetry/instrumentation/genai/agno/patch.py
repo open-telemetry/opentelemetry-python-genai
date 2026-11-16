@@ -1752,12 +1752,21 @@ def _knowledge_asearch(
 
 def _get_request_setting(instance: Model, *names: str) -> Any:
     req_params = getattr(instance, "request_params", None)
-    if isinstance(req_params, Mapping):
-        typed_params = cast(Mapping[str, Any], req_params)
+    typed_params = (
+        cast(Mapping[str, Any], req_params)
+        if isinstance(req_params, Mapping)
+        else None
+    )
+    if typed_params is not None:
         for name in names:
-            if (val := typed_params.get(name)) is not None:
+            if (
+                name in typed_params
+                and (val := typed_params[name]) is not None
+            ):
                 return val
     for name in names:
+        if typed_params is not None and name in typed_params:
+            continue
         if (val := getattr(instance, name, None)) is not None:
             return val
     return None

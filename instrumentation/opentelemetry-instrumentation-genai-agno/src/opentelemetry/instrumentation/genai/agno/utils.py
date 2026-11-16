@@ -679,16 +679,24 @@ def _infer_mime_type(media: MediaItem, modality: Modality) -> str | None:
     return None
 
 
+def _uses_base64_output_audio(model: Model | None) -> bool:
+    if model is None:
+        return False
+    return any(cls.__name__ == "OpenAIChat" for cls in type(model).__mro__)
+
+
 def _media_item_to_part(
     media: MediaItem,
     modality: Modality,
+    *,
+    decode_base64_bytes: bool = False,
 ) -> MessagePart | None:
     mime_type = _infer_mime_type(media, modality)
 
     if media.content is not None:
         if isinstance(media.content, bytes):
             content_bytes = media.content
-            if modality == Modality.AUDIO:
+            if decode_base64_bytes:
                 try:
                     decoded = decode_base64(media.content.decode("ascii"))
                     if decoded is not None:
@@ -772,14 +780,24 @@ def _append_media_items(
     parts: list[MessagePart],
     items: Sequence[MediaItem] | MediaItem | None,
     modality: Modality,
+    *,
+    decode_base64_bytes: bool = False,
 ) -> None:
     if items is None:
         return
     if isinstance(items, Sequence):
         for item in items:
-            if (part := _media_item_to_part(item, modality)) is not None:
+            if (
+                part := _media_item_to_part(
+                    item, modality, decode_base64_bytes=decode_base64_bytes
+                )
+            ) is not None:
                 parts.append(part)
-    elif (part := _media_item_to_part(items, modality)) is not None:
+    elif (
+        part := _media_item_to_part(
+            items, modality, decode_base64_bytes=decode_base64_bytes
+        )
+    ) is not None:
         parts.append(part)
 
 
@@ -787,6 +805,7 @@ def _extract_media_parts(
     obj: Message | ModelResponse,
     stream_data: MessageData | None = None,
     *,
+    model: Model | None = None,
     stream_images: Sequence[Image] | None = None,
     stream_videos: Sequence[Video] | None = None,
 ) -> list[MessagePart]:
@@ -809,7 +828,12 @@ def _extract_media_parts(
         if stream_data is not None
         else None
     )
-    _append_media_items(parts, audio_output, Modality.AUDIO)
+    _append_media_items(
+        parts,
+        audio_output,
+        Modality.AUDIO,
+        decode_base64_bytes=_uses_base64_output_audio(model),
+    )
 
     _append_media_items(parts, obj.videos, Modality.VIDEO)
     if stream_videos:
@@ -1288,6 +1312,7 @@ def format_model_output_message(
         _extract_media_parts(
             assistant_message,
             stream_data=stream_data,
+            model=model,
             stream_images=stream_images,
             stream_videos=stream_videos,
         )
