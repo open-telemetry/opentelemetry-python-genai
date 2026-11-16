@@ -18,7 +18,11 @@ except ImportError:
 from anthropic._models import construct_type
 from anthropic.types import Message as AnthropicMessage
 
-from .utils import is_anthropic_async_stream, is_anthropic_stream
+from .utils import (
+    AnthropicBetaMessage,
+    is_anthropic_async_stream,
+    is_anthropic_stream,
+)
 from .wrappers import (
     AsyncMessagesStreamWrapper,
     MessagesStreamWrapper,
@@ -86,10 +90,12 @@ class RawResponseProxy(_ObjectProxy):
         raw_response: Any,
         invocation: InferenceInvocation,
         capture_content: bool,
+        is_beta: bool = False,
     ) -> None:
         super().__init__(raw_response)
         self._self_invocation = invocation
         self._self_capture_content = capture_content
+        self._self_is_beta = is_beta
         # The span is ours to end until a stream wrapper takes it over.
         self._self_span_open = True
         # Response telemetry is settled: whichever path saw the body first
@@ -174,7 +180,8 @@ class RawResponseProxy(_ObjectProxy):
         if self._self_parsing or self._self_dispatched:
             return
         message = _message_from_read_body(
-            getattr(self.__wrapped__, "http_response", None)
+            getattr(self.__wrapped__, "http_response", None),
+            is_beta=self._self_is_beta,
         )
         if message is not None:
             MessageWrapper(message, self._self_capture_content).extract_into(
@@ -370,7 +377,7 @@ class RawResponseProxy(_ObjectProxy):
             # A read fallback already settled and ended this span; the caller
             # still gets the SDK's object, just without a second recording.
             return parsed
-        if isinstance(parsed, AnthropicMessage):
+        if isinstance(parsed, (AnthropicMessage, AnthropicBetaMessage)):
             MessageWrapper(parsed, self._self_capture_content).extract_into(
                 self._self_invocation
             )
@@ -379,7 +386,10 @@ class RawResponseProxy(_ObjectProxy):
             return parsed
         try:
             wrapped = _wrap_parsed_stream(
-                parsed, self._self_invocation, self._self_capture_content
+                parsed,
+                self._self_invocation,
+                self._self_capture_content,
+                is_beta=self._self_is_beta,
             )
         except Exception:  # pylint: disable=broad-exception-caught
             # Same rule as message extraction: a wrapper we failed to build
@@ -413,6 +423,7 @@ def _wrap_parsed_stream(
     stream: Any,
     invocation: InferenceInvocation,
     capture_content: bool,
+    is_beta: bool = False,
 ) -> object | None:
     """Wrap a parsed stream in the matching instrumented wrapper.
 
@@ -425,12 +436,14 @@ def _wrap_parsed_stream(
             cast("AnthropicAsyncStream[RawMessageStreamEvent]", stream),
             invocation,
             capture_content,
+            is_beta=is_beta,
         )
     if is_anthropic_stream(stream):
         return MessagesStreamWrapper[None](
             cast("AnthropicStream[RawMessageStreamEvent]", stream),
             invocation,
             capture_content,
+            is_beta=is_beta,
         )
     return None
 
@@ -446,7 +459,10 @@ def _body_was_read(http_response: Any) -> bool:
     return True
 
 
-def _message_from_read_body(http_response: Any) -> AnthropicMessage | None:
+def _message_from_read_body(
+    http_response: Any,
+    is_beta: bool = False,
+) -> AnthropicMessage | AnthropicBetaMessage | None:
     """Deserialize an already-read response body into a ``Message``.
 
     Used instead of ``result.parse()`` so telemetry never runs the caller's
@@ -471,9 +487,20 @@ def _message_from_read_body(http_response: Any) -> AnthropicMessage | None:
         if isinstance(body, dict):
             fields = cast("dict[str, object]", body)
             if fields.get("type") == "message":
+                target_type = (
+                    AnthropicBetaMessage
+                    if (
+                        is_beta
+                        and (
+                            hasattr(AnthropicBetaMessage, "model_fields")
+                            or hasattr(AnthropicBetaMessage, "__fields__")
+                        )
+                    )
+                    else AnthropicMessage
+                )
                 return cast(
-                    AnthropicMessage,
-                    construct_type(type_=AnthropicMessage, value=fields),
+                    "AnthropicMessage | AnthropicBetaMessage",
+                    construct_type(type_=target_type, value=fields),
                 )
     except Exception:  # pylint: disable=broad-exception-caught
         _logger.debug(
@@ -493,6 +520,7 @@ def wrap_raw_response(
     result: Any,
     invocation: InferenceInvocation,
     capture_content: bool,
+    is_beta: bool = False,
 ) -> Any:
     """Wrap a ``with_raw_response`` / ``with_streaming_response`` result.
 
@@ -506,10 +534,12 @@ def wrap_raw_response(
     """
     http_response = getattr(result, "http_response", None)
     if getattr(http_response, "is_closed", False):
-        message = _message_from_read_body(http_response)
+        message = _message_from_read_body(http_response, is_beta=is_beta)
         if message is not None:
             MessageWrapper(message, capture_content).extract_into(invocation)
         invocation.stop()
         return result
 
-    return RawResponseProxy(result, invocation, capture_content)
+    return RawResponseProxy(
+        result, invocation, capture_content, is_beta=is_beta
+    )

@@ -13,7 +13,6 @@ from opentelemetry.instrumentation.google_genai.interactions import (
     _interactions_response_to_messages,
 )
 from opentelemetry.util.genai.types import (
-    GenericPart,
     ServerToolCallPart,
     ServerToolCallResponsePart,
     TextPart,
@@ -133,12 +132,10 @@ class TestInteractionsParser(unittest.TestCase):
             {"result": [], "type": "google_search"},
         )
 
-    def test_input_to_messages_generic_fallback(self) -> None:
+    def test_input_to_messages_drops_unsupported_type(self) -> None:
         steps = [{"type": "some_unsupported_type"}]
         messages = _interactions_input_to_messages(steps)
-        self.assertEqual(len(messages[0].parts), 1)
-        self.assertIsInstance(messages[0].parts[0], GenericPart)
-        self.assertEqual(messages[0].parts[0].type, "some_unsupported_type")
+        self.assertEqual(messages[0].parts, [])
 
     def test_input_to_messages_single_non_sequence_step(self) -> None:
         step = {"type": "text", "text": "Hello single step"}

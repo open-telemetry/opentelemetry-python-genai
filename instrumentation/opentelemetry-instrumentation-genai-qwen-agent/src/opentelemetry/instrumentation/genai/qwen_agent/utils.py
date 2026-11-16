@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
@@ -32,6 +33,24 @@ if TYPE_CHECKING:
     QwenContentItem = ContentItem | dict[str, Any]
 
 _logger = logging.getLogger(__name__)
+
+
+def _is_sequence(val: object) -> TypeGuard[Sequence[Any]]:
+    """Check if a value is a non-string, non-mapping sequence."""
+    return isinstance(val, Sequence) and not isinstance(
+        val, (str, bytes, bytearray, Mapping)
+    )
+
+
+def _as_message_sequence(
+    messages: QwenMessage | Sequence[QwenMessage] | None,
+) -> Sequence[QwenMessage]:
+    """Normalize input messages into a sequence without copying."""
+    if messages is None:
+        return ()
+    if _is_sequence(messages):
+        return cast("Sequence[QwenMessage]", messages)
+    return (cast("QwenMessage", messages),)
 
 
 def _field_value(value: Any, *names: str) -> Any:
@@ -62,19 +81,21 @@ def _field_value(value: Any, *names: str) -> Any:
     return None
 
 
-def _extract_content_text(content: str | list[QwenContentItem] | None) -> str:
+def _extract_content_text(
+    content: str | Sequence[QwenContentItem] | None,
+) -> str:
     """Extract text from a qwen-agent Message content field.
 
     Content can be a plain string or a list of ContentItem.
     """
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
+    if _is_sequence(content):
         texts: list[str] = []
         for item in content:
-            text = getattr(item, "text", None)
+            text = _field_value(item, "text")
             if text is not None:
-                texts.append(text)
+                texts.append(str(text))
         return "\n".join(texts)
     return str(content) if content else ""
 
@@ -141,17 +162,15 @@ def _tool_call_response_id(msg: Any) -> str:
 
 
 def convert_to_input_messages(
-    messages: QwenMessage | list[QwenMessage] | None,
+    messages: QwenMessage | Sequence[QwenMessage] | None,
 ) -> list[InputMessage]:
-    """Convert a qwen-agent Message list to GenAI InputMessage objects."""
-    if not messages:
+    """Convert a qwen-agent Message sequence to GenAI InputMessage objects."""
+    message_sequence = _as_message_sequence(messages)
+    if not message_sequence:
         return []
 
-    if not isinstance(messages, list):
-        messages = [messages]
-
     input_messages: list[InputMessage] = []
-    for msg in messages:
+    for msg in message_sequence:
         try:
             role = _field_value(msg, "role") or Role.USER.value
             content = _field_value(msg, "content") or ""
@@ -192,11 +211,10 @@ def convert_to_output_messages(
     if not messages:
         return []
 
-    if not isinstance(messages, list):
-        messages = [messages]
+    msg_list = messages if isinstance(messages, list) else [messages]
 
     output_messages: list[OutputMessage] = []
-    for msg in messages:
+    for msg in msg_list:
         try:
             content = _field_value(msg, "content") or ""
             function_call = _field_value(msg, "function_call")
@@ -242,10 +260,9 @@ def convert_to_final_output_messages(
     if not messages:
         return []
 
-    if not isinstance(messages, list):
-        messages = [messages]
+    msg_list = messages if isinstance(messages, list) else [messages]
 
-    for msg in reversed(messages):
+    for msg in reversed(msg_list):
         try:
             role = _field_value(msg, "role") or Role.ASSISTANT.value
             function_call = _field_value(msg, "function_call")
@@ -268,7 +285,7 @@ def convert_to_final_output_messages(
 def create_agent_invocation(
     handler: TelemetryHandler,
     agent_instance: Any,
-    messages: QwenMessage | list[QwenMessage] | None,
+    messages: QwenMessage | Sequence[QwenMessage] | None,
 ) -> LocalAgentInvocation:
     """Create and start an AgentInvocation for Agent.run()."""
     llm_instance = getattr(agent_instance, "llm", None)

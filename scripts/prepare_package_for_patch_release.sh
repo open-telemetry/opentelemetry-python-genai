@@ -14,11 +14,11 @@ if [[ ! -f "$changelog" ]]; then
   echo "missing ${changelog}"
   exit 1
 fi
-uv run ./scripts/version_utils.py bump --package "$package" --patch
+python3 ./scripts/version_utils.py bump --package "$package" --patch
 
 next_version="$(./scripts/eachdist.py version --package "$package")"
 
-uv run tox -e generate
-uv run towncrier build --yes --version "$next_version" --dir "$(dirname "$changelog")"
+python3 ./scripts/generate_instrumentation_readme.py
+uv run --no-project --exclude-newer 3d --with towncrier towncrier build --yes --version "$next_version" --dir "$(dirname "$changelog")"
 
 echo "Prepared ${package} for patch release v${next_version}"

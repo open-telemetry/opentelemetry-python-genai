@@ -504,17 +504,11 @@ async def test_arguments_preserve_call_time_values(
     }
 
 
-@pytest.mark.parametrize("failure", ["copy", "normalization"])
 @pytest.mark.asyncio
-async def test_argument_snapshot_failure_does_not_prevent_tool_execution(
-    invoke_tool, span_exporter, caplog, failure: str
+async def test_unconvertible_argument_dropped(
+    invoke_tool, span_exporter
 ) -> None:
     class Unserializable:
-        def __deepcopy__(self, memo: dict[int, object]) -> Unserializable:
-            if failure == "copy":
-                raise RuntimeError("cannot copy")
-            return self
-
         def model_dump(self) -> dict[str, object]:
             raise RuntimeError("cannot normalize")
 
@@ -527,9 +521,9 @@ async def test_argument_snapshot_failure_does_not_prevent_tool_execution(
     assert await invoke_tool(tool, argument) == "done"
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.UNSET
-    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in span.attributes
-    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_RESULT]) == "done"
-    assert "Failed to snapshot tool arguments" in caplog.text
+    # Values that fail to convert are dropped, not the whole snapshot.
+    assert span.attributes.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS) == "{}"
+    assert span.attributes[GenAI.GEN_AI_TOOL_CALL_RESULT] == "done"
 
 
 @pytest.mark.asyncio

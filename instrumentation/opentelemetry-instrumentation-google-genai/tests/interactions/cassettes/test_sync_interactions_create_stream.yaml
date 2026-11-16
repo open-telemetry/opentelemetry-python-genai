@@ -1,0 +1,115 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "gemini-3.8-flash",
+        "input": "Hello, how can you help me today?",
+        "stream": true
+      }
+    headers:
+      accept:
+      - text/event-stream
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '86'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 internal v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.31.0 gl-python/3.14.7
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: |+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        event: interaction.created
+        data: {"interaction":{"id":"v1_Chc4WkRaYW9HcEZOU3Uycm9QOEotNHFRWRIXOFpEWmFvR3BGTlN1MnJvUDhKLTRxUVk","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.created"}
+
+        event: interaction.status_update
+        data: {"interaction_id":"v1_Chc4WkRaYW9HcEZOU3Uycm9QOEotNHFRWRIXOFpEWmFvR3BGTlN1MnJvUDhKLTRxUVk","status":"in_progress","event_type":"interaction.status_update"}
+
+        event: step.start
+        data: {"index":0,"step":{"type":"thought"},"event_type":"step.start"}
+
+        event: step.delta
+        data: {"index":0,"delta":{"signature":"Er0FCroFAWkUfROqcmI9YsebGqVs6Op39bZFBYVnF1BwBZEHWwvZvXLj2tuutv3+YmmpE21UbWd9z3axsEr9emjXzc9Gv158ji2csWyT7nFrO5OdhNWE4NDFbwnqFWnnQvEZtqAM1PUC1srcW6R+0IALH1o445G++p6Ahd0kD/NBvwPtbuaTsh5ETqaDHi+etFyUJYEjTfVhCJRdftftoB1QnJakfZ7EKCSAGhoeVgepWl1XY55xuiY8Lf/X2vM5/GEUmPCE/Lsp2G/P1OMjuN4awEbL2VC7PLggiHxUmVhYHSgqPH4cJs5Fyoqvme5Gnt9JCyDl16qUpwyyQGOKeBlMfpZ5jO0LE3wMekWxEMAcKy9U6p1g3q61pxI4U9opMYZIB7EFv3RRTzsr0wh06ccQjDFQTDxY9vV9jLBWZw1WsZ+poTCzkNTnBwmIVtf6AwRDIeTCJpMXSB3frjxhpm8q3bMV89q8bwIon+ajMU7dgPCuXO9/dB4SjVdjjOzYF2xxXPnkqTg3+OiN9hv/IPoH6yxEOkX2XYoFL/QEk3/M123tRyV+kbWV6vgiTIvXGs8PXdTA1hn/E1tI+SYEUa7GtJRNDK/UWB8XsoldDbBaJ6JVcnLRu4itQ8cYJ7tmBrLOdpexL22b/oijaqrlbxYmBOXX6M6q9R5MolR2SjaO8JRjwDBzA9D9BbwshM5hRm9UT5wgFzMOKcrkWCCeg32CUEkpUEzsl8nOiETdJoPAEMH95QHoK4t91QI2zyNN7FbHkgNzXuDj7sf7l6Y5J1bSDM17z733JzY52QKv5o5fYCFMqSzlxWZUKWGkINfPnZ/N9jnC8f7vmlVc0foKmEg/JdP7zvT+ON25TA9t7B0LurEmCMqigbYU/twMQ7gUMlvMRfvLJ6StWso72RRdTv+VJeWIW47ob22XoD8bKpU=","type":"thought_signature"},"event_type":"step.delta"}
+
+        event: step.stop
+        data: {"index":0,"event_type":"step.stop"}
+
+        event: step.start
+        data: {"index":1,"step":{"type":"model_output"},"event_type":"step.start"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"text":"Hello! I can help you with a wide variety of tasks, including:\n\n* **Writing &","type":"text"},"event_type":"step.delta"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"text":" Editing:** Drafting emails, essays, stories, resumes, or proofreading text.\n* **Coding & Tech:** Writing","type":"text"},"event_type":"step.delta"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"text":", debugging, or explaining code in various languages (Python, JavaScript, C++, etc.).\n* **Learning & Research","type":"text"},"event_type":"step.delta"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"text":":** Explaining complex concepts, summarizing articles, or answering questions on history, science, math, and more.\n*","type":"text"},"event_type":"step.delta"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"text":" **Brainstorming & Planning:** Generating ideas for projects, planning travel itineraries, or organizing schedules.\n* **Language","type":"text"},"event_type":"step.delta"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"text":" & Translation:** Translating text or helping you practice a new language.\n\nWhat are you working on today, or what would you like to explore","type":"text"},"event_type":"step.delta"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"text":"?","type":"text"},"event_type":"step.delta"}
+
+        event: step.stop
+        data: {"index":1,"event_type":"step.stop"}
+
+        event: interaction.completed
+        data: {"interaction":{"id":"v1_Chc4WkRaYW9HcEZOU3Uycm9QOEotNHFRWRIXOFpEWmFvR3BGTlN1MnJvUDhKLTRxUVk","status":"completed","usage":{"total_tokens":275,"total_input_tokens":10,"input_tokens_by_modality":[{"modality":"text","tokens":10}],"total_cached_tokens":0,"total_output_tokens":146,"total_tool_use_tokens":0,"total_thought_tokens":119},"created":"2026-10-22T04:29:45Z","updated":"2026-10-22T04:29:45Z","service_tier":"standard","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.completed"}
+
+        event: done
+        data: [DONE]
+
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '3765'
+      content-type:
+      - text/event-stream
+      date:
+      - Thu, 22 Oct 2026 04:28:47 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=15085
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

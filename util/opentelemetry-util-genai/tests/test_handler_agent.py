@@ -284,9 +284,34 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
             agent_name="Constructor Agent"
         )
         invocation.stop()
+        assert invocation.agent_name == "Constructor Agent"
         span = self.span_exporter.get_finished_spans()[0]
         assert span.name == "invoke_agent Constructor Agent"
         assert span.attributes[GenAI.GEN_AI_AGENT_NAME] == "Constructor Agent"
+
+    def test_property_delegation_to_data(self):
+        from opentelemetry.util.genai._agent_invocation import AgentData
+
+        inv = self.handler.invoke_local_agent(
+            agent_name="Delegation Agent", request_model="gpt-4o"
+        )
+        self.assertIsInstance(inv._data, AgentData)
+        self.assertEqual(inv._data.agent_name, "Delegation Agent")
+        self.assertEqual(inv.agent_name, "Delegation Agent")
+        self.assertEqual(inv._data.request_model, "gpt-4o")
+        self.assertEqual(inv.request_model, "gpt-4o")
+
+        inv.agent_description = "A delegated agent"
+        self.assertEqual(inv._data.agent_description, "A delegated agent")
+
+        inv.temperature = 0.5
+        self.assertEqual(inv._data.request_temperature, 0.5)
+
+        inv.input_tokens = 50
+        inv.output_tokens = 100
+        self.assertEqual(inv._data.usage_input_tokens, 50)
+        self.assertEqual(inv._data.usage_output_tokens, 100)
+        inv.stop()
 
     def test_agent_name_at_construction_available_to_sampler(self):
         captured_attributes = {}
@@ -627,6 +652,42 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         assert attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 15
         assert attrs[GenAI.GEN_AI_REQUEST_MODEL] == "gpt-4"
 
+    def test_property_delegation_to_data(self):
+        from opentelemetry.util.genai._agent_invocation import AgentData
+
+        inv = self.handler.invoke_remote_agent(
+            "openai",
+            request_model="gpt-4o",
+            server_address="api.openai.com",
+            server_port=443,
+            agent_name="RemoteDelegation",
+        )
+        self.assertIsInstance(inv._data, AgentData)
+        self.assertEqual(inv._data.provider_name, "openai")
+        self.assertEqual(inv.provider, "openai")
+        self.assertEqual(inv._data.request_model, "gpt-4o")
+        self.assertEqual(inv._data.server_address, "api.openai.com")
+        self.assertEqual(inv.server_address, "api.openai.com")
+        self.assertEqual(inv._data.server_port, 443)
+        self.assertEqual(inv.server_port, 443)
+        self.assertEqual(inv._data.agent_name, "RemoteDelegation")
+        self.assertEqual(inv.agent_name, "RemoteDelegation")
+
+        inv.agent_id = "agent-xyz"
+        self.assertEqual(inv._data.agent_id, "agent-xyz")
+
+        inv.agent_version = "2.0.0"
+        self.assertEqual(inv._data.agent_version, "2.0.0")
+
+        inv.previous_response_id = "prev-resp-1"
+        self.assertEqual(inv._data.request_previous_response_id, "prev-resp-1")
+
+        inv.cache_write_input_tokens = 10
+        inv.cache_read_input_tokens = 20
+        self.assertEqual(inv._data.usage_cache_write_input_tokens, 10)
+        self.assertEqual(inv._data.usage_cache_read_input_tokens, 20)
+        inv.stop()
+
     def test_fail_sets_error_status(self):
         invocation = self.handler.invoke_remote_agent("openai")
         invocation.fail(RuntimeError("remote agent crashed"))
@@ -857,6 +918,186 @@ class TestAgentInvocationMetrics(TestBase):
             duration_point.attributes.get(GenAI.GEN_AI_AGENT_NAME), "ErrAgent"
         )
         self.assertAlmostEqual(duration_point.sum, 1.0, places=3)
+
+    def test_remote_agent_records_no_streaming_metrics(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with handler.invoke_remote_agent("test-provider") as inv:
+            inv.record_stream_chunk()
+            inv.record_stream_chunk()
+        metrics = self._harvest_metrics()
+        self.assertNotIn(
+            "gen_ai.client.operation.time_to_first_chunk", metrics
+        )
+        self.assertNotIn(
+            "gen_ai.client.operation.time_per_output_chunk", metrics
+        )
+
+    def test_agent_records_inference_and_tool_calls(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(
+            agent_name="SearchAgent",
+            request_model="gpt-4o",
+        )
+        invocation.inference_calls = 3
+        invocation.tool_calls = 5
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+
+        self.assertIn("gen_ai.invoke_agent.inference_calls", metrics)
+        inf_points = metrics["gen_ai.invoke_agent.inference_calls"]
+        self.assertEqual(len(inf_points), 1)
+        self.assertAlmostEqual(inf_points[0].sum, 3.0, places=3)
+        self.assertEqual(
+            inf_points[0].attributes[GenAI.GEN_AI_AGENT_NAME],
+            "SearchAgent",
+        )
+        self.assertEqual(
+            dict(inf_points[0].attributes),
+            {GenAI.GEN_AI_AGENT_NAME: "SearchAgent"},
+        )
+
+        self.assertIn("gen_ai.invoke_agent.tool_calls", metrics)
+        tool_points = metrics["gen_ai.invoke_agent.tool_calls"]
+        self.assertEqual(len(tool_points), 1)
+        self.assertAlmostEqual(tool_points[0].sum, 5.0, places=3)
+        self.assertEqual(
+            tool_points[0].attributes[GenAI.GEN_AI_AGENT_NAME],
+            "SearchAgent",
+        )
+        self.assertEqual(
+            dict(tool_points[0].attributes),
+            {GenAI.GEN_AI_AGENT_NAME: "SearchAgent"},
+        )
+
+    def test_agent_without_calls_does_not_record_call_metrics(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="MinimalAgent")
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.invoke_agent.duration", metrics)
+        self.assertNotIn("gen_ai.invoke_agent.inference_calls", metrics)
+        self.assertNotIn("gen_ai.invoke_agent.tool_calls", metrics)
+
+    def test_agent_records_zero_calls(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="ZeroAgent")
+        invocation.inference_calls = 0
+        invocation.tool_calls = 0
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.invoke_agent.inference_calls", metrics)
+        self.assertAlmostEqual(
+            metrics["gen_ai.invoke_agent.inference_calls"][0].sum,
+            0.0,
+            places=3,
+        )
+        self.assertIn("gen_ai.invoke_agent.tool_calls", metrics)
+        self.assertAlmostEqual(
+            metrics["gen_ai.invoke_agent.tool_calls"][0].sum,
+            0.0,
+            places=3,
+        )
+
+    def test_remote_agent_does_not_record_call_metrics(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_remote_agent(
+            provider="openai",
+            request_model="gpt-4o",
+            server_address="api.openai.com",
+            server_port=443,
+            agent_name="RemoteAgent",
+        )
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.client.operation.duration", metrics)
+        self.assertNotIn("gen_ai.invoke_agent.inference_calls", metrics)
+        self.assertNotIn("gen_ai.invoke_agent.tool_calls", metrics)
+
+    def test_remote_agent_does_not_expose_call_counts(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_remote_agent("openai")
+        invocation.stop()
+
+        self.assertFalse(hasattr(invocation, "inference_calls"))
+        self.assertFalse(hasattr(invocation, "tool_calls"))
+
+    def test_agent_call_metrics_use_semconv_boundaries(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent()
+        invocation.inference_calls = 3
+        invocation.tool_calls = 5
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        for name in (
+            "gen_ai.invoke_agent.inference_calls",
+            "gen_ai.invoke_agent.tool_calls",
+        ):
+            with self.subTest(metric=name):
+                self.assertEqual(
+                    tuple(metrics[name][0].explicit_bounds),
+                    (1, 2, 4, 8, 16, 32, 64, 128),
+                )
+
+    def test_failed_agent_records_calls_without_error_type(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="FailingAgent")
+        invocation.inference_calls = 2
+        invocation.fail(Error(message="boom", type="ValueError"))
+
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.invoke_agent.inference_calls", metrics)
+        inf_point = metrics["gen_ai.invoke_agent.inference_calls"][0]
+        self.assertEqual(
+            dict(inf_point.attributes),
+            {GenAI.GEN_AI_AGENT_NAME: "FailingAgent"},
+        )
+        self.assertAlmostEqual(inf_point.sum, 2.0, places=3)
+        duration_point = metrics["gen_ai.invoke_agent.duration"][0]
+        self.assertEqual(
+            duration_point.attributes.get("error.type"), "ValueError"
+        )
+
+    def test_agent_name_omitted_from_metrics_when_none(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent()
+        invocation.inference_calls = 1
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        inf_point = metrics["gen_ai.invoke_agent.inference_calls"][0]
+        self.assertEqual(dict(inf_point.attributes), {})
 
     def _harvest_metrics(self):
         metrics = self.get_sorted_metrics()

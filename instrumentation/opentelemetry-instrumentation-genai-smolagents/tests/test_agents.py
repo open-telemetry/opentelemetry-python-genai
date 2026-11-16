@@ -7,6 +7,7 @@ import gc
 import inspect
 import json
 import pathlib
+import sys
 import tempfile
 import weakref
 from collections.abc import Generator
@@ -36,7 +37,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.semconv.attributes import error_attributes
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import INVALID_SPAN, StatusCode, get_current_span
 
 from .test_utils import (
     BrokenTool,
@@ -309,6 +310,18 @@ def test_abandoned_streaming_run_does_not_leak_context(
     assert unrelated.parent is None
 
 
+def test_abandoned_streaming_run_closes_the_run(
+    instrument_with_content, span_exporter, monkeypatch
+) -> None:
+    unraisable: list[Any] = []
+    monkeypatch.setattr(sys, "unraisablehook", unraisable.append)
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+    _first_step_only(agent)
+    gc.collect()
+
+    assert unraisable == []
+
+
 def test_code_agent_streaming_is_lazy_until_drained(
     instrument_with_content, span_exporter
 ) -> None:
@@ -328,6 +341,42 @@ def test_code_agent_streaming_is_lazy_until_drained(
     assert outputs[0]["parts"][0]["content"] == "Test result from CodeAgent"
     assert agent_span.status.status_code == StatusCode.UNSET
     assert attr(agent_span, error_attributes.ERROR_TYPE) is None
+
+
+class _SpanningCodeModel(FakeCodeModel):
+    def __init__(self, tracer: Any) -> None:
+        super().__init__()
+        self._tracer = tracer
+
+    def generate(self, *args: Any, **kwargs: Any) -> Any:
+        with self._tracer.start_as_current_span("model work"):
+            return super().generate(*args, **kwargs)
+
+
+def test_streaming_run_is_current_only_while_read(
+    instrument_with_content, span_exporter, tracer_provider
+) -> None:
+    tracer = tracer_provider.get_tracer("test")
+    agent = CodeAgent(tools=[], model=_SpanningCodeModel(tracer), max_steps=3)
+    stream = agent.run("Test question", stream=True)
+    assert get_current_span() is INVALID_SPAN
+
+    next(stream)
+    assert get_current_span() is INVALID_SPAN
+    with tracer.start_as_current_span("caller"):
+        pass
+    list(stream)
+
+    spans = span_exporter.get_finished_spans()
+    (agent_span,) = spans_by_operation(spans, "invoke_agent")
+    (caller,) = [span for span in spans if span.name == "caller"]
+    model_work = [span for span in spans if span.name == "model work"]
+    assert caller.parent is None
+    assert model_work
+    assert all(
+        span.parent.span_id == agent_span.context.span_id
+        for span in model_work
+    )
 
 
 def test_streaming_run_stays_a_generator(
@@ -900,3 +949,36 @@ def test_a_tool_error_the_agent_recovers_from_leaves_the_run_successful(
     assert attr(agent_span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
     outputs = parse_messages(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert outputs[0]["parts"][0]["content"] == "recovered"
+
+
+def test_tool_calling_agent_with_tuple_images(
+    instrument_with_content, span_exporter, vcr
+) -> None:
+    from PIL import Image
+
+    model = OpenAIModel(
+        model_id="gpt-4o",
+        api_key="test_openai_api_key",
+        api_base="https://api.openai.com/v1",
+    )
+    image_path = pathlib.Path(__file__).parent / "fixtures" / "img.png"
+    agent = ToolCallingAgent(tools=[], model=model, max_steps=3)
+    with vcr.use_cassette("agent_with_image.yaml"):
+        agent.run(
+            "Describe what you see in this image briefly.",
+            images=(Image.open(image_path),),
+        )
+
+    spans = span_exporter.get_finished_spans()
+    (agent_span,) = spans_by_operation(spans, "invoke_agent")
+
+    assert agent_span.name == "invoke_agent ToolCallingAgent"
+
+    agent_inputs = parse_messages(agent_span, GenAI.GEN_AI_INPUT_MESSAGES)
+    assert agent_inputs[0]["role"] == "user"
+    assert agent_inputs[0]["parts"][0] == {
+        "type": "text",
+        "content": "Describe what you see in this image briefly.",
+    }
+    assert agent_inputs[0]["parts"][1]["type"] == "blob"
+    assert agent_inputs[0]["parts"][1]["modality"] == "image"

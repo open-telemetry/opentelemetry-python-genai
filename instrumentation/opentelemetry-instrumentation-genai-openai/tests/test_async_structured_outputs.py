@@ -23,6 +23,7 @@ from .structured_outputs_utils import (
 from .test_utils import (
     DEFAULT_MODEL,
     assert_all_attributes,
+    assert_inference_event_without_content,
     assert_message_in_logs,
     assert_messages_attribute,
     format_simple_expected_output_message,
@@ -149,7 +150,7 @@ async def test_async_structured_output_no_content(
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
-        assert len(logs) == 0
+        assert_inference_event_without_content(logs)
         assert "gen_ai.input.messages" not in spans[0].attributes
         assert "gen_ai.output.messages" not in spans[0].attributes
     else:

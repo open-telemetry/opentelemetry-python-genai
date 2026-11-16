@@ -1,0 +1,1 @@
+Deprecate `record_stream_chunk()` on invocation types other than `InferenceInvocation`, where it is now a no-op.

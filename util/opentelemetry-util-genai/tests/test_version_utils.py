@@ -253,3 +253,85 @@ version={version}
             repo_root=self.repo_root,
         )
         self.assertEqual(ret, 1)
+
+
+class TestBumpStripsReleasedLocalInstalls(unittest.TestCase):
+    UTIL = "opentelemetry-util-genai"
+    PKG = "opentelemetry-instrumentation-test"
+    OTHER = "opentelemetry-instrumentation-other"
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def write_package(
+        self, parent: str, name: str, version: str, deps: list[str]
+    ) -> Path:
+        pkg_dir = self.repo_root / parent / name
+        version_rel = "src/version.py"
+        deps_toml = ", ".join(f'"{d}"' for d in deps)
+        (pkg_dir / "src").mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "pyproject.toml").write_text(
+            f'[project]\nname = "{name}"\ndependencies = [{deps_toml}]\n'
+            f'[tool.hatch.version]\npath = "{version_rel}"\n',
+            encoding="utf-8",
+        )
+        (pkg_dir / version_rel).write_text(
+            f'__version__ = "{version}"\n', encoding="utf-8"
+        )
+        return pkg_dir
+
+    def setup_repo(self, version: str, util_floor: str, oldest: str) -> Path:
+        (self.repo_root / "eachdist.ini").write_text(
+            f"[prerelease]\nversion={version}\n", encoding="utf-8"
+        )
+        self.write_package("util", self.UTIL, version, [])
+        self.write_package("instrumentation", self.OTHER, version, [])
+        pkg_dir = self.write_package(
+            "instrumentation",
+            self.PKG,
+            version,
+            [f"{self.UTIL} >= {util_floor}, < 2"],
+        )
+        oldest_path = pkg_dir / "tests" / "requirements.oldest.txt"
+        oldest_path.parent.mkdir()
+        oldest_path.write_text(oldest, encoding="utf-8")
+        return oldest_path
+
+    def bump(self, flag: str) -> None:
+        from version_utils import main as version_utils_main
+
+        self.assertEqual(
+            version_utils_main(argv=["bump", flag], repo_root=self.repo_root),
+            0,
+        )
+
+    def test_dev_bump_strips_released_floor_local_installs(self):
+        oldest_path = self.setup_repo(
+            "1.2b0",
+            "1.2b0.dev",
+            "# header comment\n"
+            "-e util/opentelemetry-util-genai\n"
+            "foo==1.0\n"
+            "../../util/opentelemetry-util-genai  # trailing comment\n",
+        )
+        self.bump("--dev")
+        self.assertEqual(
+            oldest_path.read_text(encoding="utf-8"),
+            "# header comment\nfoo==1.0\n",
+        )
+
+    def test_release_bump_keeps_current_cycle_local_installs(self):
+        content = "-e util/opentelemetry-util-genai\nfoo==1.0\n"
+        oldest_path = self.setup_repo("1.2b0.dev", "1.2b0.dev", content)
+        self.bump("--release")
+        self.assertEqual(oldest_path.read_text(encoding="utf-8"), content)
+
+    def test_dev_bump_keeps_undeclared_local_installs(self):
+        content = "-e instrumentation/opentelemetry-instrumentation-other\n"
+        oldest_path = self.setup_repo("1.2b0", "1.2b0", content)
+        self.bump("--dev")
+        self.assertEqual(oldest_path.read_text(encoding="utf-8"), content)

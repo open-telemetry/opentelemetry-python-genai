@@ -30,6 +30,7 @@ from .conformance.multimodal import (
     ChatCompletionsMultimodalScenario,
     ResponsesMultimodalScenario,
 )
+from .conformance.responses_compaction import ResponsesCompactionScenario
 from .conformance.responses_conversation import ResponsesConversationScenario
 from .conformance.responses_fetch import ResponsesFetchScenario
 from .conformance.responses_server_tool_calling import (
@@ -53,6 +54,7 @@ from .conformance.tool_calling import ToolCallingScenario
         EmbeddingScenario(),
         ToolCallingScenario(),
         ResponsesConversationScenario(),
+        ResponsesCompactionScenario(),
         ResponsesFetchScenario(),
         ResponsesStreamScenario(),
         ResponsesStreamingScenario(),

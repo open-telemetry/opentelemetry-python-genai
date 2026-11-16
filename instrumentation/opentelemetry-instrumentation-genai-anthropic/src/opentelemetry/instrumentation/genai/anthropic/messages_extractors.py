@@ -7,13 +7,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 from urllib.parse import urlparse
 
 try:
     import httpx2 as _http_lib
 except ImportError:
     import httpx as _http_lib
+from anthropic import NotGiven, Omit
 from anthropic.types import MessageDeltaUsage
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -42,6 +43,12 @@ from .utils import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from anthropic.resources.beta.messages import (
+        AsyncMessages as AsyncBetaMessages,
+    )
+    from anthropic.resources.beta.messages import (
+        Messages as BetaMessages,
+    )
     from anthropic.resources.messages import AsyncMessages, Messages
     from anthropic.types import (
         Message,
@@ -52,6 +59,16 @@ if TYPE_CHECKING:
         ToolChoiceParam,
         ToolUnionParam,
         Usage,
+    )
+    from anthropic.types.beta import (
+        BetaMessage,
+        BetaMessageParam,
+        BetaMetadataParam,
+        BetaTextBlockParam,
+        BetaThinkingConfigParam,
+        BetaToolChoiceParam,
+        BetaToolUnionParam,
+        BetaUsage,
     )
 
 
@@ -64,9 +81,9 @@ class MessageRequestParams:
     top_p: float | None = None
     stop_sequences: Sequence[str] | None = None
     stream: bool | None = None
-    messages: Iterable[MessageParam] | None = None
-    system: str | Iterable[TextBlockParam] | None = None
-    tools: Iterable[ToolUnionParam] | None = None
+    messages: Iterable[MessageParam | BetaMessageParam] | None = None
+    system: str | Iterable[TextBlockParam | BetaTextBlockParam] | None = None
+    tools: Iterable[ToolUnionParam | BetaToolUnionParam] | None = None
 
 
 @dataclass
@@ -79,7 +96,7 @@ class UsageTokens:
 
 
 def extract_usage_tokens(
-    usage: Usage | MessageDeltaUsage | None,
+    usage: Usage | BetaUsage | MessageDeltaUsage | None,
 ) -> UsageTokens:
     if usage is None:
         return UsageTokens()
@@ -114,12 +131,14 @@ def extract_usage_tokens(
 
 
 def get_input_messages(
-    messages: Iterable[MessageParam] | None,
+    messages: Iterable[MessageParam | BetaMessageParam] | None,
 ) -> list[InputMessage]:
     if messages is None:
         return []
     result: list[InputMessage] = []
     for message in messages:
+        if "role" not in message or "content" not in message:
+            continue
         role = message["role"]
         parts = convert_content_to_parts(message["content"])
         result.append(InputMessage(role=role, parts=parts))
@@ -127,27 +146,28 @@ def get_input_messages(
 
 
 def get_system_instruction(
-    system: str | Iterable[TextBlockParam] | None,
+    system: str | Iterable[TextBlockParam | BetaTextBlockParam] | None,
 ) -> list[SystemInstructionPart]:
     if system is None:
         return []
     if isinstance(system, str):
         return [TextPart(content=system)] if system else []
-    return [
-        TextPart(content=block["text"])
-        for block in system
-        if block.get("text")
-    ]
+    parts: list[SystemInstructionPart] = []
+    for block in system:
+        text = _get_field(block, "text")
+        if isinstance(text, str) and text:
+            parts.append(TextPart(content=text))
+    return parts
 
 
-def _tool_field(tool: object, key: str) -> object:
-    if isinstance(tool, Mapping):
-        return cast("Mapping[str, object]", tool).get(key)
-    return getattr(tool, key, None)
+def _get_field(value: object, key: str) -> object:
+    if isinstance(value, Mapping):
+        return cast("Mapping[str, object]", value).get(key)
+    return getattr(value, key, None)
 
 
 def get_tool_definitions(
-    tools: Iterable[ToolUnionParam] | None,
+    tools: Iterable[ToolUnionParam | BetaToolUnionParam] | None,
 ) -> list[ToolDefinition] | None:
     """Convert the request's ``tools`` into semconv tool definitions.
 
@@ -162,11 +182,11 @@ def get_tool_definitions(
 
     definitions: list[ToolDefinition] = []
     for tool in tools:
-        name = _tool_field(tool, "name")
-        tool_type = _tool_field(tool, "type")
-        input_schema = _tool_field(tool, "input_schema")
+        name = _get_field(tool, "name")
+        tool_type = _get_field(tool, "type")
+        input_schema = _get_field(tool, "input_schema")
         if input_schema is not None or tool_type in (None, "custom"):
-            description = _tool_field(tool, "description")
+            description = _get_field(tool, "description")
             definitions.append(
                 FunctionToolDefinition(
                     name=name if isinstance(name, str) else "",
@@ -193,7 +213,7 @@ def get_tool_definitions(
 
 
 def get_output_messages_from_message(
-    message: Message | None,
+    message: Message | BetaMessage | None,
 ) -> list[OutputMessage]:
     if message is None:
         return []
@@ -211,7 +231,7 @@ def get_output_messages_from_message(
 
 def set_invocation_response_attributes(
     invocation: InferenceInvocation,
-    message: Message | None,
+    message: Message | BetaMessage | None,
     capture_content: bool,
 ) -> None:
     if message is None:
@@ -235,20 +255,29 @@ def set_invocation_response_attributes(
         invocation.output_messages = get_output_messages_from_message(message)
 
 
+_T = TypeVar("_T")
+
+_UNSET_TYPES = (NotGiven, Omit)
+
+
+def _none_if_unset(value: _T) -> _T | None:
+    return None if isinstance(value, _UNSET_TYPES) else value
+
+
 def extract_params(  # pylint: disable=too-many-locals
     *,
     max_tokens: int | None = None,
-    messages: Iterable[MessageParam] | None = None,
+    messages: Iterable[MessageParam | BetaMessageParam] | None = None,
     model: str | None = None,
-    metadata: MetadataParam | None = None,
+    metadata: MetadataParam | BetaMetadataParam | None = None,
     service_tier: str | None = None,
     stop_sequences: Sequence[str] | None = None,
     stream: bool | None = None,
-    system: str | Iterable[TextBlockParam] | None = None,
+    system: str | Iterable[TextBlockParam | BetaTextBlockParam] | None = None,
     temperature: float | None = None,
-    thinking: ThinkingConfigParam | None = None,
-    tool_choice: ToolChoiceParam | None = None,
-    tools: Iterable[ToolUnionParam] | None = None,
+    thinking: ThinkingConfigParam | BetaThinkingConfigParam | None = None,
+    tool_choice: ToolChoiceParam | BetaToolChoiceParam | None = None,
+    tools: Iterable[ToolUnionParam | BetaToolUnionParam] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
     extra_headers: Mapping[str, str] | None = None,
@@ -257,6 +286,13 @@ def extract_params(  # pylint: disable=too-many-locals
     timeout: float | _http_lib.Timeout | None = None,
     **_kwargs: object,
 ) -> MessageRequestParams:
+    max_tokens = _none_if_unset(max_tokens)
+    model = _none_if_unset(model)
+    stop_sequences = _none_if_unset(stop_sequences)
+    temperature = _none_if_unset(temperature)
+    top_k = _none_if_unset(top_k)
+    top_p = _none_if_unset(top_p)
+
     if isinstance(extra_body, Mapping):
         body = cast(Mapping[object, object], extra_body)
         body_temperature = body.get("temperature")
@@ -298,7 +334,10 @@ def extract_params(  # pylint: disable=too-many-locals
 
 
 def get_server_address_and_port(
-    client_instance: Messages | AsyncMessages,
+    client_instance: Messages
+    | AsyncMessages
+    | BetaMessages
+    | AsyncBetaMessages,
 ) -> tuple[str | None, int | None]:
     base_client = getattr(client_instance, "_client", None)
     base_url = getattr(base_client, "base_url", None)
@@ -320,7 +359,11 @@ def get_server_address_and_port(
 
 
 def get_llm_request_attributes(
-    params: MessageRequestParams, client_instance: Messages | AsyncMessages
+    params: MessageRequestParams,
+    client_instance: Messages
+    | AsyncMessages
+    | BetaMessages
+    | AsyncBetaMessages,
 ) -> dict[str, AttributeValue]:
     attributes: dict[str, AttributeValue | None] = {
         GenAIAttributes.GEN_AI_OPERATION_NAME: GenAIAttributes.GenAiOperationNameValues.CHAT.value,

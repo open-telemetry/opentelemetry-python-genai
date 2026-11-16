@@ -15,6 +15,22 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Changed
+
+- Record tool call arguments as compact JSON for any valid JSON input and
+  non-string results as JSON. Previously only JSON objects were normalized and
+  results went through `str()`, e.g. arguments `[1, 2]` were recorded as `[1,
+  2]`, now `[1,2]`; `null` arguments are no longer recorded.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+
+### Fixed
+
+- Preserve processor state on OpenAIAgentsInstrumentor singleton
+  re-instantiation.
+  ([#869](https://github.com/open-telemetry/opentelemetry-python-genai/pull/869))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Changed

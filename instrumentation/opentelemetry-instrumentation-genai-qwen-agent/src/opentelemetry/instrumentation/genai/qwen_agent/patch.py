@@ -29,7 +29,12 @@ from opentelemetry.instrumentation.genai.qwen_agent.utils import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.stream import SyncStreamWrapper
-from opentelemetry.util.genai.utils import bind_arguments, get_argument
+from opentelemetry.util.genai.utils import (
+    bind_arguments,
+    get_argument,
+    object_to_any_value,
+    tool_arguments_to_any_value,
+)
 
 
 class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
@@ -104,8 +109,8 @@ def wrap_agent_call_tool(
     messages_arg: Any = kwargs.get("messages") or bound.get("messages")
     invocation.tool_call_id = find_tool_call_id(messages_arg, tool_name)
     invocation.tool_description = getattr(tool, "description", None)
-    if invocation.should_capture_content and tool_args is not None:
-        invocation.arguments = tool_args
+    if invocation.should_capture_content:
+        invocation.arguments = tool_arguments_to_any_value(tool_args)
 
     try:
         result = wrapped(*args, **kwargs)
@@ -113,9 +118,7 @@ def wrap_agent_call_tool(
         invocation.fail(error)
         raise
 
-    if invocation.should_capture_content and result is not None:
-        invocation.tool_result = (
-            result if isinstance(result, str) else str(result)
-        )
+    if invocation.should_capture_content:
+        invocation.tool_result = object_to_any_value(result)
     invocation.stop()
     return result

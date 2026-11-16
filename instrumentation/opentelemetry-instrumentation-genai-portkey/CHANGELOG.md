@@ -15,6 +15,16 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Fixed
+
+- Stop request extraction from raising on sampling or token parameters of the
+  wrong type or outside float range, such as `temperature="high"`,
+  `temperature=10**400` or `max_tokens=float("inf")`; those values are left off
+  the span.
+  ([#866](https://github.com/open-telemetry/opentelemetry-python-genai/pull/866))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

@@ -264,13 +264,15 @@ def fixture_enable_completion_hook(request):
 
 
 @pytest.fixture(name="internal_instrumentation_setup", autouse=True)
-def fixture_setup_instrumentation(instrumentor, enable_completion_hook):
+def fixture_setup_instrumentation(
+    instrumentor, enable_completion_hook, monkeypatch
+):
     if enable_completion_hook == "enable_completion_hook":
-        os.environ.update(
-            {
-                OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH: "memory://",
-                "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK": "upload",
-            }
+        monkeypatch.setenv(
+            OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH, "memory://"
+        )
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK", "upload"
         )
     instrumentor.instrument()
     yield
@@ -477,7 +479,10 @@ def fixture_generate_content_stream(client, is_async):
 )
 @pytest.mark.vcr
 def test_upload_hook_non_streaming(
-    model, generate_content, otel_mocker: OTelMocker
+    model,
+    generate_content,
+    setup_content_recording,
+    otel_mocker: OTelMocker,
 ):
     expected_input = [
         {
@@ -488,7 +493,6 @@ def test_upload_hook_non_streaming(
                 }
             ],
             "role": "user",
-            "name": None,
         }
     ]
     expected_output = [
@@ -501,7 +505,6 @@ def test_upload_hook_non_streaming(
                 }
             ],
             "finish_reason": "stop",
-            "name": None,
         }
     ]
     _ = generate_content(
@@ -517,6 +520,9 @@ def test_upload_hook_non_streaming(
     )
 
     span = otel_mocker.get_span_named(f"generate_content {model}")
+    assert_fsspec_equal(
+        span.attributes["gen_ai.input.messages_ref"], expected_input
+    )
     assert_fsspec_equal(
         span.attributes["gen_ai.output.messages_ref"], expected_output
     )

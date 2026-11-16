@@ -15,6 +15,53 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Record cache-write and audio token usage from OpenAI Chat Completions
+  responses and streams.
+  ([#681](https://github.com/open-telemetry/opentelemetry-python-genai/pull/681))
+- Instrument `Responses.parse` and `AsyncResponses.parse`, so structured-output
+  calls emit GenAI spans like `Responses.create`, reporting
+  `gen_ai.output.type` as `json` for the `text_format` argument.
+  ([#786](https://github.com/open-telemetry/opentelemetry-python-genai/pull/786))
+- Capture reasoning tokens - `gen_ai.usage.reasoning.output_tokens` on
+  Responses API calls
+  ([#812](https://github.com/open-telemetry/opentelemetry-python-genai/pull/812))
+- Record `gen_ai.conversation.compacted` on Responses API spans when compaction
+  items are present in the request input or response output.
+  ([#900](https://github.com/open-telemetry/opentelemetry-python-genai/pull/900))
+
+### Fixed
+
+- Record `max_completion_tokens` as `gen_ai.request.max_tokens` on chat
+  completion spans, whether passed as a keyword argument or via `extra_body`.
+  ([#813](https://github.com/open-telemetry/opentelemetry-python-genai/pull/813))
+- Suspend the chat completion and Responses API invocations while a streamed
+  response is unconsumed and re-activate them only while a chunk is read or the
+  stream is cleaned up: the inference span is no longer current in the caller's
+  context between reads, so spans a caller creates between chunks are siblings
+  of the inference span, not children.
+  ([#817](https://github.com/open-telemetry/opentelemetry-python-genai/pull/817))
+- Record Responses computer calls as client tool calls and replayed results as
+  tool inputs.
+  ([#837](https://github.com/open-telemetry/opentelemetry-python-genai/pull/837))
+- Map `type: "reasoning"` input items to assistant messages with
+  `ReasoningPart` on Responses API calls.
+  ([#839](https://github.com/open-telemetry/opentelemetry-python-genai/pull/839))
+- Stop tracing `with_raw_response` calls after `uninstrument()` on a client
+  that used them while instrumented.
+  ([#862](https://github.com/open-telemetry/opentelemetry-python-genai/pull/862))
+- Unwrap `chat.completions.parse` when calling
+  `OpenAIInstrumentor().uninstrument()`.
+  ([#863](https://github.com/open-telemetry/opentelemetry-python-genai/pull/863))
+- Stop request extraction from raising on chat `messages=None` or a Responses
+  input item whose `type` is not a string.
+  ([#866](https://github.com/open-telemetry/opentelemetry-python-genai/pull/866))
+- Capture refusals from streamed chat completions in the output messages.
+  ([#907](https://github.com/open-telemetry/opentelemetry-python-genai/pull/907))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

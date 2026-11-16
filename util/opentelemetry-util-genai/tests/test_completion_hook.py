@@ -93,6 +93,44 @@ class TestCompletionHook(TestCase):
 
         self.assertIsInstance(load_completion_hook(), _NoOpCompletionHook)
 
+    @patch("opentelemetry.util.genai.completion_hook.entry_points")
+    @patch.dict(
+        "os.environ", {OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK: "my-hook"}
+    )
+    def test_load_completion_hook_not_found_warns(
+        self, mock_entry_points: Mock
+    ):
+        mock_entry_points.return_value = [
+            FakeEntryPoint("other-hook", lambda: FakeCompletionHook)
+        ]
+
+        with self.assertLogs(level=logging.WARNING) as logs:
+            self.assertIsInstance(load_completion_hook(), _NoOpCompletionHook)
+
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(logs.records[0].levelno, logging.WARNING)
+        self.assertIn("my-hook", logs.records[0].getMessage())
+        self.assertIn("other-hook", logs.records[0].getMessage())
+
+    @patch("opentelemetry.util.genai.completion_hook.entry_points")
+    @patch.dict(
+        "os.environ", {OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK: "my-hook"}
+    )
+    def test_load_completion_hook_invalid_warns(self, mock_entry_points: Mock):
+        mock_entry_points.return_value = [
+            FakeEntryPoint("my-hook", lambda: InvalidCompletionHook)
+        ]
+
+        with self.assertLogs(level=logging.WARNING) as logs:
+            self.assertIsInstance(load_completion_hook(), _NoOpCompletionHook)
+
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(logs.records[0].levelno, logging.WARNING)
+        self.assertIn(
+            "is not a valid CompletionHook. Using noop",
+            logs.records[0].getMessage(),
+        )
+
 
 class TestSafeCompletionHook(TestCase):
     def test_passes_arguments_to_wrapped_hook(self):

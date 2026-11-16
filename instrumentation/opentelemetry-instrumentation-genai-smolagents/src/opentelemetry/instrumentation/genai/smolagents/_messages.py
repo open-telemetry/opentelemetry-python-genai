@@ -143,13 +143,13 @@ def _image_part_from_element(
 
 
 def _parts_from_content(
-    content: str | list[_ContentElement] | None,
+    content: str | Sequence[_ContentElement] | None,
 ) -> list[MessagePart]:
     parts: list[MessagePart] = []
     if isinstance(content, str):
         parts.append(TextPart(content=content))
         return parts
-    if isinstance(content, list):
+    if isinstance(content, (list, tuple)):
         for element in content:
             if not isinstance(element, dict):
                 _logger.debug(
@@ -172,7 +172,7 @@ def _parts_from_content(
 
 def _get_role_and_content(
     message: ChatMessage | dict[str, Any],
-) -> tuple[MessageRole | str | None, str | list[_ContentElement] | None]:
+) -> tuple[MessageRole | str | None, str | Sequence[_ContentElement] | None]:
     # smolagents reads a message the same way: a dict goes through
     # ChatMessage.from_dict, anything else has its attributes read directly.
     if isinstance(message, dict):
@@ -181,11 +181,11 @@ def _get_role_and_content(
 
 
 def to_input_messages(
-    messages: list[ChatMessage | dict[str, Any]] | None,
+    messages: Sequence[ChatMessage | dict[str, Any]] | None,
 ) -> list[InputMessage]:
     """Map smolagents ``generate`` input messages to ``InputMessage`` objects."""
     result: list[InputMessage] = []
-    if not isinstance(messages, list):
+    if not isinstance(messages, (list, tuple)):
         return result
     for message in messages:
         raw_role, content = _get_role_and_content(message)
@@ -270,12 +270,12 @@ def final_answer_parts(output: object) -> list[MessagePart]:
 
 
 def task_to_input_messages(
-    task: str | None, images: list[Image | str] | None
+    task: str | None, images: Sequence[Image | str] | None
 ) -> list[InputMessage]:
     parts: list[MessagePart] = []
     if task:
         parts.append(TextPart(content=task))
-    if isinstance(images, list):
+    if isinstance(images, (list, tuple)):
         for image in images:
             if blob := _image_blob(image):
                 parts.append(blob)

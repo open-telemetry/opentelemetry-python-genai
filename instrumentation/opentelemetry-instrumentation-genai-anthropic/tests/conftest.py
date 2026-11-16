@@ -5,11 +5,13 @@
 # pylint: disable=redefined-outer-name
 
 import json
+import logging
 import os
 
+import anthropic
 import pytest
 import pytest_asyncio
-from anthropic import Anthropic, AsyncAnthropic
+from anthropic import NOT_GIVEN, Anthropic, AsyncAnthropic
 
 from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
 from opentelemetry.sdk.trace import ReadableSpan
@@ -23,6 +25,56 @@ pytest_plugins = [
     "opentelemetry.test_util_genai.fixtures",
     "opentelemetry.test_util_genai.vcr",
 ]
+
+# anthropic >= 2 has built-in tracing on the global tracer provider; keep it off so
+# tests only see spans from this instrumentation.
+os.environ["ANTHROPIC_OPEN_TELEMETRY"] = "false"
+
+
+# Sentinels the SDK uses for "argument not supplied". `omit` only exists in
+# newer SDK versions (the oldest supported release has just NOT_GIVEN).
+UNSET_SENTINELS = [
+    pytest.param(NOT_GIVEN, id="not_given"),
+    pytest.param(
+        getattr(anthropic, "omit", None),
+        id="omit",
+        marks=pytest.mark.skipif(
+            not hasattr(anthropic, "omit"),
+            reason="installed anthropic has no `omit`",
+        ),
+    ),
+]
+
+UNSET_SAMPLING_ATTRIBUTES = (
+    GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES,
+    GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE,
+    GenAIAttributes.GEN_AI_REQUEST_TOP_P,
+    GenAIAttributes.GEN_AI_REQUEST_TOP_K,
+)
+
+
+def unset_sampling_kwargs(unset, supported_params):
+    """Set every sampling kwarg the installed SDK method accepts to `unset`.
+
+    Newer SDK releases dropped some of these parameters from the signature.
+    """
+    return {
+        name: unset
+        for name in ("stop_sequences", "temperature", "top_p", "top_k")
+        if name in supported_params
+    }
+
+
+def assert_unset_sampling_attributes_omitted(span, caplog) -> None:
+    """Unset SDK sentinels must not leak into request attributes or logs."""
+    for attribute in UNSET_SAMPLING_ATTRIBUTES:
+        assert attribute not in span.attributes
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+        and "Invalid type" in record.getMessage()
+    ]
 
 
 def multimodal_input_message():
@@ -179,9 +231,15 @@ def vcr_config():
             ("x-api-key", "test_anthropic_api_key"),
             ("authorization", "Bearer test_anthropic_api_key"),
         ],
+        # Older SDKs send `?beta=true` on beta endpoints and newer ones don't.
+        "filter_query_parameters": ["beta"],
         "decode_compressed_response": True,
         "before_record_response": scrub_response_headers(
-            ["anthropic-organization-id", "set-cookie"]
+            [
+                "anthropic-organization-id",
+                "anthropic-workspace-id",
+                "set-cookie",
+            ]
         ),
     }
 
@@ -221,6 +279,5 @@ def instrument_event_only(tracer_provider, logger_provider, meter_provider):
         logger_provider=logger_provider,
         meter_provider=meter_provider,
         content_capture="EVENT_ONLY",
-        emit_event=True,
     ) as instrumentor:
         yield instrumentor

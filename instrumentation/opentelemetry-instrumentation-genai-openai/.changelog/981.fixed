@@ -1,0 +1,1 @@
+Fix embedding dimension counts for explicitly requested base64 responses without changing the SDK's returned embeddings.

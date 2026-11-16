@@ -1,5 +1,5 @@
 ---
-applyTo: "tox.ini,pytest.ini,pyproject.toml,uv.lock,.codespellrc,.pre-commit-config.yaml,scripts/**,.github/workflows/**,.github/actions/**"
+applyTo: "tox.ini,tox-uv.toml,pytest.ini,**/pyproject.toml,**/tests/requirements.*.txt,uv.lock,eachdist.ini,versions.env,pyrightconfig*.json,.codespellrc,.pre-commit-config.yaml,scripts/**,.github/workflows/**,.github/actions/**"
 ---
 
 Review rules for PRs touching build, test-matrix, and CI configuration. Flag violations with a
@@ -15,8 +15,8 @@ exercised, a gate that silently stops covering ground. All of them pass CI while
 A new package under `instrumentation/<pkg>/` must be wired into `tox.ini` in full. Check each of
 these, not just the first:
 
-- `envlist`: `py3{10,14}-test-instrumentation-genai-<lib>-latest`,
-  `py310-test-instrumentation-genai-<lib>-oldest`, and the matching
+- `envlist`: `py3{11,15}-test-instrumentation-genai-<lib>-latest`,
+  `py311-test-instrumentation-genai-<lib>-oldest`, and the matching
   `py314-test-instrumentation-genai-<lib>-conformance` entry.
 - `[testenv] deps`: the factor-conditional `-r …/tests/requirements.<factor>.txt` lines plus
   `{[testenv]test_deps}` / `{[testenv]pytest_deps}`. Requirements install here, **not** in
@@ -27,6 +27,11 @@ these, not just the first:
 
 The uv workspace picks up new packages via the `instrumentation/*` glob in root `pyproject.toml`,
 so no edit is needed there.
+
+A new package must also be wired into releases, and start at the repo's current version series
+(compare `version.py` with an existing package). Flag a package missing from `eachdist.ini` or
+from the package lists in `.github/workflows/prepare-release.yml`, `release-package.yml`, or
+`prepare-backport-patch.yml`.
 
 ## 2. Lower bounds
 

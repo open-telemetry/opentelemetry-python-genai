@@ -58,6 +58,16 @@ def upload_completion_hook() -> CompletionHook:
         )
         environ_max_queue_size = _DEFAULT_MAX_QUEUE_SIZE
 
+    # A queue size below 1 cannot build the executor or the semaphore.
+    if environ_max_queue_size < 1:
+        _logger.warning(
+            "%s is not a positive integer for %s. Defaulting to %s.",
+            environ_max_queue_size,
+            OTEL_INSTRUMENTATION_GENAI_UPLOAD_MAX_QUEUE_SIZE,
+            _DEFAULT_MAX_QUEUE_SIZE,
+        )
+        environ_max_queue_size = _DEFAULT_MAX_QUEUE_SIZE
+
     environ_format = environ.get(
         OTEL_INSTRUMENTATION_GENAI_UPLOAD_FORMAT, _DEFAULT_FORMAT
     ).lower()

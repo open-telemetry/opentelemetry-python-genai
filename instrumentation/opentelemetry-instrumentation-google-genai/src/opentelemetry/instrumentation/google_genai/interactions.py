@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import (
     AsyncIterable,
+    Awaitable,
     Callable,
     Iterable,
     Mapping,
@@ -117,7 +119,6 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     Error,
     FunctionToolDefinition,
-    GenericPart,
     GenericToolDefinition,
     InputMessage,
     MessagePart,
@@ -133,6 +134,8 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     UriPart,
 )
+
+_logger = logging.getLogger(__name__)
 
 # Interaction.status values that differ from the gen_ai.response.status value
 # set. `in_progress`, `completed`, `failed`, `cancelled` and `incomplete` are
@@ -198,6 +201,7 @@ def _apply_interaction_response_attributes(
     response: Interaction,
     invocation: InferenceInvocation | RemoteAgentInvocation,
     telemetry_handler: TelemetryHandler,
+    streamed_parts: list[MessagePart] | None = None,
 ) -> None:
     if isinstance(invocation, InferenceInvocation):
         invocation.response_model_name = response.model
@@ -223,10 +227,17 @@ def _apply_interaction_response_attributes(
             _modality_tokens(usage, "cached_tokens_by_modality")
         )
 
+    finish_reason = _interaction_finish_reason(_get_field(response, "status"))
+    if finish_reason:
+        invocation.finish_reasons = [finish_reason]
+
     if telemetry_handler.should_capture_content():
-        invocation.output_messages = _interactions_response_to_messages(
-            response
+        messages = _interactions_response_to_messages(
+            response, finish_reason=None
         )
+        if streamed_parts and not _has_content(messages):
+            messages = _streamed_output_messages(streamed_parts)
+        invocation.output_messages = messages
 
 
 def _modality_tokens(usage: Any, name: str) -> ModalityTokens | None:
@@ -279,6 +290,8 @@ def _to_server_tool_part(
     item: Step | dict[str, object],
 ) -> MessagePart | None:
     item_type = item.get("type") if isinstance(item, dict) else item.type
+    if not isinstance(item_type, str):
+        return None
     tool_name = _SERVER_TOOL_CALL_NAMES.get(item_type)
     response_name = _SERVER_TOOL_RESPONSE_NAMES.get(item_type)
     if tool_name is None and response_name is None:
@@ -387,9 +400,6 @@ def _interactions_input_to_messages(
                 modality=Modality.DOCUMENT,
                 uri=_get_field(item, "uri") or "",
             )
-            parts.append(part)
-        elif item_type is not None:
-            part = GenericPart(type=item_type)
             parts.append(part)
 
     return [InputMessage(role=Role.USER.value, parts=parts)]
@@ -543,7 +553,105 @@ def _apply_fetched_interaction_attributes(
             ]
 
 
-class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
+class _InteractionStreamMixin:
+    """Event handling shared by the interaction stream wrappers.
+
+    A completion event carries the interaction's metadata but no steps, so the
+    output is rebuilt from the ``step.start`` / ``step.delta`` events.
+    """
+
+    _self_invocation: Any
+    _self_telemetry_handler: TelemetryHandler
+    _self_last_interaction: Interaction | None
+    _self_capture_content: bool
+    _self_content: _StreamedContent
+
+    def _init_stream_state(self, telemetry_handler: TelemetryHandler) -> None:
+        self._self_telemetry_handler = telemetry_handler
+        self._self_last_interaction = None
+        # Snapshotted so no response text is buffered when content capture is
+        # off; the handler settles the mode at construction anyway.
+        self._self_capture_content = telemetry_handler.should_capture_content()
+        self._self_content = _StreamedContent()
+
+    def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
+        event_type = _get_field(chunk, "event_type")
+        if event_type in ("step.start", "step.delta"):
+            if self._self_capture_content:
+                try:
+                    self._self_content.add(chunk)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    # A payload the accumulator can't handle must not break the
+                    # caller's stream; drop the captured output instead.
+                    self._self_capture_content = False
+                    self._self_content = _StreamedContent()
+                    _logger.debug(
+                        "Failed to accumulate interaction stream content",
+                        exc_info=True,
+                    )
+            return
+        if interaction := _interaction_from_event(chunk):
+            self._self_last_interaction = interaction
+        else:
+            self._process_other_event(chunk)
+
+    def _process_other_event(self, chunk: InteractionSSEEvent) -> None:
+        """Handle an event that is neither a step nor the completion."""
+
+    def _record_interaction(
+        self, interaction: Interaction, streamed_parts: list[MessagePart]
+    ) -> None:
+        raise NotImplementedError
+
+    def _record_response(self) -> None:
+        try:
+            streamed_parts = self._self_content.parts()
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Same as a failed accumulation: drop the captured output.
+            streamed_parts = []
+            self._self_capture_content = False
+            _logger.debug(
+                "Failed to rebuild interaction stream content", exc_info=True
+            )
+        if self._self_last_interaction:
+            self._record_interaction(
+                self._self_last_interaction, streamed_parts
+            )
+            if not self._self_capture_content:
+                self._self_invocation.output_messages = []
+        elif streamed_parts and self._self_capture_content:
+            # No completion event arrived, but report what was received.
+            self._self_invocation.output_messages = _streamed_output_messages(
+                streamed_parts
+            )
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_invocation.fail(error)
+
+
+class _CreateStreamMixin(_InteractionStreamMixin):
+    """Records a streamed ``interactions.create``."""
+
+    _self_invocation: InferenceInvocation | RemoteAgentInvocation
+
+    def _record_interaction(
+        self, interaction: Interaction, streamed_parts: list[MessagePart]
+    ) -> None:
+        _apply_interaction_response_attributes(
+            interaction,
+            self._self_invocation,
+            self._self_telemetry_handler,
+            streamed_parts=streamed_parts,
+        )
+
+    def _on_stream_end(self) -> None:
+        self._record_response()
+        self._self_invocation.stop()
+
+
+class InteractionsStreamWrapper(
+    _CreateStreamMixin, SyncStreamWrapper[InteractionSSEEvent]
+):
     def __init__(
         self,
         stream: Iterable[InteractionSSEEvent],
@@ -552,30 +660,12 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
-        self._self_telemetry_handler = telemetry_handler
-        self._self_last_interaction: Interaction | None = None
-
-    def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
-        event_type = _get_field(chunk, "event_type")
-        if event_type == "interaction_completed":
-            interaction = _get_field(chunk, "interaction")
-            if interaction:
-                self._self_last_interaction = interaction
-
-    def _on_stream_end(self) -> None:
-        if self._self_last_interaction:
-            _apply_interaction_response_attributes(
-                self._self_last_interaction,
-                self._self_invocation,
-                self._self_telemetry_handler,
-            )
-        self._self_invocation.stop()
-
-    def _on_stream_error(self, error: BaseException) -> None:
-        self._self_invocation.fail(error)
+        self._init_stream_state(telemetry_handler)
 
 
-class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
+class AsyncInteractionsStreamWrapper(
+    _CreateStreamMixin, AsyncStreamWrapper[InteractionSSEEvent]
+):
     def __init__(
         self,
         stream: AsyncIterable[InteractionSSEEvent],
@@ -584,27 +674,25 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
-        self._self_telemetry_handler = telemetry_handler
-        self._self_last_interaction: Interaction | None = None
+        self._init_stream_state(telemetry_handler)
+        self._self_stream_close: Callable[[], Awaitable[object]] | None = (
+            getattr(stream, "close", None)
+        )
+        self._self_closing = False
 
-    def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
-        event_type = _get_field(chunk, "event_type")
-        if event_type == "interaction_completed":
-            interaction = _get_field(chunk, "interaction")
-            if interaction:
-                self._self_last_interaction = interaction
-
-    def _on_stream_end(self) -> None:
-        if self._self_last_interaction:
-            _apply_interaction_response_attributes(
-                self._self_last_interaction,
-                self._self_invocation,
-                self._self_telemetry_handler,
-            )
-        self._self_invocation.stop()
-
-    def _on_stream_error(self, error: BaseException) -> None:
-        self._self_invocation.fail(error)
+    async def _close(self) -> None:
+        # google-genai >= 2.34 replaces the stream's `close` with one that
+        # calls the `close` it read from this wrapper, which would recurse.
+        # Close the stream directly on the re-entrant call. See #1032.
+        if self._self_closing:
+            if self._self_stream_close is not None:
+                await self._self_stream_close()
+            return
+        self._self_closing = True
+        try:
+            await super()._close()
+        finally:
+            self._self_closing = False
 
 
 def _maybe_json(value: str) -> Any:
@@ -767,9 +855,7 @@ class _StreamedContent:
         return parts
 
 
-def _streamed_output_messages(
-    parts: list[MessagePart],
-) -> list[OutputMessage]:
+def _streamed_output_messages(parts: list[MessagePart]) -> list[OutputMessage]:
     """Wrap parts accumulated from stream events as an output message."""
     return [OutputMessage(role=Role.ASSISTANT.value, parts=parts)]
 
@@ -823,7 +909,39 @@ def _interaction_from_event(chunk: InteractionSSEEvent) -> Interaction | None:
     return _get_field(chunk, "interaction")
 
 
-class FetchInteractionStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
+class _FetchStreamMixin(_InteractionStreamMixin):
+    """Records a streamed ``interactions.get``."""
+
+    _self_invocation: FetchResponseInvocation
+    _self_stream_error: Error | None
+
+    def _process_other_event(self, chunk: InteractionSSEEvent) -> None:
+        if error := _interaction_stream_error(chunk):
+            self._self_stream_error = error
+
+    def _record_interaction(
+        self, interaction: Interaction, streamed_parts: list[MessagePart]
+    ) -> None:
+        _apply_fetched_interaction_attributes(
+            interaction,
+            self._self_invocation,
+            self._self_telemetry_handler,
+            streamed_parts=streamed_parts,
+        )
+
+    def _on_stream_end(self) -> None:
+        self._record_response()
+        if self._self_stream_error is not None:
+            # The provider reported the failure in-band; the caller never
+            # receives the response, so the retrieval itself failed.
+            self._self_invocation.fail(self._self_stream_error)
+            return
+        self._self_invocation.stop()
+
+
+class FetchInteractionStreamWrapper(
+    _FetchStreamMixin, SyncStreamWrapper[InteractionSSEEvent]
+):
     """Instruments a streamed ``interactions.get``.
 
     Keeps the fetch invocation open until the caller drains, closes, or fails
@@ -838,52 +956,12 @@ class FetchInteractionStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
-        self._self_telemetry_handler = telemetry_handler
-        self._self_last_interaction: Interaction | None = None
-        self._self_stream_error: Error | None = None
-        # Snapshotted so no response text is buffered when content capture is
-        # off; the handler settles the mode at construction anyway.
-        self._self_capture_content = telemetry_handler.should_capture_content()
-        self._self_content = _StreamedContent()
-
-    def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
-        event_type = _get_field(chunk, "event_type")
-        if event_type in ("step.start", "step.delta"):
-            if self._self_capture_content:
-                self._self_content.add(chunk)
-            return
-        if interaction := _interaction_from_event(chunk):
-            self._self_last_interaction = interaction
-        elif error := _interaction_stream_error(chunk):
-            self._self_stream_error = error
-
-    def _on_stream_end(self) -> None:
-        streamed_parts = self._self_content.parts()
-        if self._self_last_interaction:
-            _apply_fetched_interaction_attributes(
-                self._self_last_interaction,
-                self._self_invocation,
-                self._self_telemetry_handler,
-                streamed_parts=streamed_parts,
-            )
-        elif streamed_parts and self._self_capture_content:
-            # No completion event arrived, but report what was received.
-            self._self_invocation.output_messages = _streamed_output_messages(
-                streamed_parts
-            )
-        if self._self_stream_error is not None:
-            # The provider reported the failure in-band; the caller never
-            # receives the response, so the retrieval itself failed.
-            self._self_invocation.fail(self._self_stream_error)
-            return
-        self._self_invocation.stop()
-
-    def _on_stream_error(self, error: BaseException) -> None:
-        self._self_invocation.fail(error)
+        self._self_stream_error = None
+        self._init_stream_state(telemetry_handler)
 
 
 class AsyncFetchInteractionStreamWrapper(
-    AsyncStreamWrapper[InteractionSSEEvent]
+    _FetchStreamMixin, AsyncStreamWrapper[InteractionSSEEvent]
 ):
     """Async counterpart of FetchInteractionStreamWrapper."""
 
@@ -895,48 +973,8 @@ class AsyncFetchInteractionStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
-        self._self_telemetry_handler = telemetry_handler
-        self._self_last_interaction: Interaction | None = None
-        self._self_stream_error: Error | None = None
-        # Snapshotted so no response text is buffered when content capture is
-        # off; the handler settles the mode at construction anyway.
-        self._self_capture_content = telemetry_handler.should_capture_content()
-        self._self_content = _StreamedContent()
-
-    def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
-        event_type = _get_field(chunk, "event_type")
-        if event_type in ("step.start", "step.delta"):
-            if self._self_capture_content:
-                self._self_content.add(chunk)
-            return
-        if interaction := _interaction_from_event(chunk):
-            self._self_last_interaction = interaction
-        elif error := _interaction_stream_error(chunk):
-            self._self_stream_error = error
-
-    def _on_stream_end(self) -> None:
-        streamed_parts = self._self_content.parts()
-        if self._self_last_interaction:
-            _apply_fetched_interaction_attributes(
-                self._self_last_interaction,
-                self._self_invocation,
-                self._self_telemetry_handler,
-                streamed_parts=streamed_parts,
-            )
-        elif streamed_parts and self._self_capture_content:
-            # No completion event arrived, but report what was received.
-            self._self_invocation.output_messages = _streamed_output_messages(
-                streamed_parts
-            )
-        if self._self_stream_error is not None:
-            # The provider reported the failure in-band; the caller never
-            # receives the response, so the retrieval itself failed.
-            self._self_invocation.fail(self._self_stream_error)
-            return
-        self._self_invocation.stop()
-
-    def _on_stream_error(self, error: BaseException) -> None:
-        self._self_invocation.fail(error)
+        self._self_stream_error = None
+        self._init_stream_state(telemetry_handler)
 
 
 # See https://ai.google.dev/gemini-api/docs/function-calling
@@ -1195,6 +1233,7 @@ def _create_instrumented_interactions_create(
         try:
             response = wrapped(*args, **kwargs)
             if _is_interaction_stream(response, request):
+                invocation.suspend()
                 return InteractionsStreamWrapper(
                     response,
                     invocation,
@@ -1237,6 +1276,7 @@ def _create_instrumented_async_interactions_create(
         try:
             response = await wrapped(*args, **kwargs)
             if _is_interaction_stream(response, request):
+                invocation.suspend()
                 return AsyncInteractionsStreamWrapper(
                     response,
                     invocation,
@@ -1382,6 +1422,7 @@ def _create_instrumented_interactions_get(
             elif not _is_unparsed_response(result) and hasattr(
                 result, "__iter__"
             ):
+                invocation.suspend()
                 return FetchInteractionStreamWrapper(
                     cast("Stream[InteractionSSEEvent]", result),
                     invocation,
@@ -1439,6 +1480,7 @@ def _create_instrumented_async_interactions_get(
             elif not _is_unparsed_response(result) and hasattr(
                 result, "__aiter__"
             ):
+                invocation.suspend()
                 return AsyncFetchInteractionStreamWrapper(
                     result, invocation, telemetry_handler
                 )

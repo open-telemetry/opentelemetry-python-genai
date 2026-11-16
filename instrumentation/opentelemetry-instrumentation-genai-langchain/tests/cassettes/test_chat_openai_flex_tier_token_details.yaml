@@ -1,0 +1,147 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "gpt-5-mini",
+        "stream": false,
+        "service_tier": "flex",
+        "messages": [
+          {
+            "content": "You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. You are a careful mathematical reasoner. ",
+            "role": "system"
+          },
+          {
+            "content": "A snail climbs a 12 meter well. Each day it climbs up 3 meters, and each night it slides back 2 meters. On which day does it first reach the top?",
+            "role": "user"
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '8477'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 3.41.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.41.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.11.3
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-Ee9iyQ4fXLYyk9VoKvOFCQiBvNwd8",
+          "object": "chat.completion",
+          "created": 1793239208,
+          "model": "gpt-5-mini-2025-08-07",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "On each full day-night cycle the snail gains 1 m (3 up, 2 down). After 9 cycles it is at 9 m. On the 10th day it climbs 3 m from 9 m to 12 m and reaches the top before sliding back. \n\nSo it first reaches the top on day 10.",
+                "refusal": null,
+                "annotations": []
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1649,
+            "completion_tokens": 591,
+            "total_tokens": 2240,
+            "prompt_tokens_details": {
+              "cached_tokens": 1536,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 512,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "flex",
+          "system_fingerprint": null
+        }
+    headers:
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a51e95afcf89f378-SJC
+      connection:
+      - keep-alive
+      content-length:
+      - '1002'
+      content-type:
+      - application/json
+      date:
+      - Thu, 29 Oct 2026 02:00:11 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '3531'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '10000000'
+      x-ratelimit-remaining-requests:
+      - '9999'
+      x-ratelimit-remaining-tokens:
+      - '9997910'
+      x-ratelimit-reset-requests:
+      - 6ms
+      x-ratelimit-reset-tokens:
+      - 12ms
+      x-request-id:
+      - req_839531724a4a4a069175fdde15ad8839
+    status:
+      code: 200
+      message: OK
+version: 1

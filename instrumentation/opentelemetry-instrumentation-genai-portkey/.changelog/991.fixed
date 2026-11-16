@@ -1,0 +1,1 @@
+Pin `typing-extensions` in the oldest test requirements so tests resolve the declared `portkey-ai` lower bound.

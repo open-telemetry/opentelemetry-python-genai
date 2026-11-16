@@ -297,3 +297,8 @@ async def test_async_embeddings_with_encoding_format(
     assert spans[0].attributes["gen_ai.request.encoding_formats"] == (
         encoding_format,
     )
+    assert (
+        GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
+        in spans[0].attributes
+    )
+    assert isinstance(response.data[0].embedding, str)

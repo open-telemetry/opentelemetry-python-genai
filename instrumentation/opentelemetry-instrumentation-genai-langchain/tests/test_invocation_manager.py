@@ -9,8 +9,14 @@ import pytest
 
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
+    _PromptContext,
 )
-from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
+    LocalAgentInvocation,
+    RetrievalInvocation,
+    ToolInvocation,
+)
 
 
 @pytest.fixture
@@ -87,6 +93,90 @@ def test_add_invocation_state_with_nonexistent_parent(
 def test_get_nonexistent_invocation(invocation_manager):
     nonexistent_id = uuid.uuid4()
     assert invocation_manager.get_invocation(nonexistent_id) is None
+
+
+@pytest.mark.parametrize(
+    "boundary_type",
+    [None, InferenceInvocation, ToolInvocation, RetrievalInvocation],
+)
+@pytest.mark.parametrize("inner_agent", [False, True])
+@pytest.mark.parametrize("tool_call", [False, True])
+def test_record_agent_call_respects_ownership(
+    invocation_manager: _InvocationManager,
+    boundary_type: type | None,
+    inner_agent: bool,
+    tool_call: bool,
+) -> None:
+    outer_id, boundary_id, inner_id, child_id = (
+        uuid.uuid4() for _ in range(4)
+    )
+    outer = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    inner = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    invocation_manager.add_invocation_state(outer_id, None, outer)
+    boundary = mock.Mock(spec=boundary_type) if boundary_type else None
+    invocation_manager.add_invocation_state(boundary_id, outer_id, boundary)
+    invocation_manager.add_invocation_state(
+        inner_id, boundary_id, inner if inner_agent else None
+    )
+    invocation_manager.add_invocation_state(child_id, inner_id, None)
+
+    invocation_manager.record_agent_call(child_id, tool_call=tool_call)
+
+    outer_count = int(not inner_agent and boundary_type is None)
+    assert outer.inference_calls == (0 if tool_call else outer_count)
+    assert outer.tool_calls == (outer_count if tool_call else 0)
+    assert inner.inference_calls == (int(inner_agent) if not tool_call else 0)
+    assert inner.tool_calls == (int(inner_agent) if tool_call else 0)
+
+
+@pytest.mark.parametrize("tool_call", [False, True])
+def test_record_agent_call_leaves_untracked_counts_unset(
+    invocation_manager: _InvocationManager,
+    tool_call: bool,
+) -> None:
+    outer_id, custom_id = uuid.uuid4(), uuid.uuid4()
+    outer = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    custom = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=None, tool_calls=None
+    )
+    invocation_manager.add_invocation_state(outer_id, None, outer)
+    invocation_manager.add_invocation_state(custom_id, outer_id, custom)
+    for parent_id in (custom_id, uuid.uuid4(), None):
+        invocation_manager.record_agent_call(parent_id, tool_call=tool_call)
+    assert custom.inference_calls is None
+    assert custom.tool_calls is None
+    assert outer.inference_calls == 0
+    assert outer.tool_calls == 0
+
+
+def test_record_agent_call_counts_each_inference(
+    invocation_manager: _InvocationManager,
+) -> None:
+    agent_id, node_id, child_id = (uuid.uuid4() for _ in range(3))
+    agent = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    invocation_manager.add_invocation_state(agent_id, None, agent)
+    invocation_manager.add_invocation_state(node_id, agent_id, None)
+    invocation_manager.add_invocation_state(child_id, node_id, None)
+    for _ in range(4):
+        invocation_manager.record_agent_call(child_id)
+        invocation_manager.record_agent_call(child_id, tool_call=True)
+    assert agent.inference_calls == 4
+    assert agent.tool_calls == 4
+
+    invocation_manager.delete_invocation_state(child_id)
+    invocation_manager.delete_invocation_state(node_id)
+    next_node_id = uuid.uuid4()
+    invocation_manager.add_invocation_state(next_node_id, agent_id, None)
+    invocation_manager.record_agent_call(next_node_id)
+    assert agent.inference_calls == 5
 
 
 def test_delete_invocation_state(invocation_manager, mock_invocation):
@@ -242,3 +332,79 @@ def test_none_invocation_can_be_stored_and_retrieved(invocation_manager):
 
 def test_delete_nonexistent_run_id_does_not_raise(invocation_manager):
     invocation_manager.delete_invocation_state(uuid.uuid4())  # must not raise
+
+
+def test_prompt_context_publishes_to_parent_and_is_consumed_once(
+    invocation_manager,
+):
+    parent_id = uuid.uuid4()
+    prompt_id = uuid.uuid4()
+    context = _PromptContext("greeting", {"name": "Ada"})
+    invocation_manager.add_invocation_state(parent_id, None, None)
+    invocation_manager.add_invocation_state(prompt_id, parent_id, None)
+
+    invocation_manager.set_prompt_context(prompt_id, context)
+    invocation_manager.publish_prompt_context(prompt_id)
+
+    assert invocation_manager.consume_prompt_context(parent_id) == context
+    assert invocation_manager.consume_prompt_context(parent_id) is None
+
+
+def test_most_recent_prompt_context_supersedes_earlier_context(
+    invocation_manager,
+):
+    parent_id = uuid.uuid4()
+    first_prompt_id = uuid.uuid4()
+    second_prompt_id = uuid.uuid4()
+    first_context = _PromptContext("first", {"value": "first"})
+    second_context = _PromptContext("second", {"value": "second"})
+    invocation_manager.add_invocation_state(parent_id, None, None)
+    invocation_manager.add_invocation_state(first_prompt_id, parent_id, None)
+    invocation_manager.add_invocation_state(second_prompt_id, parent_id, None)
+
+    invocation_manager.set_prompt_context(first_prompt_id, first_context)
+    invocation_manager.publish_prompt_context(first_prompt_id)
+    invocation_manager.set_prompt_context(second_prompt_id, second_context)
+    invocation_manager.publish_prompt_context(second_prompt_id)
+
+    assert (
+        invocation_manager.consume_prompt_context(parent_id) == second_context
+    )
+    assert invocation_manager.consume_prompt_context(parent_id) is None
+
+
+def test_prompt_context_is_consumed_from_nearest_ancestor(invocation_manager):
+    root_id = uuid.uuid4()
+    branch_id = uuid.uuid4()
+    model_parent_id = uuid.uuid4()
+    root_context = _PromptContext("root", {})
+    branch_context = _PromptContext("branch", {})
+    invocation_manager.add_invocation_state(root_id, None, None)
+    invocation_manager.add_invocation_state(branch_id, root_id, None)
+    invocation_manager.add_invocation_state(model_parent_id, branch_id, None)
+    invocation_manager._invocations[root_id].pending_prompt_contexts.append(
+        root_context
+    )
+    invocation_manager._invocations[branch_id].pending_prompt_contexts.append(
+        branch_context
+    )
+
+    assert (
+        invocation_manager.consume_prompt_context(model_parent_id)
+        == branch_context
+    )
+    assert invocation_manager.consume_prompt_context(root_id) == root_context
+
+
+def test_unpublished_prompt_context_is_discarded_on_delete(invocation_manager):
+    parent_id = uuid.uuid4()
+    prompt_id = uuid.uuid4()
+    invocation_manager.add_invocation_state(parent_id, None, None)
+    invocation_manager.add_invocation_state(prompt_id, parent_id, None)
+    invocation_manager.set_prompt_context(
+        prompt_id, _PromptContext("failed", {"value": "secret"})
+    )
+
+    invocation_manager.delete_invocation_state(prompt_id)
+
+    assert invocation_manager.consume_prompt_context(parent_id) is None
