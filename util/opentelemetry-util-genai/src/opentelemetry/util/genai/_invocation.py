@@ -65,16 +65,16 @@ _GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
 ContextToken: TypeAlias = Token[Context]
 
 __all__ = [
+    "ContextData",
     "ContextToken",
     "GenAIInvocation",
-    "_ContextData",
     "_resolve_suppressed_content_and_hook",
     "get_content_attributes",
 ]
 
 
 @dataclass
-class _ContextData:
+class ContextData:
     """Base class for invocation context data containers."""
 
     capture_content: bool = False
@@ -151,7 +151,7 @@ def _resolve_suppressed_content_and_hook(
         if content_capturing_mode is None
         else content_capturing_mode
     )
-    is_context_data = isinstance(context_data, _ContextData)
+    is_context_data = isinstance(context_data, ContextData)
     allow_content_capture = is_context_data and context_data.capture_content
     env_allows_content_capture = (
         resolved_content_mode != ContentCapturingMode.NO_CONTENT
@@ -218,10 +218,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         content_capturing_mode: ContentCapturingMode | None = None,
         start_span: bool = True,
         context_key: str | None = None,
-        dataclass_class_object: Callable[[], _ContextData] | None = None,
+        dataclass_class_object: Callable[[], ContextData] | None = None,
     ) -> None:
         self._context_key: str | None = context_key
-        self._dataclass_class_object: Callable[[], _ContextData] | None = (
+        self._dataclass_class_object: Callable[[], ContextData] | None = (
             dataclass_class_object
         )
         self._tracer = tracer
@@ -352,9 +352,34 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         finally:
             detach(token)
 
+    def _get_attributes(self) -> dict[str, AttributeValue]:  # pylint: disable=no-self-use
+        """Return typed attributes for span/event recording."""
+        return {}
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""
         return self.metric_attributes
+
+    def _merge_context_data(
+        self, target: ContextData, source: ContextData
+    ) -> None:
+        """Merge inner context data into ``target`` while preserving outer precedence.
+
+        Inner raw ``attributes`` and ``metric_attributes`` are ignored for keys
+        already set on the outer invocation via either typed fields or raw dicts.
+        """
+        outer_typed_attrs = (
+            self._start_attributes.keys() | self._get_attributes().keys()
+        ) - self.attributes.keys()
+        outer_typed_metric_attrs = (
+            self._get_metric_attributes().keys()
+            - self.metric_attributes.keys()
+        )
+        target.merge(source, overwrite=False)
+        for k in outer_typed_attrs:
+            self.attributes.pop(k, None)
+        for k in outer_typed_metric_attrs:
+            self.metric_attributes.pop(k, None)
 
     def _get_metric_token_counts(self) -> dict[str, int]:  # pylint: disable=no-self-use
         """Return {token_type: count} for token histogram recording."""

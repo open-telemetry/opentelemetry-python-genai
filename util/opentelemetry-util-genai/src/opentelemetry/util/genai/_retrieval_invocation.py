@@ -16,9 +16,9 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
     _resolve_suppressed_content_and_hook,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
@@ -36,7 +36,7 @@ _GEN_AI_RETRIEVAL_TOP_K: Final = "gen_ai.retrieval.top_k"
 
 
 @dataclass
-class RetrievalData(_ContextData):
+class RetrievalData(ContextData):
     """Typed data passed from inner retrieval invocations to the outer invocation."""
 
     data_source_id: str | None = None
@@ -192,7 +192,7 @@ class RetrievalInvocation(GenAIInvocation):
     ) -> None:
         self._data.retrieval_documents = value
 
-    def enrich_from_context(self, data: RetrievalData) -> None:
+    def _enrich_from_context(self, data: RetrievalData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
@@ -201,7 +201,7 @@ class RetrievalInvocation(GenAIInvocation):
         retrieval_query_text = self._data.retrieval_query_text
         retrieval_documents = self._data.retrieval_documents
 
-        self._data.merge(data, overwrite=False)
+        self._merge_context_data(self._data, data)
 
         if data.capture_content:
             self._data.retrieval_query_text = (
@@ -233,6 +233,22 @@ class RetrievalInvocation(GenAIInvocation):
         attrs.update(self.metric_attributes)
         return attrs
 
+    def _get_attributes(self) -> dict[str, AttributeValue]:
+        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
+            (GenAI.GEN_AI_DATA_SOURCE_ID, self._data.data_source_id),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._data.provider_name),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._data.request_model),
+            (server_attributes.SERVER_ADDRESS, self._data.server_address),
+            (server_attributes.SERVER_PORT, self._data.server_port),
+            (
+                _GEN_AI_RETRIEVAL_TOP_K,
+                int(self._data.retrieval_top_k)
+                if self._data.retrieval_top_k is not None
+                else None,
+            ),
+        )
+        return {k: v for k, v in optional_attrs if v is not None}
+
     def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
         if (
             not self.span.is_recording()
@@ -260,25 +276,10 @@ class RetrievalInvocation(GenAIInvocation):
             CLIENT_RETRIEVAL_CONTEXT_KEY, context=self._span_context
         )
         if isinstance(ctx_data, RetrievalData):
-            self.enrich_from_context(ctx_data)
+            self._enrich_from_context(ctx_data)
         self._data.attributes = self.attributes
         self._data.metric_attributes = self.metric_attributes
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_DATA_SOURCE_ID, self._data.data_source_id),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._data.provider_name),
-            (GenAI.GEN_AI_REQUEST_MODEL, self._data.request_model),
-            (server_attributes.SERVER_ADDRESS, self._data.server_address),
-            (server_attributes.SERVER_PORT, self._data.server_port),
-            (
-                _GEN_AI_RETRIEVAL_TOP_K,
-                int(self._data.retrieval_top_k)
-                if self._data.retrieval_top_k is not None
-                else None,
-            ),
-        )
-        attributes: dict[str, AttributeValue] = {
-            k: v for k, v in optional_attrs if v is not None
-        }
+        attributes = self._get_attributes()
         attributes.update(self._get_content_attributes_for_span())
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
