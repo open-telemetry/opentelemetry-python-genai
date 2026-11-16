@@ -408,6 +408,39 @@ def test_result_error_description_stays_safe_without_span_capture(
     assert agent.status.description == "error_during_execution"
 
 
+@pytest.mark.skipif(
+    not _result_reports_errors(),
+    reason="this claude-agent-sdk release does not report errors",
+)
+def test_result_error_uses_capture_snapshot(
+    span_exporter, tracer_provider, monkeypatch
+) -> None:
+    # The span-content decision is snapshotted when the instrumentor starts;
+    # an environment change afterwards must not put error text on the span.
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "NO_CONTENT"
+    )
+    instrumentor = claude_agent_sdk_instrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+    try:
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
+        messages = single_turn()
+        messages[-1] = result(
+            usage=(20, 38),
+            is_error=True,
+            errors=["the agent run failed"],
+        )
+        run_query(messages)
+    finally:
+        instrumentor.uninstrument()
+
+    agent = agent_spans(span_exporter)[0]
+    assert agent.status.status_code.name == "ERROR"
+    assert agent.status.description == "error_during_execution"
+
+
 def test_stream_error_marks_agent_span_failed(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:

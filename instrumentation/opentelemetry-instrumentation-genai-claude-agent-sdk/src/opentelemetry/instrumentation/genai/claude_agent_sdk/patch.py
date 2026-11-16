@@ -71,16 +71,12 @@ def _input_tokens(usage: dict[str, Any]) -> int | None:
     return sum(component or 0 for component in components)
 
 
-def _result_error(chunk: ResultMessage) -> Error:
+def _result_error(chunk: ResultMessage, *, span_capture: bool) -> Error:
     message: str | None = None
     # ``errors`` only exists in newer SDK releases. Its text is user data, so
     # only a span-inclusive capture mode may put it in the status description;
     # a completion hook or EVENT_ONLY still keeps it out of the span.
     errors = getattr(chunk, "errors", None)
-    span_capture = get_content_capturing_mode() in (
-        ContentCapturingMode.SPAN_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
     if span_capture and isinstance(errors, list) and errors:
         message = str(cast("list[object]", errors)[0])
     else:
@@ -102,10 +98,13 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
         self,
         stream: AsyncIterator[Message],
         invocation: LocalAgentInvocation,
+        *,
+        span_capture: bool,
     ) -> None:
         super().__init__(stream, invocation)
         self._self_invocation = invocation
         invocation.suspend()
+        self._self_span_capture = span_capture
         self._self_outputs: list[OutputMessage] = []
         self._self_result_usage: dict[str, Any] | None = None
         self._self_result_error: Error | None = None
@@ -201,7 +200,9 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
                 _finish_reason(stop_reason)
             ]
         if chunk.is_error:
-            self._self_result_error = _result_error(chunk)
+            self._self_result_error = _result_error(
+                chunk, span_capture=self._self_span_capture
+            )
 
     def _apply_usage(self) -> None:
         # The ResultMessage carries the run totals; AssistantMessage usage is
@@ -240,7 +241,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
         self._self_invocation.fail(error)
 
 
-def _wrap_query(handler: TelemetryHandler) -> Any:
+def _wrap_query(handler: TelemetryHandler, span_capture: bool) -> Any:
     def wrapper(
         wrapped: Any,
         instance: Any,
@@ -265,7 +266,9 @@ def _wrap_query(handler: TelemetryHandler) -> Any:
             # Argument binding happens here, so a bad call still owns the span.
             invocation.fail(exc)
             raise
-        return ClaudeAgentStreamWrapper(stream, invocation)
+        return ClaudeAgentStreamWrapper(
+            stream, invocation, span_capture=span_capture
+        )
 
     return wrapper
 
@@ -273,18 +276,33 @@ def _wrap_query(handler: TelemetryHandler) -> Any:
 _PATCHED: list[tuple[Any, str, Any]] = []
 
 
-def _patch(module_name: str, attr: str, handler: TelemetryHandler) -> None:
+def _patch(
+    module_name: str,
+    attr: str,
+    handler: TelemetryHandler,
+    span_capture: bool,
+) -> None:
     module = importlib.import_module(module_name)
     original = getattr(module, attr)
     if isinstance(original, FunctionWrapper):
         return
-    setattr(module, attr, FunctionWrapper(original, _wrap_query(handler)))
+    setattr(
+        module,
+        attr,
+        FunctionWrapper(original, _wrap_query(handler, span_capture)),
+    )
     _PATCHED.append((module, attr, original))
 
 
 def instrument(handler: TelemetryHandler) -> None:
+    # Snapshot the span-content decision with the handler's own mode, so an
+    # environment change afterwards cannot put error text on a span.
+    span_capture = get_content_capturing_mode() in (
+        ContentCapturingMode.SPAN_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    )
     for module_name in ("claude_agent_sdk.query", "claude_agent_sdk"):
-        _patch(module_name, "query", handler)
+        _patch(module_name, "query", handler, span_capture)
 
 
 def uninstrument() -> None:
