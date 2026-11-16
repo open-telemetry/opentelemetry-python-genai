@@ -523,26 +523,31 @@ class AgnoOuterSyncStreamWrapper(_ObjectProxy):
     def __iter__(self) -> AgnoOuterSyncStreamWrapper:
         return self
 
-    def __next__(self) -> Any:
+    def _step(self, op: Callable[[], Any]) -> Any:
         token = _CURRENT_OUTER_STREAM.set(self)
         try:
-            return next(self.__wrapped__)
+            return op()
+        except StopIteration:
+            if self._self_inner_stream is not None:
+                self._self_inner_stream.close()
+            raise
+        except BaseException as error:
+            if self._self_inner_stream is not None:
+                self._self_inner_stream.__exit__(
+                    type(error), error, error.__traceback__
+                )
+            raise
         finally:
             _CURRENT_OUTER_STREAM.reset(token)
+
+    def __next__(self) -> Any:
+        return self._step(lambda: next(self.__wrapped__))
 
     def send(self, value: Any) -> Any:
-        token = _CURRENT_OUTER_STREAM.set(self)
-        try:
-            return self.__wrapped__.send(value)
-        finally:
-            _CURRENT_OUTER_STREAM.reset(token)
+        return self._step(lambda: self.__wrapped__.send(value))
 
     def throw(self, *args: Any) -> Any:
-        token = _CURRENT_OUTER_STREAM.set(self)
-        try:
-            return self.__wrapped__.throw(*args)
-        finally:
-            _CURRENT_OUTER_STREAM.reset(token)
+        return self._step(lambda: self.__wrapped__.throw(*args))
 
     def __enter__(self) -> AgnoOuterSyncStreamWrapper:
         return self
@@ -587,26 +592,31 @@ class AsyncAgnoOuterStreamWrapper(_ObjectProxy):
     def __aiter__(self) -> AsyncAgnoOuterStreamWrapper:
         return self
 
-    async def __anext__(self) -> Any:
+    async def _astep(self, op: Callable[[], Awaitable[Any]]) -> Any:
         token = _CURRENT_OUTER_ASTREAM.set(self)
         try:
-            return await self.__wrapped__.__anext__()
+            return await op()
+        except StopAsyncIteration:
+            if self._self_inner_stream is not None:
+                await self._self_inner_stream.aclose()
+            raise
+        except BaseException as error:
+            if self._self_inner_stream is not None:
+                await self._self_inner_stream.__aexit__(
+                    type(error), error, error.__traceback__
+                )
+            raise
         finally:
             _CURRENT_OUTER_ASTREAM.reset(token)
+
+    async def __anext__(self) -> Any:
+        return await self._astep(lambda: self.__wrapped__.__anext__())
 
     async def asend(self, value: Any) -> Any:
-        token = _CURRENT_OUTER_ASTREAM.set(self)
-        try:
-            return await self.__wrapped__.asend(value)
-        finally:
-            _CURRENT_OUTER_ASTREAM.reset(token)
+        return await self._astep(lambda: self.__wrapped__.asend(value))
 
     async def athrow(self, *args: Any) -> Any:
-        token = _CURRENT_OUTER_ASTREAM.set(self)
-        try:
-            return await self.__wrapped__.athrow(*args)
-        finally:
-            _CURRENT_OUTER_ASTREAM.reset(token)
+        return await self._astep(lambda: self.__wrapped__.athrow(*args))
 
     async def __aenter__(self) -> AsyncAgnoOuterStreamWrapper:
         return self
