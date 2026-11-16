@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 from agno.agent import Agent
-from agno.models.base import MessageData
 from agno.models.message import Message
 
 try:
@@ -548,32 +547,38 @@ def test_model_stream_error_stream_side(
 
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes.get(ERROR_TYPE) == "ConnectionError"
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ) == ("error",)
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
 
 
 def test_model_stream_error_caller_side(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test that caller-side errors inside context manager mark the span with ERROR status."""
+    """Test that caller-side errors inside context manager mark the span with ERROR status and preserve reported finish reasons."""
 
     class InfiniteStreamModel(MockModel):
         def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                content="endless",
+                provider_data={
+                    "id": "resp-caller-1",
+                    "finish_reason": "length",
+                },
+            )
             while True:
                 yield ModelResponse(content="endless")
 
     model = InfiniteStreamModel(id="caller-err-model", provider="OpenAI")
 
     with pytest.raises(RuntimeError, match="Caller aborted"):
-        with model.process_response_stream(
+        with model.response_stream(
             messages=[Message(role="user", content="Hi")],
-            assistant_message=Message(role="assistant"),
-            stream_data=MessageData(),
         ) as stream:
-            for _ in stream:
-                raise RuntimeError("Caller aborted")
+            for chunk in stream:
+                if chunk.content is not None:
+                    raise RuntimeError("Caller aborted")
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -581,13 +586,17 @@ def test_model_stream_error_caller_side(
 
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes.get(ERROR_TYPE) == "RuntimeError"
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("length",)
 
 
 def test_model_response_stream_early_close(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test that closing a sync response stream before it is drained finalizes the span once with interrupted finish reason."""
+    """Test that closing a sync response stream before it is drained finalizes the span once."""
+    import gc
 
     class MultiChunkStreamModel(MockModel):
         def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
@@ -596,14 +605,14 @@ def test_model_response_stream_early_close(
             yield ModelResponse(content="chunk 3")
 
     model = MultiChunkStreamModel(id="early-close-model", provider="OpenAI")
-    stream = model.process_response_stream(
+    stream = model.response_stream(
         messages=[Message(role="user", content="Hi")],
-        assistant_message=Message(role="assistant"),
-        stream_data=MessageData(),
     )
-    first = next(stream)
+    first = next(c for c in stream if c.content is not None)
     assert first.content == "chunk 1"
     stream.close()
+    del stream
+    gc.collect()
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -629,12 +638,10 @@ def test_model_response_stream_early_close_keeps_finish_reason(
             )
             yield ModelResponse(content="more")
 
-    stream = _LengthStream(id="m", provider="OpenAI").process_response_stream(
+    stream = _LengthStream(id="m", provider="OpenAI").response_stream(
         messages=[Message(role="user", content="hi")],
-        assistant_message=Message(role="assistant"),
-        stream_data=MessageData(),
     )
-    next(stream)
+    next(c for c in stream if c.content is not None)
     stream.close()
 
     (span,) = span_exporter.get_finished_spans()
@@ -675,19 +682,26 @@ def test_model_aresponse_stream_error_stream_side(
 
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes.get(ERROR_TYPE) == "ConnectionError"
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ) == ("error",)
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
 
 
 def test_model_aresponse_stream_error_caller_side(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test that caller-side errors inside async context manager mark the span with ERROR status."""
+    """Test that caller-side errors inside async context manager mark the span with ERROR status and preserve reported finish reasons."""
 
     class AsyncInfiniteStreamModel(MockModel):
         async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                content="endless",
+                provider_data={
+                    "id": "resp-acaller-1",
+                    "stop_reason": "max_tokens",
+                },
+            )
             while True:
                 yield ModelResponse(content="endless")
 
@@ -696,13 +710,12 @@ def test_model_aresponse_stream_error_caller_side(
     )
 
     async def _run() -> None:
-        async with model.aprocess_response_stream(
+        async with model.aresponse_stream(
             messages=[Message(role="user", content="Hi")],
-            assistant_message=Message(role="assistant"),
-            stream_data=MessageData(),
         ) as stream:
-            async for _ in stream:
-                raise RuntimeError("Async caller aborted")
+            async for chunk in stream:
+                if chunk.content is not None:
+                    raise RuntimeError("Async caller aborted")
 
     with pytest.raises(RuntimeError, match="Async caller aborted"):
         asyncio.run(_run())
@@ -713,6 +726,9 @@ def test_model_aresponse_stream_error_caller_side(
 
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes.get(ERROR_TYPE) == "RuntimeError"
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("length",)
 
 
 def test_model_aresponse_stream_early_close(
@@ -720,6 +736,7 @@ def test_model_aresponse_stream_early_close(
     span_exporter,
 ) -> None:
     """Test that closing an async response stream early finalizes the span once."""
+    import gc
 
     class AsyncMultiChunkStreamModel(MockModel):
         async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
@@ -731,14 +748,16 @@ def test_model_aresponse_stream_early_close(
     )
 
     async def _run() -> None:
-        stream = model.aprocess_response_stream(
+        stream = model.aresponse_stream(
             messages=[Message(role="user", content="Hi")],
-            assistant_message=Message(role="assistant"),
-            stream_data=MessageData(),
         )
         first = await stream.__anext__()
+        while first.content is None:
+            first = await stream.__anext__()
         assert first.content == "async chunk 1"
         await stream.aclose()
+        del stream
+        gc.collect()
 
     asyncio.run(_run())
 
@@ -1354,9 +1373,89 @@ def test_gemini_reasoning_tokens_added_to_output_tokens_and_max_output_tokens(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test Gemini adds reasoning_tokens to output_tokens and captures max_output_tokens and audio tokens."""
+    """Test real Gemini adapter reasoning_tokens, max_output_tokens, nested request_params['config'], and audio tokens."""
+    from unittest.mock import MagicMock
 
-    class _GeminiLikeModel(MockModel):
+    from agno.models.google import Gemini
+    from google.genai.types import (
+        Candidate,
+        Content,
+        GenerateContentResponse,
+        GenerateContentResponseUsageMetadata,
+        Part,
+    )
+
+    captured_kwargs: list[dict[str, Any]] = []
+    mock_client = MagicMock()
+
+    def _fake_generate_content(**kwargs: Any) -> GenerateContentResponse:
+        captured_kwargs.append(kwargs)
+        return GenerateContentResponse(
+            candidates=[
+                Candidate(
+                    content=Content(role="model", parts=[Part(text="579")]),
+                )
+            ],
+            usage_metadata=GenerateContentResponseUsageMetadata(
+                prompt_token_count=31,
+                candidates_token_count=20,
+                thoughts_token_count=54,
+                total_token_count=105,
+            ),
+        )
+
+    mock_client.models.generate_content.side_effect = _fake_generate_content
+
+    real_gemini = Gemini(
+        id="gemini-2.5-flash",
+        temperature=0.7,
+        top_p=0.9,
+        max_output_tokens=512,
+        client=mock_client,
+    )
+    real_gemini.response(
+        messages=[Message(role="user", content="Add 123 and 456")]
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "gcp.gemini"
+    assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.7
+    assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.9
+    assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 512
+    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 31
+    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 74
+    assert (
+        attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS) == 54
+    )
+
+    span_exporter.clear()
+
+    override_gemini = Gemini(
+        id="gemini-2.5-flash",
+        temperature=0.7,
+        top_p=0.9,
+        max_output_tokens=512,
+        request_params={"config": {"temperature": 0.2}},
+        client=mock_client,
+    )
+    override_gemini.response(
+        messages=[Message(role="user", content="Nested config override")]
+    )
+
+    assert captured_kwargs[-1]["config"] == {"temperature": 0.2}
+    (override_span,) = span_exporter.get_finished_spans()
+    override_attrs = override_span.attributes
+    assert (
+        override_attrs.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.2
+    )
+    assert GenAIAttributes.GEN_AI_REQUEST_TOP_P not in override_attrs
+    assert GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS not in override_attrs
+
+    span_exporter.clear()
+
+    class _AudioGeminiLikeModel(MockModel):
         max_output_tokens: int | None = 512
 
         def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
@@ -1371,21 +1470,15 @@ def test_gemini_reasoning_tokens_added_to_output_tokens_and_max_output_tokens(
                 ),
             )
 
-    model = _GeminiLikeModel(id="gemini-2.5-flash", provider="Google")
-    model.response(messages=[Message(role="user", content="Add 123 and 456")])
-
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    attrs = spans[0].attributes
-    assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "gcp.gemini"
-    assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 512
-    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 31
-    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 74
-    assert (
-        attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS) == 54
+    audio_model = _AudioGeminiLikeModel(
+        id="gemini-2.5-flash", provider="Google"
     )
-    assert attrs.get("gen_ai.usage.audio.input_tokens") == 5
-    assert attrs.get("gen_ai.usage.audio.output_tokens") == 10
+    audio_model.response(
+        messages=[Message(role="user", content="Audio token check")]
+    )
+    (audio_span,) = span_exporter.get_finished_spans()
+    assert audio_span.attributes.get("gen_ai.usage.audio.input_tokens") == 5
+    assert audio_span.attributes.get("gen_ai.usage.audio.output_tokens") == 10
 
 
 def test_model_tool_definitions_gated_by_content_capture(
@@ -1586,12 +1679,10 @@ def test_model_stream_early_close_and_error_preserves_media_output(
 
     # 1. Sync early close
     sync_model = _MediaStreamModel(id="m", provider="OpenAI")
-    stream = sync_model.process_response_stream(
+    stream = sync_model.response_stream(
         messages=[Message(role="user", content="gen image")],
-        assistant_message=Message(role="assistant"),
-        stream_data=MessageData(),
     )
-    next(stream)
+    next(c for c in stream if c.images)
     stream.close()
 
     (span,) = span_exporter.get_finished_spans()
@@ -1628,12 +1719,12 @@ def test_model_stream_early_close_and_error_preserves_media_output(
     span_exporter.clear()
 
     async def _async_early_close() -> None:
-        astream = sync_model.aprocess_response_stream(
+        astream = sync_model.aresponse_stream(
             messages=[Message(role="user", content="gen image")],
-            assistant_message=Message(role="assistant"),
-            stream_data=MessageData(),
         )
-        await astream.__anext__()
+        chunk = await astream.__anext__()
+        while not chunk.images:
+            chunk = await astream.__anext__()
         await astream.aclose()
 
     asyncio.run(_async_early_close())
@@ -2296,13 +2387,15 @@ def test_openai_stream_partial_tool_call_deltas_early_close_and_error(
 
     # 1. Sync early close after partial tool-call deltas
     model = _DeltaToolStreamModel(id="gpt-4o", api_key="test")
-    stream = model.process_response_stream(
+    stream = model.response_stream(
         messages=[Message(role="user", content="Weather?")],
-        assistant_message=Message(role="assistant"),
-        stream_data=MessageData(),
     )
-    next(stream)
-    next(stream)
+    seen_tool_deltas = 0
+    for chunk in stream:
+        if chunk.tool_calls:
+            seen_tool_deltas += 1
+            if seen_tool_deltas == 2:
+                break
     stream.close()
 
     (span,) = span_exporter.get_finished_spans()
@@ -2346,12 +2439,12 @@ def test_openai_stream_partial_tool_call_deltas_early_close_and_error(
     span_exporter.clear()
 
     async def _async_close() -> None:
-        astream = model.aprocess_response_stream(
+        astream = model.aresponse_stream(
             messages=[Message(role="user", content="Weather?")],
-            assistant_message=Message(role="assistant"),
-            stream_data=MessageData(),
         )
-        await astream.__anext__()
+        chunk = await astream.__anext__()
+        while not chunk.tool_calls:
+            chunk = await astream.__anext__()
         await astream.aclose()
 
     asyncio.run(_async_close())
@@ -2771,3 +2864,45 @@ def test_real_openai_chat_audio_response_and_stream_not_double_encoded(
     assert raw_out_blobs[0]["content"] == b64encode(
         raw_b64_looking_audio
     ).decode("ascii")
+
+
+def test_model_video_url_content_blocks(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that provider-native video_url content blocks in Message.content are captured as video UriPart and BlobPart."""
+    model = _SyncModel(id="kimi-latest", provider="MoonShot")
+    messages = [
+        Message(
+            role="user",
+            content=[
+                {
+                    "type": "video_url",
+                    "video_url": {"url": "ms://vid-ref-123"},
+                },
+                {
+                    "type": "video_url",
+                    "video_url": {"url": "data:video/mp4;base64,AAE="},
+                },
+            ],
+        )
+    ]
+
+    model.response(messages=messages)
+
+    (span,) = span_exporter.get_finished_spans()
+    input_msgs = json.loads(
+        str(span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    )
+    assert len(input_msgs) == 1
+    parts = input_msgs[0]["parts"]
+    assert len(parts) == 2
+    assert parts[0]["type"] == "uri"
+    assert parts[0]["modality"] == "video"
+    assert parts[0]["uri"] == "ms://vid-ref-123"
+    assert parts[1] == {
+        "type": "blob",
+        "modality": "video",
+        "mime_type": "video/mp4",
+        "content": "AAE=",
+    }

@@ -56,9 +56,11 @@ from opentelemetry.context import attach, detach, get_current
 from opentelemetry.instrumentation.genai.agno.stream import (
     AgnoAgentStreamWrapper,
     AgnoModelStreamWrapper,
+    AgnoOuterSyncStreamWrapper,
     AgnoWorkflowStreamWrapper,
     AsyncAgnoAgentStreamWrapper,
     AsyncAgnoModelStreamWrapper,
+    AsyncAgnoOuterStreamWrapper,
     AsyncAgnoWorkflowStreamWrapper,
 )
 from opentelemetry.instrumentation.genai.agno.utils import (
@@ -384,6 +386,18 @@ def patch_agent(handler: TelemetryHandler) -> None:
         _model_aprocess_response_stream(handler),
         current_generation,
     )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}.response_stream",
+        _model_response_stream(),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}.aresponse_stream",
+        _model_aresponse_stream(),
+        current_generation,
+    )
 
     embedder_wrappers = [
         (method_name, factory(handler))
@@ -478,6 +492,8 @@ def unpatch_agent() -> None:
                 "_aprocess_model_response",
                 "process_response_stream",
                 "aprocess_response_stream",
+                "response_stream",
+                "aresponse_stream",
             ):
                 _safe_unwrap(agno.models.base.Model, attr)
         except ImportError:
@@ -1764,6 +1780,21 @@ def _get_request_setting(instance: Model, *names: str) -> Any:
                 and (val := typed_params[name]) is not None
             ):
                 return val
+        if "config" in typed_params:
+            cfg = typed_params["config"]
+            if isinstance(cfg, Mapping):
+                typed_cfg = cast(Mapping[str, Any], cfg)
+                for name in names:
+                    if (
+                        name in typed_cfg
+                        and (val := typed_cfg[name]) is not None
+                    ):
+                        return val
+            elif cfg is not None:
+                for name in names:
+                    if (val := getattr(cfg, name, None)) is not None:
+                        return val
+            return None
     for name in names:
         if typed_params is not None and name in typed_params:
             continue
@@ -2041,5 +2072,31 @@ def _model_aprocess_response_stream(
             stream_data=stream_data,
             model=instance,
         )
+
+    return traced_method
+
+
+def _model_response_stream() -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        _instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        stream = wrapped(*args, **kwargs)
+        return AgnoOuterSyncStreamWrapper(stream)
+
+    return traced_method
+
+
+def _model_aresponse_stream() -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        _instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        stream = wrapped(*args, **kwargs)
+        return AsyncAgnoOuterStreamWrapper(stream)
 
     return traced_method

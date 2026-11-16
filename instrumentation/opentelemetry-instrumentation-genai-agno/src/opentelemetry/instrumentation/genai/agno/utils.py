@@ -1016,6 +1016,26 @@ def _content_block_to_part(item: Any) -> MessagePart | None:
             )
         return None
 
+    if part_type in ("video_url", "input_video", "video"):
+        video_url = _get_property_value(item, "video_url")
+        if not isinstance(video_url, str):
+            video_url = _get_property_value(video_url, "url")
+        if not isinstance(video_url, str):
+            video_url = _get_property_value(item, "url")
+        if isinstance(video_url, str) and video_url:
+            return image_from_url(video_url, modality=Modality.VIDEO)
+        file_id = _get_property_value(item, "file_id") or _get_property_value(
+            item, "id"
+        )
+        if isinstance(file_id, str) and file_id:
+            mime = _get_property_value(item, "mime_type")
+            return FilePart(
+                mime_type=mime if isinstance(mime, str) else None,
+                modality=Modality.VIDEO,
+                file_id=file_id,
+            )
+        return None
+
     if part_type == "image":
         source = _get_property_value(item, "source")
         if isinstance(source, Mapping):

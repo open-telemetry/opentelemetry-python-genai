@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from agno.agent import RunOutput
@@ -18,6 +20,14 @@ if TYPE_CHECKING:
     from agno.team import TeamRunOutput
 
     AgnoRunOutput = RunOutput | TeamRunOutput | WorkflowRunOutput
+
+    class _ObjectProxy:
+        __wrapped__: Any
+
+        def __init__(self, wrapped: object) -> None: ...
+
+else:
+    from wrapt import ObjectProxy as _ObjectProxy
 
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
@@ -353,7 +363,7 @@ class _ModelStreamMixin:
         if self._self_invocation is None:
             assert self._self_start_invocation is not None
             invocation = self._self_start_invocation()
-            setattr(invocation, "_request_stream", True)
+            invocation.request_stream = True
             invocation.suspend()
             self._self_invocation = invocation
         return self._self_invocation
@@ -394,12 +404,8 @@ class _ModelStreamMixin:
                     invocation, sd_metrics, model=self._self_model
                 )
 
-        finish_reasons = (
-            ["error"]
-            if error is not None
-            else extract_model_finish_reasons(
-                self._self_assistant_message, self._self_stream_data
-            )
+        finish_reasons = extract_model_finish_reasons(
+            self._self_assistant_message, self._self_stream_data
         )
         if finish_reasons:
             invocation.finish_reasons = finish_reasons
@@ -454,6 +460,9 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         self._self_model = model
         self._self_stream_images = []
         self._self_stream_videos = []
+        outer = _CURRENT_OUTER_STREAM.get()
+        if outer is not None:
+            outer._bind_inner(self)
 
     def _advance(self, read: Callable[[], Any]) -> Any:
         self._ensure_invocation()
@@ -482,7 +491,152 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         self._self_model = model
         self._self_stream_images = []
         self._self_stream_videos = []
+        outer = _CURRENT_OUTER_ASTREAM.get()
+        if outer is not None:
+            outer._bind_inner(self)
 
     async def _advance(self, read: Callable[[], Awaitable[Any]]) -> Any:
         self._ensure_invocation()
         return await super()._advance(read)
+
+
+_CURRENT_OUTER_STREAM: ContextVar[AgnoOuterSyncStreamWrapper | None] = (
+    ContextVar("_CURRENT_OUTER_STREAM", default=None)
+)
+_CURRENT_OUTER_ASTREAM: ContextVar[AsyncAgnoOuterStreamWrapper | None] = (
+    ContextVar("_CURRENT_OUTER_ASTREAM", default=None)
+)
+
+
+class AgnoOuterSyncStreamWrapper(_ObjectProxy):
+    """Proxy for Model.response_stream that propagates close and context-manager exit to the inner stream wrapper."""
+
+    _self_inner_stream: AgnoModelStreamWrapper | None
+
+    def __init__(self, stream: Any) -> None:
+        super().__init__(stream)
+        self._self_inner_stream = None
+
+    def _bind_inner(self, inner: AgnoModelStreamWrapper) -> None:
+        self._self_inner_stream = inner
+
+    def __iter__(self) -> AgnoOuterSyncStreamWrapper:
+        return self
+
+    def __next__(self) -> Any:
+        token = _CURRENT_OUTER_STREAM.set(self)
+        try:
+            return next(self.__wrapped__)
+        finally:
+            _CURRENT_OUTER_STREAM.reset(token)
+
+    def send(self, value: Any) -> Any:
+        token = _CURRENT_OUTER_STREAM.set(self)
+        try:
+            return self.__wrapped__.send(value)
+        finally:
+            _CURRENT_OUTER_STREAM.reset(token)
+
+    def throw(self, *args: Any) -> Any:
+        token = _CURRENT_OUTER_STREAM.set(self)
+        try:
+            return self.__wrapped__.throw(*args)
+        finally:
+            _CURRENT_OUTER_STREAM.reset(token)
+
+    def __enter__(self) -> AgnoOuterSyncStreamWrapper:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> Literal[False]:
+        try:
+            if self._self_inner_stream is not None:
+                self._self_inner_stream.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            close_fn = getattr(self.__wrapped__, "close", None)
+            if callable(close_fn):
+                close_fn()
+        return False
+
+    def close(self) -> None:
+        try:
+            if self._self_inner_stream is not None:
+                self._self_inner_stream.close()
+        finally:
+            close_fn = getattr(self.__wrapped__, "close", None)
+            if callable(close_fn):
+                close_fn()
+
+
+class AsyncAgnoOuterStreamWrapper(_ObjectProxy):
+    """Proxy for Model.aresponse_stream that propagates aclose and async context-manager exit to the inner stream wrapper."""
+
+    _self_inner_stream: AsyncAgnoModelStreamWrapper | None
+
+    def __init__(self, stream: Any) -> None:
+        super().__init__(stream)
+        self._self_inner_stream = None
+
+    def _bind_inner(self, inner: AsyncAgnoModelStreamWrapper) -> None:
+        self._self_inner_stream = inner
+
+    def __aiter__(self) -> AsyncAgnoOuterStreamWrapper:
+        return self
+
+    async def __anext__(self) -> Any:
+        token = _CURRENT_OUTER_ASTREAM.set(self)
+        try:
+            return await self.__wrapped__.__anext__()
+        finally:
+            _CURRENT_OUTER_ASTREAM.reset(token)
+
+    async def asend(self, value: Any) -> Any:
+        token = _CURRENT_OUTER_ASTREAM.set(self)
+        try:
+            return await self.__wrapped__.asend(value)
+        finally:
+            _CURRENT_OUTER_ASTREAM.reset(token)
+
+    async def athrow(self, *args: Any) -> Any:
+        token = _CURRENT_OUTER_ASTREAM.set(self)
+        try:
+            return await self.__wrapped__.athrow(*args)
+        finally:
+            _CURRENT_OUTER_ASTREAM.reset(token)
+
+    async def __aenter__(self) -> AsyncAgnoOuterStreamWrapper:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> Literal[False]:
+        try:
+            if self._self_inner_stream is not None:
+                await self._self_inner_stream.__aexit__(
+                    exc_type, exc_val, exc_tb
+                )
+        finally:
+            aclose_fn = getattr(self.__wrapped__, "aclose", None)
+            if callable(aclose_fn):
+                res = aclose_fn()
+                if inspect.isawaitable(res):
+                    await res
+        return False
+
+    async def aclose(self) -> None:
+        try:
+            if self._self_inner_stream is not None:
+                await self._self_inner_stream.aclose()
+        finally:
+            aclose_fn = getattr(self.__wrapped__, "aclose", None)
+            if callable(aclose_fn):
+                res = aclose_fn()
+                if inspect.isawaitable(res):
+                    await res
