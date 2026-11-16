@@ -2906,3 +2906,76 @@ def test_model_video_url_content_blocks(
         "mime_type": "video/mp4",
         "content": "AAE=",
     }
+
+
+def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that stream.throw() and stream.athrow() on response_stream/aresponse_stream finalize the inner span with the injected error."""
+    import gc
+
+    class _ThrowStreamModel(MockModel):
+        def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                content="chunk 1",
+                provider_data={
+                    "id": "resp-throw-1",
+                    "finish_reason": "length",
+                },
+            )
+            yield ModelResponse(content="chunk 2")
+
+        async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                content="async chunk 1",
+                provider_data={
+                    "id": "resp-athrow-1",
+                    "stop_reason": "max_tokens",
+                },
+            )
+            yield ModelResponse(content="async chunk 2")
+
+    model = _ThrowStreamModel(id="throw-model", provider="OpenAI")
+    stream = model.response_stream(
+        messages=[Message(role="user", content="Hi")],
+    )
+    first = next(c for c in stream if c.content is not None)
+    assert first.content == "chunk 1"
+
+    with pytest.raises(ValueError, match="Injected sync error"):
+        stream.throw(ValueError("Injected sync error"))
+    del stream
+    gc.collect()
+
+    (sync_span,) = span_exporter.get_finished_spans()
+    assert sync_span.status.status_code == StatusCode.ERROR
+    assert sync_span.attributes.get(ERROR_TYPE) == "ValueError"
+    assert sync_span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("length",)
+
+    span_exporter.clear()
+
+    async def _run_async() -> None:
+        astream = model.aresponse_stream(
+            messages=[Message(role="user", content="Hi async")],
+        )
+        afirst = await astream.__anext__()
+        while afirst.content is None:
+            afirst = await astream.__anext__()
+        assert afirst.content == "async chunk 1"
+
+        with pytest.raises(ValueError, match="Injected async error"):
+            await astream.athrow(ValueError("Injected async error"))
+        del astream
+        gc.collect()
+
+    asyncio.run(_run_async())
+
+    (async_span,) = span_exporter.get_finished_spans()
+    assert async_span.status.status_code == StatusCode.ERROR
+    assert async_span.attributes.get(ERROR_TYPE) == "ValueError"
+    assert async_span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("length",)
