@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry.instrumentation.genai.ollama.utils import (
     apply_final_chunk,
@@ -34,6 +34,7 @@ class _ChatStreamMixin:
     _self_thinking: list[str]
     _self_tool_calls: list[MessagePart]
     _self_has_tool_calls: bool
+    _self_final_metadata: dict[str, Any] | None
 
     def _init_buffers(self, capture_content: bool) -> None:
         self._self_capture_content = capture_content
@@ -41,6 +42,7 @@ class _ChatStreamMixin:
         self._self_thinking = []
         self._self_tool_calls = []
         self._self_has_tool_calls = False
+        self._self_final_metadata = None
 
     def _process_chunk(self, chunk: ChatResponse) -> None:
         message = chunk.message
@@ -53,16 +55,24 @@ class _ChatStreamMixin:
             self._self_tool_calls.extend(
                 tool_call_requests(message.tool_calls)
             )
-        # Only the last chunk carries the done reason and token counts.
+        # Only the last chunk carries the done reason and token counts. They are
+        # applied when the stream ends so every chunk is timed with the same attributes.
         if chunk.done:
-            apply_final_chunk(
-                invocation=self._self_invocation,
-                response=chunk,
-                has_tool_calls=self._self_has_tool_calls,
-            )
+            self._self_final_metadata = {
+                "model": chunk.model,
+                "done_reason": chunk.done_reason,
+                "prompt_eval_count": chunk.prompt_eval_count,
+                "eval_count": chunk.eval_count,
+            }
 
     def _record_response(self) -> None:
         invocation = self._self_invocation
+        if self._self_final_metadata is not None:
+            apply_final_chunk(
+                invocation=invocation,
+                response=self._self_final_metadata,
+                has_tool_calls=self._self_has_tool_calls,
+            )
         if self._self_capture_content:
             invocation.output_messages = [
                 output_message(
