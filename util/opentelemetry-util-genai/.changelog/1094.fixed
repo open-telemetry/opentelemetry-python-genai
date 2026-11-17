@@ -1,0 +1,1 @@
+Finishing an invocation inside a still-active nested scope no longer replaces that scope's context with the caller's.

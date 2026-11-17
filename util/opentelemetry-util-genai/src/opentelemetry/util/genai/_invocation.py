@@ -333,7 +333,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def _detach(self) -> None:
         token, self._context_token = self._context_token, None
-        if token is not None:
+        # Finishing inside a still-active nested scope: detaching here would
+        # replace that scope's context with the caller's while it runs.
+        if token is not None and get_current() is self._span_context:
             detach(token)
 
     @contextmanager
