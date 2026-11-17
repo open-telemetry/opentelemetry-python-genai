@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
@@ -3286,3 +3287,150 @@ def test_model_async_stream_copy_safe_and_uninstrument_restores_delegates(
         assert not hasattr(
             Model.__dict__["_ainvoke_stream_with_retry"], "__wrapped__"
         )
+
+
+def test_model_async_stream_delegating_subclass_before_base_class(
+    instrument_agno,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+) -> None:
+    """Streaming a delegating subclass (e.g. MiniMax) before its base class wraps all hierarchy levels and awaits base generator cleanup on early aclose/athrow."""
+    import httpx
+    import openai
+    from agno.models.base import Model
+    from agno.models.minimax import MiniMax
+    from agno.models.openai import OpenAIChat
+
+    # Re-instrument cleanly so OpenAIChat.ainvoke_stream is not pre-wrapped by earlier tests.
+    AgnoInstrumentor().uninstrument()
+    AgnoInstrumentor().instrument(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    )
+    assert not hasattr(OpenAIChat.__dict__["ainvoke_stream"], "__wrapped__")
+    assert not hasattr(MiniMax.__dict__["ainvoke_stream"], "__wrapped__")
+
+    sse_lines = [
+        'data: {"id":"chatcmpl-mm-1","object":"chat.completion.chunk","created":1700000000,"model":"MiniMax-M2.1","choices":[{"index":0,"delta":{"role":"assistant","content":"chunk1"},"finish_reason":null}]}',
+        'data: {"id":"chatcmpl-mm-1","object":"chat.completion.chunk","created":1700000000,"model":"MiniMax-M2.1","choices":[{"index":0,"delta":{"content":"chunk2"},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+    ]
+    sse_body = ("\n\n".join(sse_lines) + "\n\n").encode("utf-8")
+
+    client = openai.AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://api.minimax.io/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _req: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=sse_body,
+                )
+            )
+        ),
+    )
+    minimax_model = MiniMax(
+        id="MiniMax-M2.1", api_key="test-key", async_client=client
+    )
+
+    # Also test a delegating hierarchy with explicit async cleanup in the base generator
+    base_cleanups: list[str] = []
+
+    class _BaseAsyncStreamModel(Model):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="unused")
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="unused")
+
+        def invoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> Iterator[ModelResponse]:
+            yield ModelResponse(content="unused")
+
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            try:
+                yield ModelResponse(content="first")
+                yield ModelResponse(content="second")
+            finally:
+                await asyncio.sleep(0)
+                base_cleanups.append("closed")
+
+        def _parse_provider_response(
+            self, response: Any, **kwargs: Any
+        ) -> ModelResponse:
+            return response
+
+        def _parse_provider_response_delta(
+            self, response: Any
+        ) -> ModelResponse:
+            return response
+
+    class _DelegatingSubStreamModel(_BaseAsyncStreamModel):
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            async for delta in super().ainvoke_stream(*args, **kwargs):
+                yield delta
+
+    sub_model = _DelegatingSubStreamModel(id="sub-model", provider="Custom")
+
+    async def _run() -> None:
+        # 1. Stream MiniMax first (before OpenAIChat is ever streamed) and close early
+        m_stream = minimax_model.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        )
+        first_ev = await anext(m_stream)
+        assert getattr(first_ev, "event", None) == "ModelRequestStarted"
+        first_chunk = await anext(m_stream)
+        assert getattr(first_chunk, "content", None) == "chunk1"
+        assert hasattr(MiniMax.__dict__["ainvoke_stream"], "__wrapped__")
+        assert hasattr(OpenAIChat.__dict__["ainvoke_stream"], "__wrapped__")
+        await m_stream.aclose()
+
+        # 2. Early aclose() on delegating subclass awaits base generator cleanup
+        s_stream = sub_model.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        )
+        await anext(s_stream)  # ModelRequestStarted
+        chunk = await anext(s_stream)
+        assert getattr(chunk, "content", None) == "first"
+        assert hasattr(
+            _DelegatingSubStreamModel.__dict__["ainvoke_stream"], "__wrapped__"
+        )
+        assert hasattr(
+            _BaseAsyncStreamModel.__dict__["ainvoke_stream"], "__wrapped__"
+        )
+        await s_stream.aclose()
+        assert base_cleanups == ["closed"]
+
+        # 3. Early athrow() on delegating subclass also awaits base generator cleanup
+        s_stream2 = sub_model.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        )
+        await anext(s_stream2)  # ModelRequestStarted
+        await anext(s_stream2)  # first chunk
+        with pytest.raises(RuntimeError, match="caller abort"):
+            await s_stream2.athrow(RuntimeError("caller abort"))
+        assert base_cleanups == ["closed", "closed"]
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+
+    AgnoInstrumentor().uninstrument()
+    assert not hasattr(MiniMax.__dict__["ainvoke_stream"], "__wrapped__")
+    assert not hasattr(OpenAIChat.__dict__["ainvoke_stream"], "__wrapped__")
+    assert not hasattr(
+        _DelegatingSubStreamModel.__dict__["ainvoke_stream"], "__wrapped__"
+    )
+    assert not hasattr(
+        _BaseAsyncStreamModel.__dict__["ainvoke_stream"], "__wrapped__"
+    )
