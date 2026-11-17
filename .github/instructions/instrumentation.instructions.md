@@ -79,7 +79,8 @@ operation (distinct nested operations like agent tool calls or nested workflows 
 spans), and code that disables or alters the library's own telemetry by default.
 
 **Util helpers.** Flag package-local copies of provider-agnostic helpers (base64/data URLs,
-provider-name maps) that exist in, or belong in, the util.
+provider-name maps) that exist in, or belong in, the util, and use or mimicry of private
+(`_`-prefixed) util APIs.
 
 **Conformance.** Every semconv operation the package emits needs a scenario. Flag new attributes,
 modes, or streaming variants not exercised by a scenario, and `expected_metrics` not updated when
@@ -159,6 +160,10 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   or do not `invocation.suspend()` before the stream is returned. Flag an `_execution_context()`
   override on an invocation-backed wrapper: the base wrapper already activates a suspended
   invocation during reads, and an override bypasses that guard.
+- Flag code that imports, calls, reads, sets, or mimics private (`_`-prefixed) util APIs, including
+  stand-ins that fake util internals (e.g. a `_suspended` attribute) instead of a real invocation.
+  The `_attach_to_context` parameter is allowed because it is legacy. See
+  [private APIs](../../instrumentation/AGENTS.md#private-apis).
 - Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK
   didn't do (materializing a result early to build telemetry — stay lazy); a changed return type
   (`isinstance`/`__class__` should still resolve to the original; `wrapt.ObjectProxy` is the usual
