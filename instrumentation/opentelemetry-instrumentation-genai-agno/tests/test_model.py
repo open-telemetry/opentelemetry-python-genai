@@ -3187,3 +3187,102 @@ def test_model_injected_client_endpoint_overrides_adapter_base_url(
         == "lazy-adapter.example.com"
     )
     assert lazy_span.attributes.get("server.port") == 6443
+
+
+def test_model_async_stream_copy_safe_and_uninstrument_restores_delegates(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that async streaming hooks are copy-safe on cloned models and are restored by uninstrument()."""
+    import copy
+
+    import httpx
+    import openai
+    from agno.models.base import Model
+    from agno.models.openai import OpenAIChat
+
+    sse_lines = [
+        'data: {"id":"chatcmpl-copy","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+    ]
+    sse_body = ("\n\n".join(sse_lines) + "\n\n").encode("utf-8")
+
+    orig_requests: list[str] = []
+    copy_requests: list[str] = []
+
+    def _orig_transport(req: httpx.Request) -> httpx.Response:
+        orig_requests.append(json.loads(req.content.decode("utf-8"))["model"])
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=sse_body,
+        )
+
+    def _copy_transport(req: httpx.Request) -> httpx.Response:
+        copy_requests.append(json.loads(req.content.decode("utf-8"))["model"])
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=sse_body,
+        )
+
+    orig_client = openai.AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://orig-stream.example.com:8443/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(_orig_transport)
+        ),
+    )
+    copy_client = openai.AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://copy-stream.example.com:9443/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(_copy_transport)
+        ),
+    )
+
+    orig_model = OpenAIChat(id="gpt-4o-orig", async_client=orig_client)
+
+    async def _consume(m: OpenAIChat) -> None:
+        async for _ in m.aresponse_stream(
+            messages=[Message(role="user", content="stream")]
+        ):
+            pass
+
+    asyncio.run(_consume(orig_model))
+    assert "ainvoke_stream" not in orig_model.__dict__
+    assert "_ainvoke_stream_with_retry" not in orig_model.__dict__
+
+    copied_model = copy.copy(orig_model)
+    copied_model.id = "gpt-4o-copy"
+    copied_model.async_client = copy_client
+
+    asyncio.run(_consume(copied_model))
+
+    assert orig_requests == ["gpt-4o-orig"]
+    assert copy_requests == ["gpt-4o-copy"]
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert (
+        spans[0].attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "gpt-4o-orig"
+    )
+    assert spans[0].attributes.get("server.address") == (
+        "orig-stream.example.com"
+    )
+    assert (
+        spans[1].attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "gpt-4o-copy"
+    )
+    assert spans[1].attributes.get("server.address") == (
+        "copy-stream.example.com"
+    )
+
+    # Uninstrument and verify delegate methods are restored on the class
+    AgnoInstrumentor().uninstrument()
+    assert not hasattr(OpenAIChat.__dict__["ainvoke_stream"], "__wrapped__")
+    if hasattr(Model, "_ainvoke_stream_with_retry"):
+        assert not hasattr(
+            Model.__dict__["_ainvoke_stream_with_retry"], "__wrapped__"
+        )
