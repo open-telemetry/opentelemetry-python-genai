@@ -95,8 +95,10 @@ def _total_input_tokens(
     cache_read_input_tokens: int | None,
     cache_creation_input_tokens: int | None,
 ) -> int | None:
-    """Converse ``inputTokens`` excludes cached tokens; the semantic
-    conventions want ``gen_ai.usage.input_tokens`` to include them."""
+    """Bedrock input token counts (Converse ``inputTokens`` and InvokeModel's
+    ``x-amzn-bedrock-input-token-count`` / ``inputTokenCount``) exclude cached
+    tokens; the semantic conventions want ``gen_ai.usage.input_tokens`` to
+    include them."""
     if (
         input_tokens is None
         and cache_read_input_tokens is None
