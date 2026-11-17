@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    import httpx2 as httpx
 import pytest
 
 from opentelemetry.instrumentation.google_genai._error_type import (
