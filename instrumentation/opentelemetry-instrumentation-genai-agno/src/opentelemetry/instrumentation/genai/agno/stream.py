@@ -511,15 +511,23 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
     async def _close_stream(self) -> None:
         delegates = list(reversed(self._self_delegate_streams))
         self._self_delegate_streams.clear()
+        first_error: BaseException | None = None
         try:
             await super()._close_stream()
-        finally:
-            for delegate in delegates:
-                aclose = getattr(delegate, "aclose", None)
-                if callable(aclose):
+        except BaseException as exc:
+            first_error = exc
+        for delegate in delegates:
+            aclose = getattr(delegate, "aclose", None)
+            if callable(aclose):
+                try:
                     res = aclose()
                     if inspect.isawaitable(res):
                         await res
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
+        if first_error is not None:
+            raise first_error
 
 
 _CURRENT_MODEL_ASTREAM: ContextVar[AsyncAgnoModelStreamWrapper | None] = (
@@ -610,8 +618,16 @@ class AsyncAgnoOuterStreamWrapper(_OuterStreamMixin, AsyncStreamWrapper[Any]):
             raise
 
     async def _close_stream(self) -> None:
+        first_error: BaseException | None = None
         try:
-            if self._self_inner_stream is not None:
-                await self._self_inner_stream._close_stream()
-        finally:
             await super()._close_stream()
+        except BaseException as exc:
+            first_error = exc
+        if self._self_inner_stream is not None:
+            try:
+                await self._self_inner_stream._close_stream()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error

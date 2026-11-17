@@ -3453,3 +3453,140 @@ def test_model_async_stream_delegating_subclass_before_base_class(
     assert not hasattr(
         _BaseAsyncStreamModel.__dict__["ainvoke_stream"], "__wrapped__"
     )
+
+
+def test_model_async_stream_delegate_close_error_still_closes_remaining_delegates(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """If a delegate generator's aclose() raises, remaining delegates are still closed and the first close error is propagated."""
+
+    from agno.models.base import Model
+
+    events: list[str] = []
+
+    class _BaseFailingCloseStreamModel(Model):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="unused")
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="unused")
+
+        def invoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> Iterator[ModelResponse]:
+            yield ModelResponse(content="unused")
+
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            try:
+                yield ModelResponse(content="chunk1")
+                yield ModelResponse(content="chunk2")
+            finally:
+                await asyncio.sleep(0)
+                events.append("base_closing")
+                raise RuntimeError("inner delegate close failed")
+
+        def _parse_provider_response(
+            self, response: Any, **kwargs: Any
+        ) -> ModelResponse:
+            return response
+
+        def _parse_provider_response_delta(
+            self, response: Any
+        ) -> ModelResponse:
+            return response
+
+    class _SubFailingCloseStreamModel(_BaseFailingCloseStreamModel):
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            try:
+                async for delta in super().ainvoke_stream(*args, **kwargs):
+                    yield delta
+            finally:
+                await asyncio.sleep(0)
+                events.append("sub_closing")
+                raise ValueError("middle delegate close failed")
+
+    class _TopTrackedStreamModel(_SubFailingCloseStreamModel):
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            try:
+                async for delta in super().ainvoke_stream(*args, **kwargs):
+                    yield delta
+            finally:
+                await asyncio.sleep(0)
+                events.append("top_closed")
+
+    async def _next_content_chunk(stream: Any) -> Any:
+        chunk = await anext(stream)
+        while getattr(chunk, "content", None) is None:
+            chunk = await anext(stream)
+        return chunk
+
+    async def _run() -> None:
+        # 1. Earlier delegate closer raises: remaining outer delegates still close and first delegate error propagates
+        model = _TopTrackedStreamModel(
+            id="top-tracked-close", provider="Custom"
+        )
+        stream = model.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        )
+        first = await _next_content_chunk(stream)
+        assert getattr(first, "content", None) == "chunk1"
+        with pytest.raises(RuntimeError, match="inner delegate close failed"):
+            await stream.aclose()
+        assert events == ["base_closing", "sub_closing", "top_closed"]
+
+        # 2. Wrapped stream close raises first: all delegates still close and wrapped stream error is preserved
+        events.clear()
+        model2 = _TopTrackedStreamModel(
+            id="wrapped-fail-close", provider="Custom"
+        )
+        stream2 = model2.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        )
+        first2 = await _next_content_chunk(stream2)
+        assert getattr(first2, "content", None) == "chunk1"
+
+        inner_wrapper = stream2._self_inner_stream
+        orig_inner_stream = inner_wrapper._self_stream
+
+        class _FailingWrappedStream:
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> Any:
+                return await orig_inner_stream.__anext__()
+
+            async def aclose(self) -> None:
+                events.append("wrapped_closing")
+                try:
+                    await orig_inner_stream.aclose()
+                finally:
+                    raise ConnectionError("wrapped stream close failed")
+
+        inner_wrapper._self_stream = _FailingWrappedStream()
+
+        with pytest.raises(
+            ConnectionError, match="wrapped stream close failed"
+        ):
+            await stream2.aclose()
+        assert events == [
+            "wrapped_closing",
+            "base_closing",
+            "sub_closing",
+            "top_closed",
+        ]
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes.get(ERROR_TYPE) == "RuntimeError"
+    assert spans[1].status.status_code == StatusCode.ERROR
+    assert spans[1].attributes.get(ERROR_TYPE) == "ConnectionError"
