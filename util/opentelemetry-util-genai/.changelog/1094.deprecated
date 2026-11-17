@@ -1,0 +1,1 @@
+Deprecate ``invocation.suspend()``; create invocations with ``_attach_to_context=False`` and scope work with ``with invocation:`` or ``invocation.activate()``.

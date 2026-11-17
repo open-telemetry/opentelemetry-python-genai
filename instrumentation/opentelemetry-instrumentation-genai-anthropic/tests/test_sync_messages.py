@@ -7,7 +7,6 @@
 import inspect
 import json
 import os
-from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +16,12 @@ try:
     import httpx
 except ImportError:
     import httpx2 as httpx
-from anthropic import Anthropic, APIConnectionError, NotFoundError
+from anthropic import (
+    NOT_GIVEN,
+    Anthropic,
+    APIConnectionError,
+    NotFoundError,
+)
 from anthropic._response import APIResponse, ResponseContextManager
 
 try:
@@ -55,11 +59,13 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.trace import StatusCode
-from opentelemetry.util.genai.types import OutputMessage, TextPart
 
 from .conftest import (
+    UNSET_SENTINELS,
     assert_multimodal_input,
+    assert_unset_sampling_attributes_omitted,
     multimodal_input_message,
+    unset_sampling_kwargs,
 )
 
 # Detect whether the installed anthropic SDK supports tools / thinking params.
@@ -168,12 +174,9 @@ def assert_span_attributes(  # pylint: disable=too-many-arguments
 
 
 def _load_span_messages(span, attribute):
-    value = span.attributes.get(attribute)
-    assert value is not None
-    assert isinstance(value, str)
-    parsed = json.loads(value)
-    assert isinstance(parsed, list)
-    return parsed
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    return get_content_attribute(span.attributes, attribute)
 
 
 _WEATHER_TOOL = {
@@ -590,8 +593,8 @@ def test_sync_messages_create_preserves_generator_document_content(
     ]
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
-    messages = json.loads(
-        spans[0].attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    messages = _load_span_messages(
+        spans[0], GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
     assert messages[0]["parts"] == [
         {"type": "text", "content": "First"},
@@ -1235,13 +1238,10 @@ def test_sync_messages_stream_interrupted_mid_iteration(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            asdict(
-                OutputMessage(
-                    role="assistant",
-                    parts=[TextPart(content="Hello!")],
-                    finish_reason=None,
-                )
-            )
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Hello!"}],
+            }
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
@@ -1779,13 +1779,10 @@ def test_sync_messages_create_stream_propagation_error(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            asdict(
-                OutputMessage(
-                    role="assistant",
-                    parts=[TextPart(content="Hello!")],
-                    finish_reason=None,
-                )
-            )
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Hello!"}],
+            }
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
@@ -2977,13 +2974,10 @@ def test_sync_messages_stream_text_stream_user_exception(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            asdict(
-                OutputMessage(
-                    role="assistant",
-                    parts=[TextPart(content="Hello!")],
-                    finish_reason=None,
-                )
-            )
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Hello!"}],
+            }
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
@@ -3514,3 +3508,83 @@ def test_sync_beta_messages_stream_closed_early_by_caller(
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert ErrorAttributes.ERROR_TYPE not in span.attributes
+
+
+_stream_params = set(inspect.signature(_Messages.stream).parameters)
+
+_UNSET_BASE_KWARGS = {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 100,
+    "messages": [{"role": "user", "content": "Say hello in one word."}],
+}
+
+
+@pytest.mark.parametrize("unset", UNSET_SENTINELS)
+def test_sync_messages_create_omits_unset_sentinel_params(
+    span_exporter, anthropic_client, instrument_no_content, vcr, caplog, unset
+):
+    with vcr.use_cassette("test_sync_messages_create_basic.yaml"):
+        anthropic_client.messages.create(
+            **_UNSET_BASE_KWARGS,
+            **unset_sampling_kwargs(unset, _create_params),
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_unset_sampling_attributes_omitted(spans[0], caplog)
+
+
+@pytest.mark.parametrize("unset", UNSET_SENTINELS)
+def test_sync_messages_create_streaming_omits_unset_sentinel_params(
+    span_exporter, anthropic_client, instrument_no_content, vcr, caplog, unset
+):
+    with vcr.use_cassette("test_sync_messages_create_streaming.yaml"):
+        with anthropic_client.messages.create(
+            **_UNSET_BASE_KWARGS,
+            stream=True,
+            **unset_sampling_kwargs(unset, _create_params),
+        ) as stream:
+            for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_unset_sampling_attributes_omitted(spans[0], caplog)
+
+
+@pytest.mark.parametrize("unset", UNSET_SENTINELS)
+def test_sync_messages_stream_omits_unset_sentinel_params(
+    span_exporter, anthropic_client, instrument_no_content, vcr, caplog, unset
+):
+    with vcr.use_cassette("test_sync_messages_stream.yaml"):
+        with anthropic_client.messages.stream(
+            **_UNSET_BASE_KWARGS,
+            **unset_sampling_kwargs(unset, _stream_params),
+        ) as stream:
+            for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_unset_sampling_attributes_omitted(spans[0], caplog)
+
+
+@pytest.mark.skipif(
+    "temperature" not in _create_params,
+    reason="installed anthropic has no `temperature` parameter",
+)
+def test_sync_messages_create_unset_sentinel_keeps_extra_body_fallback(
+    span_exporter, anthropic_client, instrument_no_content, vcr
+):
+    with vcr.use_cassette("test_sync_messages_create_basic.yaml"):
+        anthropic_client.messages.create(
+            **_UNSET_BASE_KWARGS,
+            temperature=NOT_GIVEN,
+            extra_body={"temperature": 0.5},
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert (
+        spans[0].attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.5
+    )
