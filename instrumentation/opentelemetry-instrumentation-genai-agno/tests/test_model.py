@@ -228,22 +228,20 @@ def test_model_sync_response_content_capture(
     assert len(spans) == 1
     span = spans[0]
 
-    input_messages_raw = span.attributes.get(
+    input_messages: Any = span.attributes.get(
         GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
-    assert input_messages_raw is not None
-    input_messages = json.loads(input_messages_raw)
+    assert input_messages is not None
     assert len(input_messages) == 2
     assert input_messages[0]["role"] == "system"
     assert input_messages[0]["parts"][0]["content"] == "System prompt"
     assert input_messages[1]["role"] == "user"
     assert input_messages[1]["parts"][0]["content"] == "User prompt"
 
-    output_messages_raw = span.attributes.get(
+    output_messages: Any = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages_raw is not None
-    output_messages = json.loads(output_messages_raw)
+    assert output_messages is not None
     assert len(output_messages) == 1
     assert output_messages[0]["role"] == "assistant"
     assert (
@@ -314,19 +312,17 @@ def test_model_async_response_content_capture(
     assert len(spans) == 1
     span = spans[0]
 
-    input_messages_raw = span.attributes.get(
+    input_messages: Any = span.attributes.get(
         GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
-    assert input_messages_raw is not None
-    input_messages = json.loads(input_messages_raw)
+    assert input_messages is not None
     assert len(input_messages) == 1
     assert input_messages[0]["parts"][0]["content"] == "Async prompt"
 
-    output_messages_raw = span.attributes.get(
+    output_messages: Any = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages_raw is not None
-    output_messages = json.loads(output_messages_raw)
+    assert output_messages is not None
     assert len(output_messages) == 1
     assert (
         output_messages[0]["parts"][0]["content"]
@@ -389,11 +385,10 @@ def test_model_response_stream_content_capture(
     assert len(spans) == 1
     span = spans[0]
 
-    output_messages_raw = span.attributes.get(
+    output_messages: Any = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages_raw is not None
-    output_messages = json.loads(output_messages_raw)
+    assert output_messages is not None
     assert len(output_messages) == 1
     assert output_messages[0]["parts"][0]["content"] == "chunk 1 chunk 2"
 
@@ -461,11 +456,10 @@ def test_model_aresponse_stream_content_capture(
     assert len(spans) == 1
     span = spans[0]
 
-    output_messages_raw = span.attributes.get(
+    output_messages: Any = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages_raw is not None
-    output_messages = json.loads(output_messages_raw)
+    assert output_messages is not None
     assert len(output_messages) == 1
     assert (
         output_messages[0]["parts"][0]["content"]
@@ -828,13 +822,13 @@ def test_model_tool_call_arguments_json_decoding_and_fallback(
     assert len(spans) == 1
     span = spans[0]
 
-    input_msgs = json.loads(
-        str(span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES))
+    input_msgs: Any = span.attributes.get(
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_msgs[0]["parts"][0]["arguments"] == {"query": "otel"}
 
-    output_msgs = json.loads(
-        str(span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES))
+    output_msgs: Any = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     parts = output_msgs[0]["parts"]
     assert parts[0]["name"] == "get_weather"
@@ -1088,8 +1082,8 @@ def test_model_multimodal_inputs_and_outputs(
     assert len(spans) == 1
     span = spans[0]
 
-    input_msgs = json.loads(
-        str(span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES))
+    input_msgs: Any = span.attributes.get(
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
     assert len(input_msgs) == 1
     parts = input_msgs[0]["parts"]
@@ -1104,13 +1098,13 @@ def test_model_multimodal_inputs_and_outputs(
         "type": "blob",
         "modality": "image",
         "mime_type": "image/png",
-        "content": b64encode(raw_image).decode(),
+        "content": raw_image,
     }
     assert parts[3] == {
         "type": "blob",
         "modality": "audio",
         "mime_type": "audio/wav",
-        "content": b64encode(raw_audio).decode(),
+        "content": raw_audio,
     }
     assert parts[4] == {
         "type": "uri",
@@ -1131,8 +1125,8 @@ def test_model_multimodal_inputs_and_outputs(
         "uri": "https://example.com/report.pdf",
     }
 
-    output_msgs = json.loads(
-        str(span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES))
+    output_msgs: Any = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert len(output_msgs) == 1
     out_parts = output_msgs[0]["parts"]
@@ -1147,7 +1141,7 @@ def test_model_multimodal_inputs_and_outputs(
         "type": "blob",
         "modality": "audio",
         "mime_type": "audio/mpeg",
-        "content": b64encode(raw_audio).decode(),
+        "content": raw_audio,
     }
 
 
@@ -1363,10 +1357,12 @@ def test_model_async_tool_loop_does_not_reuse_previous_call_data(
     assert (
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in second.attributes
     )
-    output_msgs = json.loads(
-        str(second.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES))
+    output_msgs: Any = second.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_msgs[0]["parts"] == [{"type": "text", "content": "done"}]
+    assert list(output_msgs[0]["parts"]) == [
+        {"type": "text", "content": "done"}
+    ]
 
 
 def test_gemini_reasoning_tokens_added_to_output_tokens_and_max_output_tokens(
@@ -1563,9 +1559,9 @@ def test_model_tool_definitions_gated_by_content_capture(
 
     assert len(calls) == 1
     (capture_span,) = span_exporter.get_finished_spans()
-    tool_defs = json.loads(
-        str(capture_span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS])
-    )
+    tool_defs: Any = capture_span.attributes[
+        GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
+    ]
     assert tool_defs[0]["name"] == "lookup"
 
 
@@ -1698,9 +1694,7 @@ def test_model_stream_early_close_and_error_preserves_media_output(
     stream.close()
 
     (span,) = span_exporter.get_finished_spans()
-    out_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    out_msgs: Any = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert out_msgs[0]["parts"][0]["type"] == "uri"
     assert (
         out_msgs[0]["parts"][0]["uri"] == "https://example.com/stream-img.png"
@@ -1720,9 +1714,7 @@ def test_model_stream_early_close_and_error_preserves_media_output(
             pass
 
     (span,) = span_exporter.get_finished_spans()
-    out_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    out_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         out_msgs[0]["parts"][0]["uri"] == "https://example.com/stream-img.png"
     )
@@ -1741,9 +1733,7 @@ def test_model_stream_early_close_and_error_preserves_media_output(
 
     asyncio.run(_async_early_close())
     (span,) = span_exporter.get_finished_spans()
-    out_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    out_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         out_msgs[0]["parts"][0]["uri"]
         == "https://example.com/async-stream-img.png"
@@ -1764,9 +1754,7 @@ def test_model_stream_early_close_and_error_preserves_media_output(
         asyncio.run(_async_error())
 
     (span,) = span_exporter.get_finished_spans()
-    out_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    out_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         out_msgs[0]["parts"][0]["uri"]
         == "https://example.com/async-stream-img.png"
@@ -1862,24 +1850,22 @@ def test_model_tool_result_structured_response_null_and_media(
     model.response(messages=messages)
 
     (span,) = span_exporter.get_finished_spans()
-    input_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
-    )
+    input_msgs: Any = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 2
 
     first_parts = input_msgs[0]["parts"]
     assert first_parts[0] == {
         "type": "tool_call_response",
         "id": "call_struct",
-        "response": [
+        "response": (
             {"item": "apple", "count": 3},
             {"item": "pear", "count": 5},
-        ],
+        ),
     }
     part_types = [p["type"] for p in first_parts[1:]]
     assert part_types == ["uri", "blob", "uri", "uri"]
 
-    second_parts = input_msgs[1]["parts"]
+    second_parts = list(input_msgs[1]["parts"])
     assert second_parts == [
         {
             "type": "tool_call_response",
@@ -1934,29 +1920,26 @@ def test_model_input_message_content_blocks(
     model.response(messages=messages)
 
     (span,) = span_exporter.get_finished_spans()
-    input_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
-    )
-    parts = input_msgs[0]["parts"]
+    input_msgs: Any = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    parts = list(input_msgs[0]["parts"])
     assert parts == [
         {"type": "text", "content": "Describe this"},
         {
             "type": "uri",
             "modality": "image",
-            "mime_type": None,
             "uri": "https://example.com/cat.png",
         },
         {
             "type": "blob",
             "modality": "image",
             "mime_type": "image/png",
-            "content": png_b64,
+            "content": raw_png,
         },
         {
             "type": "blob",
             "modality": "audio",
             "mime_type": "audio/wav",
-            "content": wav_b64,
+            "content": raw_wav,
         },
         {
             "type": "file",
@@ -1976,7 +1959,6 @@ def test_model_nested_anthropic_document_sources_and_roles(
 
     model = _SyncModel(id="claude-3-7-sonnet", provider="Anthropic")
     pdf_b64 = base64.b64encode(b"%PDF-1.4 sample").decode("ascii")
-    txt_b64 = base64.b64encode(b"Plain text doc").decode("ascii")
 
     messages = [
         Message(
@@ -2029,20 +2011,18 @@ def test_model_nested_anthropic_document_sources_and_roles(
     model.response(messages=messages)
 
     (span,) = span_exporter.get_finished_spans()
-    input_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
-    )
+    input_msgs: Any = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert [m["role"] for m in input_msgs] == [
         "developer",
         "assistant",
         "user",
     ]
-    assert input_msgs[2]["parts"] == [
+    assert list(input_msgs[2]["parts"]) == [
         {
             "type": "blob",
             "modality": "document",
             "mime_type": "application/pdf",
-            "content": pdf_b64,
+            "content": b"%PDF-1.4 sample",
         },
         {
             "type": "uri",
@@ -2054,7 +2034,7 @@ def test_model_nested_anthropic_document_sources_and_roles(
             "type": "blob",
             "modality": "document",
             "mime_type": "text/plain",
-            "content": txt_b64,
+            "content": b"Plain text doc",
         },
         {
             "type": "file",
@@ -2141,10 +2121,10 @@ def test_real_openai_chat_sync_and_async(
         sync_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
         == 9
     )
-    out_msgs = json.loads(
-        str(sync_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
-    assert out_msgs[0]["parts"] == [
+    out_msgs: Any = sync_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ]
+    assert list(out_msgs[0]["parts"]) == [
         {"type": "text", "content": "Response from OpenAIChat!"}
     ]
 
@@ -2260,10 +2240,10 @@ def test_real_openai_chat_stream_sync_and_async(
         sync_span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
         == 4
     )
-    out_msgs = json.loads(
-        str(sync_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
-    assert out_msgs[0]["parts"] == [
+    out_msgs: Any = sync_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ]
+    assert list(out_msgs[0]["parts"]) == [
         {"type": "text", "content": "Hello world!"}
     ]
 
@@ -2411,10 +2391,8 @@ def test_openai_stream_partial_tool_call_deltas_early_close_and_error(
     stream.close()
 
     (span,) = span_exporter.get_finished_spans()
-    out_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
-    assert out_msgs[0]["parts"] == [
+    out_msgs: Any = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert list(out_msgs[0]["parts"]) == [
         {
             "type": "tool_call",
             "id": "call_delta_1",
@@ -2435,10 +2413,8 @@ def test_openai_stream_partial_tool_call_deltas_early_close_and_error(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes.get(ERROR_TYPE) == "ConnectionError"
-    out_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
-    assert out_msgs[0]["parts"] == [
+    out_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert list(out_msgs[0]["parts"]) == [
         {
             "type": "tool_call",
             "id": "call_delta_1",
@@ -2461,10 +2437,8 @@ def test_openai_stream_partial_tool_call_deltas_early_close_and_error(
 
     asyncio.run(_async_close())
     (span,) = span_exporter.get_finished_spans()
-    out_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
-    assert out_msgs[0]["parts"] == [
+    out_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert list(out_msgs[0]["parts"]) == [
         {
             "type": "tool_call",
             "id": "call_delta_async_1",
@@ -2488,10 +2462,8 @@ def test_openai_stream_partial_tool_call_deltas_early_close_and_error(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes.get(ERROR_TYPE) == "ConnectionError"
-    out_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
-    assert out_msgs[0]["parts"] == [
+    out_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert list(out_msgs[0]["parts"]) == [
         {
             "type": "tool_call",
             "id": "call_delta_async_1",
@@ -2696,9 +2668,9 @@ def test_model_stream_preserves_multi_image_multi_chunk_output(
     )
 
     (sync_span,) = span_exporter.get_finished_spans()
-    sync_out = json.loads(
-        str(sync_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    sync_out: Any = sync_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ]
     sync_uris = [
         p["uri"] for p in sync_out[0]["parts"] if p.get("type") == "uri"
     ]
@@ -2718,9 +2690,9 @@ def test_model_stream_preserves_multi_image_multi_chunk_output(
 
     asyncio.run(_consume())
     (async_span,) = span_exporter.get_finished_spans()
-    async_out = json.loads(
-        str(async_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    async_out: Any = async_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ]
     async_uris = [
         p["uri"] for p in async_out[0]["parts"] if p.get("type") == "uri"
     ]
@@ -2774,16 +2746,16 @@ def test_real_openai_chat_audio_response_and_stream_not_double_encoded(
     model.response(messages=[Message(role="user", content="Speak")])
 
     (sync_span,) = span_exporter.get_finished_spans()
-    sync_out = json.loads(
-        str(sync_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    sync_out: Any = sync_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ]
     audio_blobs = [
         p
         for p in sync_out[0]["parts"]
         if p.get("type") == "blob" and p.get("modality") == "audio"
     ]
     assert len(audio_blobs) == 1
-    assert audio_blobs[0]["content"] == "AAE="
+    assert audio_blobs[0]["content"] == b"\x00\x01"
 
     span_exporter.clear()
 
@@ -2813,20 +2785,18 @@ def test_real_openai_chat_audio_response_and_stream_not_double_encoded(
     )
 
     (stream_span,) = span_exporter.get_finished_spans()
-    stream_out = json.loads(
-        str(stream_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    stream_out: Any = stream_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ]
     stream_audio_blobs = [
         p
         for p in stream_out[0]["parts"]
         if p.get("type") == "blob" and p.get("modality") == "audio"
     ]
     assert len(stream_audio_blobs) == 1
-    assert stream_audio_blobs[0]["content"] == "AAE="
+    assert stream_audio_blobs[0]["content"] == b"\x00\x01"
 
     span_exporter.clear()
-
-    from base64 import b64encode
 
     from agno.media import Audio
 
@@ -2851,31 +2821,23 @@ def test_real_openai_chat_audio_response_and_stream_not_double_encoded(
     )
 
     (raw_span,) = span_exporter.get_finished_spans()
-    raw_in = json.loads(
-        str(raw_span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
-    )
+    raw_in: Any = raw_span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     raw_in_blobs = [
         p
         for p in raw_in[0]["parts"]
         if p.get("type") == "blob" and p.get("modality") == "audio"
     ]
     assert len(raw_in_blobs) == 1
-    assert raw_in_blobs[0]["content"] == b64encode(
-        raw_b64_looking_audio
-    ).decode("ascii")
+    assert raw_in_blobs[0]["content"] == raw_b64_looking_audio
 
-    raw_out = json.loads(
-        str(raw_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-    )
+    raw_out: Any = raw_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     raw_out_blobs = [
         p
         for p in raw_out[0]["parts"]
         if p.get("type") == "blob" and p.get("modality") == "audio"
     ]
     assert len(raw_out_blobs) == 1
-    assert raw_out_blobs[0]["content"] == b64encode(
-        raw_b64_looking_audio
-    ).decode("ascii")
+    assert raw_out_blobs[0]["content"] == raw_b64_looking_audio
 
 
 def test_model_video_url_content_blocks(
@@ -2903,9 +2865,7 @@ def test_model_video_url_content_blocks(
     model.response(messages=messages)
 
     (span,) = span_exporter.get_finished_spans()
-    input_msgs = json.loads(
-        str(span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
-    )
+    input_msgs: Any = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     parts = input_msgs[0]["parts"]
     assert len(parts) == 2
@@ -2916,7 +2876,7 @@ def test_model_video_url_content_blocks(
         "type": "blob",
         "modality": "video",
         "mime_type": "video/mp4",
-        "content": "AAE=",
+        "content": b"\x00\x01",
     }
 
 
@@ -2993,6 +2953,7 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
 
         with pytest.raises(ValueError, match="Injected async error"):
             await astream.athrow(ValueError("Injected async error"))
+        assert async_closed
         assert astream._self_inner_stream._self_stream.ag_frame is None
         del astream
         gc.collect()

@@ -1859,6 +1859,7 @@ def _start_model_inference(
         server_address=server_address,
         server_port=server_port,
         conversation_id=str(session_id) if session_id is not None else None,
+        _attach_to_context=False,
     )
 
     invocation.temperature = safe_float(
@@ -1946,19 +1947,14 @@ def _model_process_response(
         invocation, assistant_message, _ = _start_model_inference(
             handler, instance, args, kwargs, wrapped=wrapped
         )
-        try:
+        with invocation:
             result = wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
-
-        _populate_model_response_telemetry(
-            invocation,
-            assistant_message=assistant_message,
-            model=instance,
-        )
-        invocation.stop()
-        return result
+            _populate_model_response_telemetry(
+                invocation,
+                assistant_message=assistant_message,
+                model=instance,
+            )
+            return result
 
     return traced_method
 
@@ -1975,19 +1971,14 @@ def _model_aprocess_response(
         invocation, assistant_message, _ = _start_model_inference(
             handler, instance, args, kwargs, wrapped=wrapped
         )
-        try:
+        with invocation:
             result = await wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
-
-        _populate_model_response_telemetry(
-            invocation,
-            assistant_message=assistant_message,
-            model=instance,
-        )
-        invocation.stop()
-        return result
+            _populate_model_response_telemetry(
+                invocation,
+                assistant_message=assistant_message,
+                model=instance,
+            )
+            return result
 
     return cast(Callable[..., Any], traced_method)
 

@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import httpx
@@ -79,10 +78,9 @@ def _attr(span: dict[str, Any], name: str) -> Any:
     return None
 
 
-def _message_part_types(messages_json: str | None) -> set[str]:
-    if not messages_json:
+def _message_part_types(messages: Any) -> set[str]:
+    if not messages:
         return set()
-    messages = json.loads(messages_json)
     return {
         part["type"]
         for message in messages
@@ -92,11 +90,10 @@ def _message_part_types(messages_json: str | None) -> set[str]:
 
 
 def _message_part_type_and_modality(
-    messages_json: str | None,
+    messages: Any,
 ) -> set[tuple[str, str | None]]:
-    if not messages_json:
+    if not messages:
         return set()
-    messages = json.loads(messages_json)
     return {
         (part["type"], part.get("modality"))
         for message in messages
