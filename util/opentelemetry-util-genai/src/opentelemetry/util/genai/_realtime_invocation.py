@@ -18,6 +18,7 @@ from opentelemetry.semconv.attributes import (
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._inference_invocation import (
     CLIENT_INFERENCE_CONTEXT_KEY,
+    InferenceData,
     InferenceInvocation,
     SuppressedInferenceInvocation,
 )
@@ -56,8 +57,6 @@ class RealtimeInferenceInvocation(InferenceInvocation):
     ``gen_ai.client.inference.operation.details`` event.
     """
 
-    _emit_operation_details_event = False
-
     def __init__(
         self,
         tracer: Tracer,
@@ -77,7 +76,8 @@ class RealtimeInferenceInvocation(InferenceInvocation):
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
     ) -> None:
-        super().__init__(
+        InferenceInvocation.__init__(
+            self,
             tracer,
             instruments,
             logger,
@@ -93,8 +93,17 @@ class RealtimeInferenceInvocation(InferenceInvocation):
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
-            realtime_session_id=realtime_session_id,
         )
+        self._realtime_session_id: str | None = realtime_session_id
+        self._emit_event = False
+
+    @property
+    def realtime_session_id(self) -> str | None:
+        return self._realtime_session_id
+
+    @realtime_session_id.setter
+    def realtime_session_id(self, value: str | None) -> None:
+        self._realtime_session_id = value
 
     @property
     def should_capture_content(self) -> bool:
@@ -107,6 +116,19 @@ class RealtimeInferenceInvocation(InferenceInvocation):
         return self._should_capture_content_on_span or not isinstance(
             self._completion_hook, _NoOpCompletionHook
         )
+
+    def _get_attributes(self) -> dict[str, AttributeValue]:
+        attrs = super()._get_attributes()
+        if self._realtime_session_id is not None:
+            attrs[GEN_AI_REALTIME_SESSION_ID] = self._realtime_session_id
+        return attrs
+
+    def _enrich_from_context(self, data: InferenceData) -> None:
+        super()._enrich_from_context(data)
+        if self._realtime_session_id is None:
+            inner_session_id = getattr(data, "_realtime_session_id", None)
+            if isinstance(inner_session_id, str):
+                self._realtime_session_id = inner_session_id
 
     def _maybe_create_event(self) -> LogRecord | None:
         return None
@@ -163,6 +185,11 @@ class SuppressedRealtimeInferenceInvocation(
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
         )
+
+    def publish_to_context(self, data: InferenceData) -> None:
+        super().publish_to_context(data)
+        if self._realtime_session_id is not None:
+            setattr(data, "_realtime_session_id", self._realtime_session_id)
 
 
 @dataclass

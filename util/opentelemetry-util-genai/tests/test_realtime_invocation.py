@@ -29,14 +29,18 @@ from opentelemetry.semconv.attributes import (
     error_attributes,
     server_attributes,
 )
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, StatusCode
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import RealtimeInferenceInvocation
+from opentelemetry.util.genai.invocation import (
+    InferenceData,
+    RealtimeInferenceInvocation,
+)
 from opentelemetry.util.genai.types import (
     BlobPart,
+    Error,
     InputMessage,
     Modality,
     OutputMessage,
@@ -267,3 +271,89 @@ def test_realtime_inference_should_capture_content_event_only():
         handler, _, _, _ = _make_handler()
         with handler.realtime_inference("gcp.gemini") as inv:
             assert inv.should_capture_content is False
+
+
+def test_no_realtime_session_id_reverse_leakage_on_inference():
+    handler, span_exporter, _, _ = _make_handler()
+    assert not hasattr(InferenceData(), "realtime_session_id")
+    with handler.inference("openai", request_model="gpt-4o") as inv:
+        assert not hasattr(inv, "realtime_session_id")
+        with handler.realtime_inference(
+            "openai",
+            request_model="gpt-4o-realtime",
+            realtime_session_id="sess-inner",
+        ) as inner:
+            inner.output_tokens = 12
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "gen_ai.realtime_session.id" not in spans[0].attributes
+    assert spans[0].attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 12
+
+
+def test_nested_realtime_inference_suppression_and_session_id_propagation():
+    handler, span_exporter, log_exporter, _ = _make_handler()
+    with handler.realtime_inference(
+        "gcp.gemini",
+        request_model="gemini-2.5-flash-native-audio-preview-12-2025",
+    ) as outer:
+        with handler.realtime_inference(
+            "gcp.gemini",
+            request_model="gemini-2.5-flash-native-audio-preview-12-2025",
+            realtime_session_id="sess-from-inner",
+        ) as inner:
+            inner.input_tokens = 7
+            inner.output_tokens = 19
+
+    assert outer.realtime_session_id == "sess-from-inner"
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert (
+        spans[0].attributes["gen_ai.realtime_session.id"] == "sess-from-inner"
+    )
+    assert spans[0].attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 7
+    assert spans[0].attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 19
+    assert log_exporter.get_finished_logs() == ()
+
+
+def test_realtime_inference_and_user_speech_failure_handling():
+    handler, span_exporter, log_exporter, _ = _make_handler()
+
+    speech = handler.user_speech(
+        provider="gcp.gemini",
+        realtime_session_id="sess-err",
+        error_type_resolver=lambda exc: f"custom.{type(exc).__name__}",
+    )
+    speech.fail(RuntimeError("mic disconnected"))
+    speech.stop()
+
+    inv = handler.realtime_inference(
+        "gcp.gemini",
+        request_model="gemini-2.5-flash-native-audio-preview-12-2025",
+        realtime_session_id="sess-err",
+        error_type_resolver=lambda exc: f"custom.{type(exc).__name__}",
+    )
+    inv.fail(ValueError("stream interrupted"))
+    inv.fail(Error(message="ignored second fail", type="IgnoredError"))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+
+    speech_span, inf_span = spans
+    assert speech_span.status.status_code == StatusCode.ERROR
+    assert (
+        speech_span.attributes[error_attributes.ERROR_TYPE]
+        == "custom.RuntimeError"
+    )
+    assert speech_span.attributes["gen_ai.realtime_session.id"] == "sess-err"
+
+    assert inf_span.status.status_code == StatusCode.ERROR
+    assert (
+        inf_span.attributes[error_attributes.ERROR_TYPE] == "custom.ValueError"
+    )
+    assert inf_span.attributes["gen_ai.realtime_session.id"] == "sess-err"
+
+    event_names = [
+        l.log_record.event_name for l in log_exporter.get_finished_logs()
+    ]
+    assert "gen_ai.client.inference.operation.details" not in event_names
