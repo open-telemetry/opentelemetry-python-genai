@@ -16,7 +16,10 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    import httpx2 as httpx
 import pytest
 from google.genai import Client
 from google.genai.types import HttpOptions
@@ -279,9 +282,7 @@ async def test_two_hops_produce_one_span_with_summed_usage(
     if content_mode == "NO_CONTENT":
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
     else:
-        output = json.loads(
-            str(attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
-        )
+        output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
         text = "".join(
             part["content"]
             for message in output
@@ -444,15 +445,12 @@ async def test_untyped_content_blocks_are_recorded_as_text(
     if content_mode == "NO_CONTENT":
         assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in attributes
         return
-    assert json.loads(
-        str(attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
-    ) == [
+    assert attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
         {
             "role": "user",
-            "parts": [
+            "parts": (
                 {"type": "text", "content": "Say"},
                 {"type": "text", "content": "hello"},
-            ],
-            "name": None,
-        }
-    ]
+            ),
+        },
+    )
