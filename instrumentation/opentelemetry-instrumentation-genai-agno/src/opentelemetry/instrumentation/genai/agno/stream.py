@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import contextlib
-import functools
 import inspect
 from collections.abc import Awaitable, Callable, Iterator
 from contextvars import ContextVar
@@ -460,32 +459,11 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         return super()._advance(read)
 
 
-def _bind_model_delegate_stream_hooks(model: Any) -> None:
-    if model is None:
-        return
-    for method_name in ("_ainvoke_stream_with_retry", "ainvoke_stream"):
-        method = getattr(model, method_name, None)
-        if not callable(method) or getattr(
-            method, "_otel_agno_stream_hooked", False
-        ):
-            continue
-
-        def _make_wrapper(orig: Callable[..., Any]) -> Callable[..., Any]:
-            @functools.wraps(orig)
-            def _wrapped(*args: Any, **kwargs: Any) -> Any:
-                stream = orig(*args, **kwargs)
-                current = _CURRENT_MODEL_ASTREAM.get()
-                if current is not None and current._self_model is model:
-                    current._register_delegate_stream(stream)
-                return stream
-
-            setattr(_wrapped, "_otel_agno_stream_hooked", True)
-            return _wrapped
-
-        try:
-            setattr(model, method_name, _make_wrapper(method))
-        except Exception:
-            pass
+def register_model_delegate_stream(model: Any, stream: Any) -> None:
+    """Register an async delegate stream on the active model stream wrapper."""
+    current = _CURRENT_MODEL_ASTREAM.get()
+    if current is not None and current._self_model is model:
+        current._register_delegate_stream(stream)
 
 
 class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
@@ -509,7 +487,6 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         self._self_stream_images = []
         self._self_stream_videos = []
         self._self_delegate_streams: list[Any] = []
-        _bind_model_delegate_stream_hooks(model)
         outer = _CURRENT_OUTER_ASTREAM.get()
         if outer is not None:
             outer._bind_inner(self)

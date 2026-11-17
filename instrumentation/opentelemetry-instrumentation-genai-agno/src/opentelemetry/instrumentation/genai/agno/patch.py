@@ -62,6 +62,7 @@ from opentelemetry.instrumentation.genai.agno.stream import (
     AsyncAgnoModelStreamWrapper,
     AsyncAgnoOuterStreamWrapper,
     AsyncAgnoWorkflowStreamWrapper,
+    register_model_delegate_stream,
 )
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
@@ -130,6 +131,7 @@ _AGNO_MODELS_MODULE = "agno.models.base"
 _MODEL_CLASS = "Model"
 
 _ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
+_PATCHED_MODEL_STREAM_CLASSES: set[type[Any]] = set()
 _KNOWN_EMBEDDERS: tuple[tuple[str, str], ...] = (
     ("agno.knowledge.embedder.base", "Embedder"),
     ("agno.knowledge.embedder.openai", "OpenAIEmbedder"),
@@ -398,6 +400,12 @@ def patch_agent(handler: TelemetryHandler) -> None:
         _model_aresponse_stream(),
         current_generation,
     )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}._ainvoke_stream_with_retry",
+        _model_delegate_stream_hook,
+        current_generation,
+    )
 
     embedder_wrappers = [
         (method_name, factory(handler))
@@ -494,10 +502,15 @@ def unpatch_agent() -> None:
                 "aprocess_response_stream",
                 "response_stream",
                 "aresponse_stream",
+                "_ainvoke_stream_with_retry",
             ):
                 _safe_unwrap(agno.models.base.Model, attr)
         except ImportError:
             pass
+
+    for cls in list(_PATCHED_MODEL_STREAM_CLASSES):
+        _safe_unwrap(cls, "ainvoke_stream")
+    _PATCHED_MODEL_STREAM_CLASSES.clear()
 
 
 def _extract_embedder_input_tokens(usage: Mapping[str, Any]) -> int | None:
@@ -2062,6 +2075,30 @@ def _model_process_response_stream(
     return traced_method
 
 
+def _model_delegate_stream_hook(
+    wrapped: Callable[..., Any],
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    stream = wrapped(*args, **kwargs)
+    register_model_delegate_stream(instance, stream)
+    return stream
+
+
+def _ensure_model_ainvoke_stream_wrapped(model_cls: type[Any]) -> None:
+    if not _is_instrumented:
+        return
+    for cls in model_cls.__mro__:
+        if "ainvoke_stream" in cls.__dict__:
+            if not hasattr(cls.__dict__["ainvoke_stream"], "__wrapped__"):
+                wrap_function_wrapper(
+                    cls, "ainvoke_stream", _model_delegate_stream_hook
+                )
+                _PATCHED_MODEL_STREAM_CLASSES.add(cls)
+            break
+
+
 def _model_aprocess_response_stream(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
@@ -2071,6 +2108,7 @@ def _model_aprocess_response_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        _ensure_model_ainvoke_stream_wrapped(type(instance))
         assistant_message = cast(
             "Message | None",
             get_argument("assistant_message", wrapped, args, kwargs),
