@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import contextlib
+import gc
+import inspect
 from collections.abc import Awaitable, Callable, Iterator
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
@@ -356,7 +358,6 @@ class _ModelStreamMixin:
             assert self._self_start_invocation is not None
             invocation = self._self_start_invocation()
             invocation.request_stream = True
-            invocation.suspend()
             self._self_invocation = invocation
         return self._self_invocation
 
@@ -444,8 +445,6 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         start_invocation: Callable[[], InferenceInvocation] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
-        if invocation is not None:
-            invocation.suspend()
         self._self_start_invocation = start_invocation
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
@@ -475,8 +474,6 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         start_invocation: Callable[[], InferenceInvocation] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
-        if invocation is not None:
-            invocation.suspend()
         self._self_start_invocation = start_invocation
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
@@ -490,6 +487,31 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
     async def _advance(self, read: Callable[[], Awaitable[Any]]) -> Any:
         self._ensure_invocation()
         return await super()._advance(read)
+
+    async def _close_stream(self) -> None:
+        nested: list[Any] = []
+        seen: set[int] = set()
+        stack: list[Any] = [self._self_stream]
+        while stack:
+            cur = stack.pop()
+            if id(cur) in seen:
+                continue
+            seen.add(id(cur))
+            if inspect.isasyncgen(cur):
+                if cur is not self._self_stream:
+                    nested.append(cur)
+                for ref in gc.get_referents(cur):
+                    if inspect.isasyncgen(ref) or inspect.isframe(ref):
+                        stack.append(ref)
+            elif inspect.isframe(cur):
+                for ref in gc.get_referents(cur):
+                    if inspect.isasyncgen(ref):
+                        stack.append(ref)
+        try:
+            await super()._close_stream()
+        finally:
+            for gen in nested:
+                await gen.aclose()
 
 
 _CURRENT_OUTER_STREAM: ContextVar[AgnoOuterSyncStreamWrapper | None] = (
