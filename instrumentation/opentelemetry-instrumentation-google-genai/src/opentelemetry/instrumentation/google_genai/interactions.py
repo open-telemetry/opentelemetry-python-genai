@@ -24,6 +24,8 @@ try:
         AsyncInteractionsResource,
         InteractionsResource,
     )
+    from google.genai._interactions.types.content import Content
+    from google.genai._interactions.types.content_param import ContentParam
     from google.genai._interactions.types.interaction import Interaction, Usage
     from google.genai._interactions.types.interaction_create_params import (
         Input,
@@ -48,6 +50,8 @@ except ImportError:
             Interactions as InteractionsResource,
         )
         from google.genai._gaos.types.interactions import (
+            Content,
+            ContentParam,
             Interaction,
             InteractionSSEEvent,
             Step,
@@ -79,6 +83,14 @@ except ImportError:
             total_output_tokens = None
             total_thought_tokens = None
             total_cached_tokens = None
+
+        class Content:
+            type: str | None = None
+            text: str | None = None
+            mime_type: str | None = None
+            uri: str | None = None
+
+        ContentParam = dict[str, object]
 
         class Input:
             pass
@@ -366,18 +378,29 @@ def _interaction_item_to_part(
     return _interaction_output_item_to_part(item)
 
 
-def _content_item_to_part(item: Any) -> MessagePart | None:
+def _content_item_to_part(
+    item: Content | ContentParam | dict[str, object] | str,
+) -> MessagePart | None:
     if isinstance(item, str):
         return TextPart(content=item)
-    item_type = _get_field(item, "type")
+    if isinstance(item, dict):
+        item_type = item.get("type")
+        text = item.get("text") if item_type == "text" else None
+        mime_type = item.get("mime_type") if item_type == "document" else None
+        uri = item.get("uri") if item_type == "document" else None
+    else:
+        item_type = item.type
+        text = item.text if item_type == "text" else None
+        mime_type = item.mime_type if item_type == "document" else None
+        uri = item.uri if item_type == "document" else None
+
     if item_type == "text":
-        text = _get_field(item, "text")
         return TextPart(content=text if isinstance(text, str) else "")
     if item_type == "document":
         return UriPart(
-            mime_type=_get_field(item, "mime_type"),
+            mime_type=mime_type if isinstance(mime_type, str) else None,
             modality=Modality.DOCUMENT,
-            uri=_get_field(item, "uri") or "",
+            uri=uri if isinstance(uri, str) else "",
         )
     return None
 
@@ -409,7 +432,7 @@ def _interactions_input_to_messages(
             parts.append(TextPart(content=item))
             continue
 
-        item_type = _get_field(item, "type")
+        item_type = item.get("type") if isinstance(item, dict) else item.type
         message_part = None
         if isinstance(item, dict):
             message_part = _interaction_item_to_part(item)
@@ -419,15 +442,20 @@ def _interactions_input_to_messages(
         if message_part is not None:
             parts.append(message_part)
         elif item_type == "user_input":
-            content = _get_field(item, "content")
+            content = (
+                item.get("content") if isinstance(item, dict) else item.content
+            )
             if isinstance(content, Sequence) and not isinstance(
                 content, (str, bytes)
             ):
                 for sub_item in content:
                     if part := _content_item_to_part(sub_item):
                         parts.append(part)
-        elif part := _content_item_to_part(item):
-            parts.append(part)
+        elif item_type in ("text", "document"):
+            if part := _content_item_to_part(
+                cast("Content | ContentParam | dict[str, object]", item)
+            ):
+                parts.append(part)
 
     return [InputMessage(role=Role.USER.value, parts=parts)]
 
