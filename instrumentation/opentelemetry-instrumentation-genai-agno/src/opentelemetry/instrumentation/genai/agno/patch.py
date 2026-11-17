@@ -1777,12 +1777,82 @@ def _get_request_setting(instance: Model, *names: str) -> Any:
     return None
 
 
+def _extract_client_base_url(client: Any) -> Any:
+    if client is None:
+        return None
+    base_url = getattr(client, "base_url", None)
+    if base_url is not None:
+        return base_url
+    api_client = getattr(client, "_api_client", None)
+    if api_client is not None:
+        http_opts = getattr(api_client, "_http_options", None)
+        if http_opts is not None:
+            opt_url = getattr(http_opts, "base_url", None)
+            if opt_url is not None:
+                return opt_url
+    return getattr(client, "host", None)
+
+
+def _parse_endpoint_url(raw_url: Any) -> tuple[str | None, int | None]:
+    if raw_url is None or not (
+        isinstance(raw_url, str) or hasattr(raw_url, "host")
+    ):
+        return None, None
+    try:
+        parsed = urllib.parse.urlparse(str(raw_url))
+        if parsed.scheme in ("http", "https", "ws", "wss") and parsed.hostname:
+            return parsed.hostname, safe_int(parsed.port)
+    except Exception:
+        pass
+    return None, None
+
+
+def _resolve_model_endpoint(
+    instance: Model,
+    *,
+    is_async: bool = False,
+) -> tuple[str | None, int | None]:
+    if is_async:
+        effective_client = _get_property_value(instance, "async_client")
+        if (
+            effective_client is None
+            and not hasattr(type(instance), "async_client")
+            and "async_client" not in getattr(instance, "__dict__", {})
+        ):
+            effective_client = _get_property_value(instance, "client")
+    else:
+        effective_client = _get_property_value(instance, "client")
+
+    if effective_client is not None:
+        addr, port = _parse_endpoint_url(
+            _extract_client_base_url(effective_client)
+        )
+        if addr is not None:
+            return addr, port
+
+    base_url = _get_property_value(
+        instance, "base_url"
+    ) or _get_property_value(instance, "host")
+    if base_url:
+        addr, port = _parse_endpoint_url(base_url)
+        if addr is not None:
+            return addr, port
+
+    http_client = _get_property_value(instance, "http_client")
+    if http_client is not None:
+        return _parse_endpoint_url(_extract_client_base_url(http_client))
+
+    return None, None
+
+
 def _start_model_inference(
     handler: TelemetryHandler,
     instance: Model,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     wrapped: Callable[..., Any],
+    *,
+    is_async: bool = False,
 ) -> tuple[
     InferenceInvocation,
     Message | None,
@@ -1809,16 +1879,9 @@ def _start_model_inference(
 
     provider = resolve_model_provider(instance)
     request_model = extract_model_id(instance)
-    server_address: str | None = None
-    server_port: int | None = None
-    base_url = getattr(instance, "base_url", None)
-    if base_url:
-        try:
-            parsed = urllib.parse.urlparse(str(base_url))
-            server_address = parsed.hostname
-            server_port = safe_int(parsed.port)
-        except Exception:
-            pass
+    server_address, server_port = _resolve_model_endpoint(
+        instance, is_async=is_async
+    )
 
     session_id = extract_session_id(
         instance=instance,
@@ -1943,7 +2006,7 @@ def _model_aprocess_response(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation, assistant_message, _ = _start_model_inference(
-            handler, instance, args, kwargs, wrapped=wrapped
+            handler, instance, args, kwargs, wrapped=wrapped, is_async=True
         )
         with invocation:
             result = await wrapped(*args, **kwargs)
@@ -2019,7 +2082,7 @@ def _model_aprocess_response_stream(
 
         def _start() -> InferenceInvocation:
             invocation, _, _ = _start_model_inference(
-                handler, instance, args, kwargs, wrapped=wrapped
+                handler, instance, args, kwargs, wrapped=wrapped, is_async=True
             )
             return invocation
 
