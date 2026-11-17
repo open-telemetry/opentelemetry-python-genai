@@ -114,6 +114,24 @@ async def test_async_chat_error_is_recorded_and_reraised(
 
 
 @pytest.mark.asyncio
+async def test_async_chat_stop_async_iteration_from_sdk_is_recorded(
+    instrument_no_content, span_exporter, monkeypatch
+):
+    async def _raise(*_args, **_kwargs):
+        raise StopAsyncIteration
+
+    monkeypatch.setattr(ollama.AsyncClient, "_request", _raise)
+    with pytest.raises(StopAsyncIteration):
+        await ollama.AsyncClient(host=HOST).chat(
+            model=CHAT_MODEL, messages=MESSAGES
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "StopAsyncIteration"
+
+
+@pytest.mark.asyncio
 async def test_async_chat_stream_error_is_recorded(
     instrument_no_content, span_exporter, vcr
 ):

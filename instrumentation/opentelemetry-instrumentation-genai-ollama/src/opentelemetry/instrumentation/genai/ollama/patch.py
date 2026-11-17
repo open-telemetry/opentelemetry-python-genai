@@ -93,14 +93,19 @@ def _chat(handler: TelemetryHandler) -> Callable[..., Any]:
         invocation = create_chat_invocation(handler, instance, args, kwargs)
         with invocation.activate():
             try:
-                result = wrapped(*args, **kwargs)
-            finally:
-                invocation.input_messages = (
-                    messages_capture.extract(get_input_messages) or []
-                )
-                invocation.tool_definitions = tools_capture.extract(
-                    get_tool_definitions
-                )
+                try:
+                    result = wrapped(*args, **kwargs)
+                finally:
+                    invocation.input_messages = (
+                        messages_capture.extract(get_input_messages) or []
+                    )
+                    invocation.tool_definitions = tools_capture.extract(
+                        get_tool_definitions
+                    )
+            # activate() doesn't fail on StopIteration or GeneratorExit.
+            except BaseException as error:
+                invocation.fail(error)
+                raise
         if kwargs.get("stream"):
             return ChatStreamWrapper(result, invocation, capture_content)
         set_chat_response(invocation, result, capture_content)
@@ -130,14 +135,19 @@ def _async_chat(handler: TelemetryHandler) -> Callable[..., Any]:
         invocation = create_chat_invocation(handler, instance, args, kwargs)
         with invocation.activate():
             try:
-                result = await wrapped(*args, **kwargs)
-            finally:
-                invocation.input_messages = (
-                    messages_capture.extract(get_input_messages) or []
-                )
-                invocation.tool_definitions = tools_capture.extract(
-                    get_tool_definitions
-                )
+                try:
+                    result = await wrapped(*args, **kwargs)
+                finally:
+                    invocation.input_messages = (
+                        messages_capture.extract(get_input_messages) or []
+                    )
+                    invocation.tool_definitions = tools_capture.extract(
+                        get_tool_definitions
+                    )
+            # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
+            except BaseException as error:
+                invocation.fail(error)
+                raise
         if kwargs.get("stream"):
             return AsyncChatStreamWrapper(result, invocation, capture_content)
         set_chat_response(invocation, result, capture_content)

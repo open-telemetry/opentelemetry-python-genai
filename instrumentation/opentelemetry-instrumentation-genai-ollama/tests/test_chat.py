@@ -443,6 +443,21 @@ def test_chat_error_is_recorded_and_reraised(
     )
 
 
+def test_chat_stop_iteration_from_sdk_is_recorded(
+    instrument_no_content, span_exporter, monkeypatch
+):
+    def _raise(*_args: Any, **_kwargs: Any) -> Any:
+        raise StopIteration
+
+    monkeypatch.setattr(ollama.Client, "_request", _raise)
+    with pytest.raises(StopIteration):
+        ollama.Client(host=HOST).chat(model=CHAT_MODEL, messages=MESSAGES)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "StopIteration"
+
+
 def test_chat_with_positional_arguments(
     instrument_with_content, span_exporter, vcr
 ):
