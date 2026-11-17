@@ -162,9 +162,9 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   invocation during reads, and an override bypasses that guard.
 - Flag code that imports, calls, reads, sets, or mimics private (`_`-prefixed) util APIs, including
   stand-ins that fake util internals (e.g. a `_suspended` attribute) instead of a real invocation.
-  Allowed: the stream wrapper hooks subclasses implement (`_process_chunk`, `_on_stream_end`,
-  `_on_stream_error`), `_set_stream` for SDKs that swap the stream, the subclass's own `_self_*`
-  attributes, and the `_attach_to_context` parameter because it is legacy. See
+  Exceptions: `_process_chunk`, `_on_stream_end`, `_on_stream_error`, `_set_stream`, `_self_*`
+  attributes, `_attach_to_context`
+  ([#1105](https://github.com/open-telemetry/opentelemetry-python-genai/issues/1105)). See
   [private APIs](../../instrumentation/AGENTS.md#private-apis).
 - Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK
   didn't do (materializing a result early to build telemetry — stay lazy); a changed return type
