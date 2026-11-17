@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -27,7 +26,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 def _output_parts(report: LiveCheckReport) -> list[dict[str, Any]]:
     output_messages = [
-        json.loads(attribute["value"])
+        attribute["value"]
         for entry in report["samples"]
         if "span" in entry
         for attribute in entry["span"]["attributes"]
@@ -46,26 +45,32 @@ class GenerateContentServerToolCallingScenario(Scenario):
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
-        assert _output_parts(report)[:2] == [
-            {
-                "name": "code_execution",
-                "server_tool_call": {
-                    "code": 'print("one")\n',
-                    "language": "PYTHON",
-                    "type": "code_execution",
-                },
-                "id": None,
-                "type": "server_tool_call",
+        expected_call = {
+            "name": "code_execution",
+            "server_tool_call": {
+                "code": 'print("one")\n',
+                "language": "PYTHON",
+                "type": "code_execution",
             },
-            {
-                "server_tool_call_response": {
-                    "outcome": "OUTCOME_OK",
-                    "output": "one\n",
-                    "type": "code_execution",
-                },
-                "id": None,
-                "type": "server_tool_call_response",
+            "type": "server_tool_call",
+        }
+        expected_response = {
+            "server_tool_call_response": {
+                "outcome": "OUTCOME_OK",
+                "output": "one\n",
+                "type": "code_execution",
             },
+            "type": "server_tool_call_response",
+        }
+        assert _output_parts(report) == [
+            expected_call,
+            expected_response,
+            {
+                "type": "text",
+                "content": 'I have run the Python code to print "one":\n\n',
+            },
+            expected_call,
+            expected_response,
         ]
 
     def run(

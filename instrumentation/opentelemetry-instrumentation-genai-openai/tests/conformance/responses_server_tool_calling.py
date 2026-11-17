@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from openai import OpenAI
@@ -29,7 +28,7 @@ class ResponsesServerToolCallingScenario(Scenario):
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
         output_messages = [
-            json.loads(attribute["value"])
+            attribute["value"]
             for entry in report["samples"]
             if "span" in entry
             for attribute in entry["span"]["attributes"]

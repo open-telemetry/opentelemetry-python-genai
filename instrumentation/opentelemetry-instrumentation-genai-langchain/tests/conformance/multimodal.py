@@ -12,7 +12,6 @@ message as an image ``Blob`` part (``type == "blob"``,
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 from unittest import mock
@@ -427,13 +426,14 @@ def _attr(span: dict[str, Any], name: str) -> Any:
     return None
 
 
-def _part_fields(messages_json: str | None) -> list[tuple[str, str | None]]:
-    # gen_ai.{input,output}.messages is a JSON string of
-    # [{"role": ..., "parts": [{"type": ..., "modality": ...}]}]. Keep
+def _part_fields(
+    messages: list[dict[str, Any]] | None,
+) -> list[tuple[str, str | None]]:
+    # gen_ai.{input,output}.messages is a list of
+    # {"role": ..., "parts": [{"type": ..., "modality": ...}]}. Keep
     # modality so image/audio/video are distinguishable on blob parts.
-    messages = json.loads(messages_json) if messages_json else []
     return [
         (part["type"], part.get("modality"))
-        for message in messages
+        for message in (messages or [])
         for part in message["parts"]
     ]

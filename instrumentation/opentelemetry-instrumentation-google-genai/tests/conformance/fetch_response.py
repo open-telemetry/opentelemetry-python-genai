@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -32,9 +31,12 @@ def _attr(span: dict[str, Any], name: str) -> Any:
     return None
 
 
-def _part_types(messages_json: str | None) -> list[str]:
-    messages = json.loads(messages_json) if messages_json else []
-    return [part["type"] for message in messages for part in message["parts"]]
+def _part_types(messages: list[dict[str, Any]] | None) -> list[str]:
+    return [
+        part["type"]
+        for message in (messages or [])
+        for part in message["parts"]
+    ]
 
 
 class FetchResponseScenario(Scenario):

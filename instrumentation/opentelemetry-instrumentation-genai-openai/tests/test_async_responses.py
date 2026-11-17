@@ -37,6 +37,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.utils import is_experimental_mode
 
@@ -158,9 +159,7 @@ async def _collect_completed_response(stream):
 
 
 def _load_span_messages(span, attribute):
-    value = span.attributes.get(attribute)
-    assert value is not None
-    return json.loads(value)
+    return get_content_attribute(span.attributes, attribute)
 
 
 def _assert_response_content(span, response, log_exporter):
@@ -168,9 +167,9 @@ def _assert_response_content(span, response, log_exporter):
         span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
         USER_ONLY_EXPECTED_INPUT_MESSAGES,
     )
-    assert (
-        json.loads(span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS])
-        == EXPECTED_SYSTEM_INSTRUCTIONS
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS],
+        EXPECTED_SYSTEM_INSTRUCTIONS,
     )
     assert_messages_attribute(
         span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
@@ -504,9 +503,9 @@ async def test_async_responses_retrieve_captures_content(
         span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
         format_simple_expected_output_message(response.output_text),
     )
-    assert (
-        json.loads(span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS])
-        == EXPECTED_SYSTEM_INSTRUCTIONS
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS],
+        EXPECTED_SYSTEM_INSTRUCTIONS,
     )
     # A fetched response does not carry the original input messages.
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes

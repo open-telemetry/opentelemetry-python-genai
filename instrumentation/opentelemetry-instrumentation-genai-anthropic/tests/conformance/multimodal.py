@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 from unittest import mock
@@ -24,8 +23,8 @@ from ..conftest import (
     _IMAGE_URL,
     _NESTED_IMAGE_URL,
     _PDF_URL,
-    _REAL_PDF_B64,
-    _REAL_PNG_B64,
+    _REAL_PDF_BYTES,
+    _REAL_PNG_BYTES,
     multimodal_input_message,
 )
 
@@ -102,9 +101,7 @@ class MultimodalScenario(Scenario):
         ]
         assert chat_spans, "no chat span emitted"
 
-        input_messages = json.loads(
-            _attr(chat_spans[0], "gen_ai.input.messages")
-        )
+        input_messages = _attr(chat_spans[0], "gen_ai.input.messages")
         assert len(input_messages) == 1
         assert input_messages[0]["role"] == "user"
 
@@ -118,11 +115,10 @@ class MultimodalScenario(Scenario):
             "type": "blob",
             "mime_type": "image/png",
             "modality": "image",
-            "content": _REAL_PNG_B64,
+            "content": _REAL_PNG_BYTES,
         }
         assert parts[2] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "image",
             "uri": _IMAGE_URL,
         }
@@ -130,11 +126,10 @@ class MultimodalScenario(Scenario):
             "type": "blob",
             "mime_type": "application/pdf",
             "modality": "document",
-            "content": _REAL_PDF_B64,
+            "content": _REAL_PDF_BYTES,
         }
         assert parts[4] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "document",
             "uri": _PDF_URL,
         }
@@ -142,7 +137,7 @@ class MultimodalScenario(Scenario):
             "type": "blob",
             "mime_type": "text/plain",
             "modality": "document",
-            "content": "RG9jdW1lbnQgdGV4dA==",
+            "content": b"Document text",
         }
         assert parts[6] == {
             "type": "text",
@@ -150,19 +145,16 @@ class MultimodalScenario(Scenario):
         }
         assert parts[7] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "image",
             "uri": _NESTED_IMAGE_URL,
         }
         assert parts[8] == {
             "type": "file",
-            "mime_type": None,
             "modality": "image",
             "file_id": _IMAGE_FILE_ID,
         }
         assert parts[9] == {
             "type": "file",
-            "mime_type": None,
             "modality": "document",
             "file_id": _PDF_FILE_ID,
         }

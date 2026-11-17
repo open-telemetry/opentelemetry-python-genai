@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 from unittest import mock
@@ -31,7 +30,7 @@ class ServerToolCallingScenario(Scenario):
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
         output_messages = [
-            json.loads(attribute["value"])
+            attribute["value"]
             for entry in report["samples"]
             if "span" in entry
             for attribute in entry["span"]["attributes"]
