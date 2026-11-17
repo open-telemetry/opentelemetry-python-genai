@@ -162,13 +162,18 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   invocation during reads, and an override bypasses that guard.
 - Flag code that imports, calls, reads, sets, or mimics private (`_`-prefixed) util APIs, including
   stand-ins that fake util internals (e.g. a `_suspended` attribute) instead of a real invocation.
-  The `_attach_to_context` parameter is allowed because it is legacy. See
+  Allowed: the stream wrapper hooks subclasses implement (`_process_chunk`, `_on_stream_end`,
+  `_on_stream_error`), `_set_stream` for SDKs that swap the stream, the subclass's own `_self_*`
+  attributes, and the `_attach_to_context` parameter because it is legacy. See
   [private APIs](../../instrumentation/AGENTS.md#private-apis).
 - Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK
   didn't do (materializing a result early to build telemetry — stay lazy); a changed return type
   (`isinstance`/`__class__` should still resolve to the original; `wrapt.ObjectProxy` is the usual
   way); and replacement functions missing `@functools.wraps(original)`. Full transparency isn't
   always reachable — prefer the least intrusive option that works.
+- Agent and workflow invocations start when the wrapped call starts, not later (e.g. on the first
+  stream read or after the library normalizes its input). Starting the span at call time is not SDK
+  work done early. Flag deferred starts.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
 ## 3. Operation scope
