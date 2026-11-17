@@ -2090,13 +2090,14 @@ def _ensure_model_ainvoke_stream_wrapped(model_cls: type[Any]) -> None:
     if not _is_instrumented:
         return
     for cls in model_cls.__mro__:
-        if "ainvoke_stream" in cls.__dict__:
-            if not hasattr(cls.__dict__["ainvoke_stream"], "__wrapped__"):
-                wrap_function_wrapper(
-                    cls, "ainvoke_stream", _model_delegate_stream_hook
-                )
-                _PATCHED_MODEL_STREAM_CLASSES.add(cls)
-            break
+        fn = cls.__dict__.get("ainvoke_stream")
+        if fn is None or getattr(fn, "__isabstractmethod__", False):
+            continue
+        if not hasattr(fn, "__wrapped__"):
+            wrap_function_wrapper(
+                cls, "ainvoke_stream", _model_delegate_stream_hook
+            )
+            _PATCHED_MODEL_STREAM_CLASSES.add(cls)
 
 
 def _model_aprocess_response_stream(
