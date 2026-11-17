@@ -770,42 +770,96 @@ def test_model_tool_call_arguments_json_decoding_and_fallback(
     span_exporter,
 ) -> None:
     """Test that JSON-encoded tool call arguments are decoded while malformed JSON strings are preserved."""
+    import httpx
+    import openai
+    from agno.models.openai import OpenAIChat
 
-    class ToolArgsModel(MockModel):
-        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
-            return ModelResponse(
-                content=None,
-                tool_calls=[
-                    {
-                        "id": "call_valid",
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": '{"city": "Paris", "unit": "celsius"}',
-                        },
+    turn = 0
+
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal turn
+        turn += 1
+        if turn == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-tool-args-1",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": "gpt-4o-2024-08-06",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_valid",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "get_weather",
+                                            "arguments": '{"city": "Paris", "unit": "celsius"}',
+                                        },
+                                    },
+                                    {
+                                        "id": "call_malformed",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "raw_tool",
+                                            "arguments": "{not valid json",
+                                        },
+                                    },
+                                ],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
                     },
-                    {
-                        "id": "call_malformed",
-                        "type": "function",
-                        "function": {
-                            "name": "raw_tool",
-                            "arguments": "{not valid json",
-                        },
-                    },
-                ],
-                response_usage=MessageMetrics(
-                    input_tokens=10, output_tokens=5
-                ),
+                },
             )
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-tool-args-2",
+                "object": "chat.completion",
+                "created": 1700000001,
+                "model": "gpt-4o-2024-08-06",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Completed tool check",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 4,
+                    "total_tokens": 24,
+                },
+            },
+        )
 
-    model = ToolArgsModel(id="tool-args-model", provider="OpenAI")
-    model._process_model_response(
+    client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(transport=httpx.MockTransport(_handler)),
+    )
+    model = OpenAIChat(id="tool-args-model", client=client)
+    model.response(
         messages=[
             Message(
                 role="assistant",
                 tool_calls=[
                     {
                         "id": "hist_call",
+                        "type": "function",
                         "function": {
                             "name": "lookup",
                             "arguments": '{"query": "otel"}',
@@ -814,12 +868,10 @@ def test_model_tool_call_arguments_json_decoding_and_fallback(
                 ],
             )
         ],
-        assistant_message=Message(role="assistant"),
-        model_response=ModelResponse(),
     )
 
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
+    assert len(spans) == 2
     span = spans[0]
 
     input_msgs: Any = span.attributes.get(
@@ -1519,7 +1571,32 @@ def test_model_tool_definitions_gated_by_content_capture(
             },
         }
     ]
-    model = _SyncModel(id="gpt-4o", provider="OpenAI")
+    import httpx
+    import openai
+    from agno.models.openai import OpenAIChat
+
+    payload = {
+        "id": "chatcmpl-tool-defs-1",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o-2024-08-06",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi back"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _req: httpx.Response(200, json=payload)
+            )
+        ),
+    )
+    model = OpenAIChat(id="gpt-4o", client=client)
 
     with instrument(
         AgnoInstrumentor(),
@@ -1528,10 +1605,8 @@ def test_model_tool_definitions_gated_by_content_capture(
         meter_provider=meter_provider,
         content_capture="NO_CONTENT",
     ):
-        model._process_model_response(
+        model.response(
             messages=[Message(role="user", content="hi")],
-            assistant_message=Message(role="assistant"),
-            model_response=ModelResponse(),
             tools=tool_schema,
         )
 
@@ -1550,10 +1625,8 @@ def test_model_tool_definitions_gated_by_content_capture(
         meter_provider=meter_provider,
         content_capture="SPAN_ONLY",
     ):
-        model._process_model_response(
+        model.response(
             messages=[Message(role="user", content="hi")],
-            assistant_message=Message(role="assistant"),
-            model_response=ModelResponse(),
             tools=tool_schema,
         )
 
@@ -2907,6 +2980,8 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
 
         async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
             nonlocal async_closed
+            _retained = self.retained_caller_stream
+            assert _retained is not None or _retained is None
             try:
                 yield ModelResponse(
                     content="async chunk 1",
@@ -2920,6 +2995,7 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
                 async_closed = True
 
     model = _ThrowStreamModel(id="throw-model", provider="OpenAI")
+    model.retained_caller_stream = None
     stream = model.response_stream(
         messages=[Message(role="user", content="Hi")],
     )
@@ -2942,7 +3018,21 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
 
     span_exporter.clear()
 
+    caller_stream_closed = False
+
+    async def _caller_owned_stream() -> Any:
+        nonlocal caller_stream_closed
+        try:
+            yield "caller-item-1"
+            yield "caller-item-2"
+        finally:
+            caller_stream_closed = True
+
     async def _run_async() -> None:
+        caller_gen = _caller_owned_stream()
+        assert await caller_gen.__anext__() == "caller-item-1"
+        model.retained_caller_stream = caller_gen
+
         astream = model.aresponse_stream(
             messages=[Message(role="user", content="Hi async")],
         )
@@ -2954,6 +3044,10 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
         with pytest.raises(ValueError, match="Injected async error"):
             await astream.athrow(ValueError("Injected async error"))
         assert async_closed
+        assert not caller_stream_closed
+        assert await caller_gen.__anext__() == "caller-item-2"
+        await caller_gen.aclose()
+        assert caller_stream_closed
         assert astream._self_inner_stream._self_stream.ag_frame is None
         del astream
         gc.collect()
@@ -2966,3 +3060,130 @@ def test_model_stream_throw_and_athrow_finalize_inner_wrapper(
     assert async_span.attributes.get(
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
     ) == ("length",)
+
+
+def test_model_injected_client_endpoint_overrides_adapter_base_url(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+) -> None:
+    """Test that injected client/async_client endpoints override adapter base_url on spans and metrics without eagerly constructing optional clients."""
+    import httpx
+    import openai
+    from agno.models.openai import OpenAIChat
+
+    payload = {
+        "id": "chatcmpl-endpoint-1",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o-2024-08-06",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 8,
+            "completion_tokens": 4,
+            "total_tokens": 12,
+        },
+    }
+
+    sync_client = openai.OpenAI(
+        api_key="test-key",
+        base_url="https://sync-injected.example.com:8443/v1",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _req: httpx.Response(200, json=payload)
+            )
+        ),
+    )
+    async_client = openai.AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://async-injected.example.com:9443/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _req: httpx.Response(200, json=payload)
+            )
+        ),
+    )
+
+    model = OpenAIChat(
+        id="gpt-4o",
+        base_url="https://adapter-unused.example.com:7000/v1",
+        client=sync_client,
+        async_client=async_client,
+    )
+    model.response(messages=[Message(role="user", content="sync check")])
+    asyncio.run(
+        model.aresponse(messages=[Message(role="user", content="async check")])
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    sync_span, async_span = spans
+    assert sync_span.attributes.get("server.address") == (
+        "sync-injected.example.com"
+    )
+    assert sync_span.attributes.get("server.port") == 8443
+    assert async_span.attributes.get("server.address") == (
+        "async-injected.example.com"
+    )
+    assert async_span.attributes.get("server.port") == 9443
+
+    metrics_data = metric_reader.get_metrics_data()
+    duration_endpoints: set[tuple[Any, Any]] = set()
+    token_endpoints: set[tuple[Any, Any]] = set()
+    for resource_metric in metrics_data.resource_metrics:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                if metric.name == "gen_ai.client.operation.duration":
+                    for dp in metric.data.data_points:
+                        duration_endpoints.add(
+                            (
+                                dp.attributes.get("server.address"),
+                                dp.attributes.get("server.port"),
+                            )
+                        )
+                elif metric.name == "gen_ai.client.token.usage":
+                    for dp in metric.data.data_points:
+                        token_endpoints.add(
+                            (
+                                dp.attributes.get("server.address"),
+                                dp.attributes.get("server.port"),
+                            )
+                        )
+    expected_endpoints = {
+        ("sync-injected.example.com", 8443),
+        ("async-injected.example.com", 9443),
+    }
+    assert expected_endpoints.issubset(duration_endpoints)
+    assert expected_endpoints.issubset(token_endpoints)
+
+    # Also verify an adapter without injected client resolves its own base_url
+    # without eagerly constructing optional clients before invoke().
+    span_exporter.clear()
+    constructed_During_start: list[bool] = []
+
+    class _LazyClientModel(MockModel):
+        client: Any = None
+        async_client: Any = None
+        base_url: str = "https://lazy-adapter.example.com:6443/v1"
+
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            constructed_During_start.append(
+                self.client is not None or self.async_client is not None
+            )
+            return ModelResponse(content="lazy ok")
+
+    lazy_model = _LazyClientModel(id="lazy-m", provider="OpenAI")
+    lazy_model.response(messages=[Message(role="user", content="lazy")])
+    assert constructed_During_start == [False]
+    (lazy_span,) = span_exporter.get_finished_spans()
+    assert (
+        lazy_span.attributes.get("server.address")
+        == "lazy-adapter.example.com"
+    )
+    assert lazy_span.attributes.get("server.port") == 6443

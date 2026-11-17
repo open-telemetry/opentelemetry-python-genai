@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import contextlib
-import gc
+import functools
 import inspect
 from collections.abc import Awaitable, Callable, Iterator
 from contextvars import ContextVar
@@ -460,6 +460,34 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         return super()._advance(read)
 
 
+def _bind_model_delegate_stream_hooks(model: Any) -> None:
+    if model is None:
+        return
+    for method_name in ("_ainvoke_stream_with_retry", "ainvoke_stream"):
+        method = getattr(model, method_name, None)
+        if not callable(method) or getattr(
+            method, "_otel_agno_stream_hooked", False
+        ):
+            continue
+
+        def _make_wrapper(orig: Callable[..., Any]) -> Callable[..., Any]:
+            @functools.wraps(orig)
+            def _wrapped(*args: Any, **kwargs: Any) -> Any:
+                stream = orig(*args, **kwargs)
+                current = _CURRENT_MODEL_ASTREAM.get()
+                if current is not None and current._self_model is model:
+                    current._register_delegate_stream(stream)
+                return stream
+
+            setattr(_wrapped, "_otel_agno_stream_hooked", True)
+            return _wrapped
+
+        try:
+            setattr(model, method_name, _make_wrapper(method))
+        except Exception:
+            pass
+
+
 class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
     """Stream wrapper for asynchronous Agno model responses."""
 
@@ -480,40 +508,46 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         self._self_model = model
         self._self_stream_images = []
         self._self_stream_videos = []
+        self._self_delegate_streams: list[Any] = []
+        _bind_model_delegate_stream_hooks(model)
         outer = _CURRENT_OUTER_ASTREAM.get()
         if outer is not None:
             outer._bind_inner(self)
+
+    def _register_delegate_stream(self, stream: Any) -> None:
+        if stream is not None and stream not in self._self_delegate_streams:
+            self._self_delegate_streams.append(stream)
+
+    @contextlib.contextmanager
+    def _execution_context(self) -> Iterator[None]:
+        token = _CURRENT_MODEL_ASTREAM.set(self)
+        try:
+            with super()._execution_context():
+                yield
+        finally:
+            _CURRENT_MODEL_ASTREAM.reset(token)
 
     async def _advance(self, read: Callable[[], Awaitable[Any]]) -> Any:
         self._ensure_invocation()
         return await super()._advance(read)
 
     async def _close_stream(self) -> None:
-        nested: list[Any] = []
-        seen: set[int] = set()
-        stack: list[Any] = [self._self_stream]
-        while stack:
-            cur = stack.pop()
-            if id(cur) in seen:
-                continue
-            seen.add(id(cur))
-            if inspect.isasyncgen(cur):
-                if cur is not self._self_stream:
-                    nested.append(cur)
-                for ref in gc.get_referents(cur):
-                    if inspect.isasyncgen(ref) or inspect.isframe(ref):
-                        stack.append(ref)
-            elif inspect.isframe(cur):
-                for ref in gc.get_referents(cur):
-                    if inspect.isasyncgen(ref):
-                        stack.append(ref)
+        delegates = list(reversed(self._self_delegate_streams))
+        self._self_delegate_streams.clear()
         try:
             await super()._close_stream()
         finally:
-            for gen in nested:
-                await gen.aclose()
+            for delegate in delegates:
+                aclose = getattr(delegate, "aclose", None)
+                if callable(aclose):
+                    res = aclose()
+                    if inspect.isawaitable(res):
+                        await res
 
 
+_CURRENT_MODEL_ASTREAM: ContextVar[AsyncAgnoModelStreamWrapper | None] = (
+    ContextVar("_CURRENT_MODEL_ASTREAM", default=None)
+)
 _CURRENT_OUTER_STREAM: ContextVar[AgnoOuterSyncStreamWrapper | None] = (
     ContextVar("_CURRENT_OUTER_STREAM", default=None)
 )

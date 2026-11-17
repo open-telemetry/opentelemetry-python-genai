@@ -27,15 +27,14 @@ from opentelemetry.test_util_genai.conformance import (
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 
-# Agno's OpenAIChat adapter leaves base_url unset by default and does not copy
-# response.model or choices[0].finish_reason onto ModelResponse.
+# Agno's OpenAIChat adapter does not copy response.model or
+# choices[0].finish_reason onto ModelResponse.
 _OPENAI_CHAT_GAPS = tuple(
     ExpectedViolation(
         advice_id="genai_expected_attribute_missing",
         message_substring=attribute,
     )
     for attribute in (
-        "server.address",
         "gen_ai.response.model",
         "gen_ai.response.finish_reasons",
     )
