@@ -1,0 +1,1 @@
+Move `wrapt` to an optional `opentelemetry-util-genai[wrapt]` extra (used by `opentelemetry.util.genai.stream` and `opentelemetry.util.genai.iterator_capture`) and remove the unused `opentelemetry-instrumentation` dependency from `opentelemetry-util-genai`.

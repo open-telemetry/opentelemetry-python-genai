@@ -4,12 +4,13 @@
 """Test configuration and fixtures for Anthropic instrumentation tests."""
 # pylint: disable=redefined-outer-name
 
-import json
+import logging
 import os
 
+import anthropic
 import pytest
 import pytest_asyncio
-from anthropic import Anthropic, AsyncAnthropic
+from anthropic import NOT_GIVEN, Anthropic, AsyncAnthropic
 
 from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
 from opentelemetry.sdk.trace import ReadableSpan
@@ -27,6 +28,52 @@ pytest_plugins = [
 # anthropic >= 2 has built-in tracing on the global tracer provider; keep it off so
 # tests only see spans from this instrumentation.
 os.environ["ANTHROPIC_OPEN_TELEMETRY"] = "false"
+
+
+# Sentinels the SDK uses for "argument not supplied". `omit` only exists in
+# newer SDK versions (the oldest supported release has just NOT_GIVEN).
+UNSET_SENTINELS = [
+    pytest.param(NOT_GIVEN, id="not_given"),
+    pytest.param(
+        getattr(anthropic, "omit", None),
+        id="omit",
+        marks=pytest.mark.skipif(
+            not hasattr(anthropic, "omit"),
+            reason="installed anthropic has no `omit`",
+        ),
+    ),
+]
+
+UNSET_SAMPLING_ATTRIBUTES = (
+    GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES,
+    GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE,
+    GenAIAttributes.GEN_AI_REQUEST_TOP_P,
+    GenAIAttributes.GEN_AI_REQUEST_TOP_K,
+)
+
+
+def unset_sampling_kwargs(unset, supported_params):
+    """Set every sampling kwarg the installed SDK method accepts to `unset`.
+
+    Newer SDK releases dropped some of these parameters from the signature.
+    """
+    return {
+        name: unset
+        for name in ("stop_sequences", "temperature", "top_p", "top_k")
+        if name in supported_params
+    }
+
+
+def assert_unset_sampling_attributes_omitted(span, caplog) -> None:
+    """Unset SDK sentinels must not leak into request attributes or logs."""
+    for attribute in UNSET_SAMPLING_ATTRIBUTES:
+        assert attribute not in span.attributes
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+        and "Invalid type" in record.getMessage()
+    ]
 
 
 def multimodal_input_message():
@@ -96,11 +143,11 @@ def multimodal_input_message():
 
 
 def assert_multimodal_input(span: ReadableSpan) -> None:
-    value = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    assert value is not None
-    assert isinstance(value, str)
-    messages = json.loads(value)
-    assert isinstance(messages, list)
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    messages = get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
 
@@ -114,11 +161,10 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
         "type": "blob",
         "mime_type": "image/png",
         "modality": "image",
-        "content": "QUJD",
+        "content": b"ABC",
     }
     assert parts[2] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "image",
         "uri": "https://example.com/image.png",
     }
@@ -126,11 +172,10 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
         "type": "blob",
         "mime_type": "application/pdf",
         "modality": "document",
-        "content": "QUJD",
+        "content": b"ABC",
     }
     assert parts[4] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "document",
         "uri": "https://example.com/document.pdf",
     }
@@ -138,7 +183,7 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
         "type": "blob",
         "mime_type": "text/plain",
         "modality": "document",
-        "content": "RG9jdW1lbnQgdGV4dA==",
+        "content": b"Document text",
     }
     assert parts[6] == {
         "type": "text",
@@ -146,7 +191,6 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
     }
     assert parts[7] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "image",
         "uri": "https://example.com/nested.png",
     }
@@ -231,6 +275,5 @@ def instrument_event_only(tracer_provider, logger_provider, meter_provider):
         logger_provider=logger_provider,
         meter_provider=meter_provider,
         content_capture="EVENT_ONLY",
-        emit_event=True,
     ) as instrumentor:
         yield instrumentor

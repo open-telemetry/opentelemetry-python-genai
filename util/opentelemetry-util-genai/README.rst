@@ -115,16 +115,21 @@ Context data classes accept two boolean parameters (defaulting to ``False``):
 Stream execution context
 ------------------------
 
+.. note::
+
+   ``opentelemetry.util.genai.stream`` requires the ``wrapt`` extra
+   (``pip install opentelemetry-util-genai[wrapt]``).
+
 ``SyncStreamWrapper`` and ``AsyncStreamWrapper`` scope each stream read and
 cleanup operation with ``_execution_context()``. Context is restored before
 returning a chunk to the consumer. Generator ``send``/``throw`` and
 ``asend``/``athrow`` also use this scope when the underlying stream supports them.
 
-For invocation-backed streams, pass the invocation to the base constructor
-(``super().__init__(stream, invocation)``) and call ``invocation.suspend()``
-before returning the stream. The base wrapper then makes the suspended invocation
-current during reads, cleanup and finalization of an abandoned stream, so no
-``_execution_context()`` override is needed.
+For invocation-backed streams, create the invocation with
+``_attach_to_context=False`` and pass it to the base constructor
+(``super().__init__(stream, invocation)``). The base wrapper then makes the
+invocation current during reads, cleanup and finalization of an abandoned
+stream, so no ``_execution_context()`` override is needed.
 Keep finalization in the existing ``_on_stream_end`` and ``_on_stream_error`` hooks.
 
 
@@ -170,10 +175,11 @@ Set ``RetrievalInvocation.documents`` using
         invocation.documents = [RetrievalDocument(id="doc-1", score=0.9)]
 
 The model contains only the optional ``id`` and ``score`` fields; unset
-fields serialize as JSON ``null``. Documents are recorded in
-``gen_ai.retrieval.documents`` only in ``SPAN_ONLY`` or ``SPAN_AND_EVENT``
-content-capture mode. Passing dictionaries is deprecated, but existing
-dictionary payloads continue to serialize unchanged.
+fields are omitted when recorded. Documents are recorded as structured
+values in ``gen_ai.retrieval.documents`` only in ``SPAN_ONLY`` or
+``SPAN_AND_EVENT`` content-capture mode. Passing dictionaries is
+deprecated, but existing dictionary payloads continue to be recorded
+unchanged.
 
 
 Environment Variables
@@ -188,20 +194,19 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 - ``EVENT_ONLY``: Capture message content in events only.
 - ``SPAN_AND_EVENT``: Capture message content in both spans and events.
 
-To control event emission, you can optionally set ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` to ``true`` or ``false`` (case-insensitive).
-This variable controls whether to emit ``gen_ai.client.inference.operation.details`` events.
-If not explicitly set, the default value is automatically determined by ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``:
+When a ``LoggerProvider`` is configured, the package emits ``gen_ai.client.inference.operation.details``
+events (with ``DEBUG`` severity) regardless of the content capturing mode. Message content is
+included as structured dictionaries in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
+To suppress these events while keeping a ``LoggerProvider`` active, configure your logger or
+``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
+<https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
 
-- When ``NO_CONTENT`` or ``SPAN_ONLY`` is set: defaults to ``false``
-- When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` is set: defaults to ``true``
-
-If explicitly set, the user's value takes precedence over the default.
-
-When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode is enabled and a LoggerProvider is configured,
-the package also emits ``gen_ai.client.inference.operation.details`` events with structured
-message content (as dictionaries instead of JSON strings). Note that when using ``EVENT_ONLY``
-or ``SPAN_AND_EVENT``, the ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` environment variable defaults
-to ``true``, so events will be emitted automatically unless explicitly set to ``false``.
+When an inference, embeddings, retrieval, fetch response, agent invocation, or tool execution
+operation fails with an exception, the package also emits the operation's exception event (for
+example ``gen_ai.client.inference.exception``) with ``WARN`` severity, carrying ``exception.type``,
+``exception.message``, and ``exception.stacktrace``. ``exception.message`` may contain sensitive
+information. The event is not emitted for failures reported without an exception, or for a
+``BaseException`` that is not an ``Exception``, such as cancellation.
 
 Completion Hook / Upload
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -248,9 +253,9 @@ This package sets the following span attributes on LLM invocations:
 
 **Content attributes (sensitive, requires content capturing enabled):**
 
-- ``gen_ai.input.messages``: Str('[{"role": "user", "parts": [{"content": "hello world", "type": "text"}]}]')
-- ``gen_ai.output.messages``: Str('[{"role": "assistant", "parts": [{"content": "hello back", "type": "text"}], "finish_reason": "stop"}]')
-- ``gen_ai.system_instructions``: Str('[{"content": "You are a helpful assistant.", "type": "text"}]')
+- ``gen_ai.input.messages``: Slice([Map({"role": "user", "parts": [{"content": "hello world", "type": "text"}]})])
+- ``gen_ai.output.messages``: Slice([Map({"role": "assistant", "parts": [{"content": "hello back", "type": "text"}], "finish_reason": "stop"})])
+- ``gen_ai.system_instructions``: Slice([Map({"content": "You are a helpful assistant.", "type": "text"})])
 
 **Error attributes:**
 
@@ -283,6 +288,11 @@ For embedding invocations, the following attributes are set:
 
 Capturing request iterators
 ---------------------------
+
+.. note::
+
+   ``opentelemetry.util.genai.iterator_capture`` requires the ``wrapt`` extra
+   (``pip install opentelemetry-util-genai[wrapt]``).
 
 Use ``IteratorCapture.from_property()`` for a named request property. It replaces
 that property's value in ``kwargs`` and records values as the SDK reads them.
@@ -329,9 +339,27 @@ Installation
 
     pip install opentelemetry-util-genai
 
-For upload support (requires ``fsspec``)::
+Optional Dependencies (Extras)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    pip install opentelemetry-util-genai[upload]
+The base ``opentelemetry-util-genai`` package depends only on ``opentelemetry-api``
+and ``opentelemetry-semantic-conventions`` (suitable for native SDK/framework integrations
+that call ``TelemetryHandler`` directly without monkeypatching or proxy wrappers).
+
+Additional capabilities are provided via optional extras:
+
+- ``wrapt`` -- Installs ``wrapt`` for transparent object-proxy wrappers in
+  ``opentelemetry.util.genai.stream`` (``SyncStreamWrapper``, ``AsyncStreamWrapper``,
+  ``SyncStreamManagerWrapper``, ``AsyncStreamManagerWrapper``) and
+  ``opentelemetry.util.genai.iterator_capture`` (``IteratorCapture``)::
+
+      pip install opentelemetry-util-genai[wrapt]
+
+- ``upload`` -- Installs ``fsspec`` for the built-in ``upload`` completion hook
+  (``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload``) to upload captured prompts and
+  completions to local or cloud object storage::
+
+      pip install opentelemetry-util-genai[upload]
 
 
 Design Document

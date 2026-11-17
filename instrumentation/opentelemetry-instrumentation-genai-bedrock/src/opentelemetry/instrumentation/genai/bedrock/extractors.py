@@ -90,6 +90,28 @@ def _safe_int(val: Any) -> int | None:
         return None
 
 
+def _total_input_tokens(
+    input_tokens: int | None,
+    cache_read_input_tokens: int | None,
+    cache_creation_input_tokens: int | None,
+) -> int | None:
+    """Bedrock input token counts (Converse ``inputTokens`` and InvokeModel's
+    ``x-amzn-bedrock-input-token-count`` / ``inputTokenCount``) exclude cached
+    tokens; the semantic conventions want ``gen_ai.usage.input_tokens`` to
+    include them."""
+    if (
+        input_tokens is None
+        and cache_read_input_tokens is None
+        and cache_creation_input_tokens is None
+    ):
+        return None
+    return (
+        (input_tokens or 0)
+        + (cache_read_input_tokens or 0)
+        + (cache_creation_input_tokens or 0)
+    )
+
+
 def _safe_float(val: Any) -> float | None:
     """Safely convert a value to float or return None."""
     if val is None:
@@ -419,11 +441,17 @@ def extract_converse_response(
 
     usage = response.get("usage")
     if _is_dict(usage):
-        invocation.input_tokens = usage.get("inputTokens")
-        invocation.output_tokens = usage.get("outputTokens")
-        invocation.cache_read_input_tokens = usage.get("cacheReadInputTokens")
-        invocation.cache_creation_input_tokens = usage.get(
-            "cacheWriteInputTokens"
+        invocation.output_tokens = _safe_int(usage.get("outputTokens"))
+        invocation.cache_read_input_tokens = _safe_int(
+            usage.get("cacheReadInputTokens")
+        )
+        invocation.cache_write_input_tokens = _safe_int(
+            usage.get("cacheWriteInputTokens")
+        )
+        invocation.input_tokens = _total_input_tokens(
+            _safe_int(usage.get("inputTokens")),
+            invocation.cache_read_input_tokens,
+            invocation.cache_write_input_tokens,
         )
 
 
@@ -636,11 +664,17 @@ def extract_invoke_model_response(
                 usage.get("cacheReadInputTokens"),
             )
         )
-        invocation.cache_creation_input_tokens = _safe_int(
+        invocation.cache_write_input_tokens = _safe_int(
             _first_not_none(
                 usage.get("cache_creation_input_tokens"),
                 usage.get("cacheWriteInputTokens"),
             )
+        )
+
+        invocation.input_tokens = _total_input_tokens(
+            invocation.input_tokens,
+            invocation.cache_read_input_tokens,
+            invocation.cache_write_input_tokens,
         )
 
     if invocation.input_tokens is None and "inputTextTokenCount" in body:

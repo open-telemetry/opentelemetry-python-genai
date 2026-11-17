@@ -5,6 +5,11 @@ import os
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -13,7 +18,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.util.genai.completion_hook import _NoOpCompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
@@ -25,7 +29,6 @@ from opentelemetry.util.genai.types import (
 
 _CAPTURE_EVENT_ENV = {
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY",
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT: "true",
 }
 
 
@@ -36,10 +39,16 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
+        self.log_exporter = InMemoryLogRecordExporter()
+        self.logger_provider = LoggerProvider()
+        self.logger_provider.add_log_record_processor(
+            SimpleLogRecordProcessor(self.log_exporter)
+        )
 
     def _make_handler(self, hook=None):
         return TelemetryHandler(
             tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
             completion_hook=hook,
         )
 
@@ -104,11 +113,14 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         handler.inference("openai", request_model="gpt-4o").stop()
 
     def test_log_record_is_none_when_events_disabled(self):
-        # Default env: no event.
+        # When logger is disabled (or no logger_provider configured), no event is created.
         # Also pins that tool_definitions defaults to None when unset
         # (the upload hook hashes off None vs []).
         hook = MagicMock()
-        handler = self._make_handler(hook)
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            completion_hook=hook,
+        )
 
         handler.inference("openai", request_model="gpt-4o").stop()
 

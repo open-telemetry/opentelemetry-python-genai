@@ -1,0 +1,73 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen2.5:0.5b",
+        "stream": false,
+        "options": {
+          "seed": 42,
+          "num_predict": 30,
+          "top_k": 20,
+          "top_p": 0.9,
+          "temperature": 0.2,
+          "stop": [
+            "\n\n"
+          ]
+        },
+        "format": "json",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello in three words."
+          }
+        ],
+        "tools": []
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '229'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/chat
+  response:
+    body:
+      string: |-
+        {
+          "model": "qwen2.5:0.5b",
+          "created_at": "2026-10-29T14:37:21.3520701Z",
+          "message": {
+            "role": "assistant",
+            "content": "{\"text\":\"Hello, how are you?\"}"
+          },
+          "done": true,
+          "done_reason": "stop",
+          "total_duration": 214449000,
+          "load_duration": 7927800,
+          "prompt_eval_count": 35,
+          "prompt_eval_cached_count": 34,
+          "prompt_eval_duration": 33012000,
+          "eval_count": 11,
+          "eval_duration": 162495000
+        }
+    headers:
+      content-length:
+      - '357'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 29 Oct 2026 14:37:21 GMT
+    status:
+      code: 200
+      message: OK
+version: 1

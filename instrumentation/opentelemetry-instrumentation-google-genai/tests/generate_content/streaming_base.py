@@ -48,7 +48,15 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": (
+                        {"content": "Hello", "type": "text"},
+                        {"content": "world", "type": "text"},
+                    ),
+                },
+            ),
         )
 
     def test_empty_tuple_contents_mimics_sdk_error(self):
@@ -71,7 +79,7 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS],
-            '[{"content":"Be polite","type":"text"}]',
+            ({"content": "Be polite", "type": "text"},),
         )
 
     def test_mixed_tuple_contents(self):
@@ -87,7 +95,15 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": (
+                        {"content": "Hello", "type": "text"},
+                        {"content": "world", "type": "text"},
+                    ),
+                },
+            ),
         )
 
     def test_instrumentation_does_not_break_core_functionality(self):
@@ -161,7 +177,13 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Hello, world","type":"text"}],"finish_reason":"","name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"content": "Hello, world", "type": "text"},),
+                    "finish_reason": "",
+                },
+            ),
         )
 
     @patch.dict(
@@ -176,7 +198,16 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Let me think.","type":"reasoning"},{"content":"It is sunny.","type":"text"}],"finish_reason":"","name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": (
+                        {"content": "Let me think.", "type": "reasoning"},
+                        {"content": "It is sunny.", "type": "text"},
+                    ),
+                    "finish_reason": "",
+                },
+            ),
         )
 
     def test_includes_token_counts_in_span_not_aggregated_from_responses(self):
@@ -198,6 +229,48 @@ class StreamingTestCase(TestCase):
         self.assertEqual(span.attributes["gen_ai.response.id"], "qwerty19")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 3)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 5)
+
+    def test_thinking_tokens_are_not_aggregated_without_candidates_count(self):
+        # A stream that ends while still thinking (e.g. MAX_TOKENS) reports
+        # cumulative thoughts_token_count with no candidates_token_count.
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=None, thinking_tokens=40
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=None, thinking_tokens=80
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=None, thinking_tokens=100
+        )
+
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 100)
+        self.assertEqual(
+            span.attributes["gen_ai.usage.reasoning.output_tokens"], 100
+        )
+
+    def test_thinking_tokens_added_to_last_candidates_count(self):
+        # The common shape: thought-only chunks, then chunks that carry both
+        # counts. output_tokens is candidates + thoughts from the last chunk.
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=None, thinking_tokens=40
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=5, thinking_tokens=100
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=12, thinking_tokens=100
+        )
+
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 112)
+        self.assertEqual(
+            span.attributes["gen_ai.usage.reasoning.output_tokens"], 100
+        )
 
     def test_modality_token_counts_are_replaced_not_merged(self):
         # Cumulative counts are returned on each response, so the last

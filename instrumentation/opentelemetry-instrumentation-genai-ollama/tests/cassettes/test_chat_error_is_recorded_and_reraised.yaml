@@ -1,0 +1,48 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "no-such-model:1b",
+        "stream": false,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello in three words."
+          }
+        ],
+        "tools": []
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '121'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/chat
+  response:
+    body:
+      string: |-
+        {
+          "error": "model 'no-such-model:1b' not found"
+        }
+    headers:
+      content-length:
+      - '46'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 29 Oct 2026 14:37:37 GMT
+    status:
+      code: 404
+      message: Not Found
+version: 1

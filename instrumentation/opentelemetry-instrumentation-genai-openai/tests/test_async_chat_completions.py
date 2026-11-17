@@ -47,6 +47,7 @@ from .test_utils import (
     WEATHER_TOOL_PROMPT,
     assert_all_attributes,
     assert_cache_attributes,
+    assert_inference_event_without_content,
     assert_message_in_logs,
     assert_messages_attribute,
     assert_reasoning_attributes,
@@ -243,7 +244,7 @@ async def test_async_chat_completion_no_content(
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
-        assert len(logs) == 0
+        assert_inference_event_without_content(logs)
         assert "gen_ai.input.messages" not in spans[0].attributes
         assert "gen_ai.output.messages" not in spans[0].attributes
     else:
@@ -415,7 +416,6 @@ async def test_async_chat_completion_multiple_choices(
                     }
                 ],
                 "finish_reason": "stop",
-                "name": None,
             },
             {
                 "role": "assistant",
@@ -426,7 +426,6 @@ async def test_async_chat_completion_multiple_choices(
                     }
                 ],
                 "finish_reason": "stop",
-                "name": None,
             },
         ]
 
@@ -579,7 +578,7 @@ async def test_chat_completion_with_raw_response_streaming(
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
-        assert len(logs) == 0
+        assert_inference_event_without_content(logs)
 
         assert_messages_attribute(
             spans[0].attributes["gen_ai.input.messages"],
@@ -889,6 +888,9 @@ async def chat_completion_tool_call(
         response_0.usage.prompt_tokens,
         response_0.usage.completion_tokens,
     )
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
     assert_all_attributes(
         spans[1],
         DEFAULT_MODEL,
@@ -933,7 +935,6 @@ async def chat_completion_tool_call(
                         },
                     ],
                     "finish_reason": "tool_call",
-                    "name": None,
                 }
             ]
             assert_messages_attribute(
@@ -963,7 +964,6 @@ async def chat_completion_tool_call(
                             "response": tool_call_result_0["content"],
                         }
                     ],
-                    "name": None,
                 },
                 {
                     "role": "tool",
@@ -976,7 +976,6 @@ async def chat_completion_tool_call(
                             "response": tool_call_result_1["content"],
                         }
                     ],
-                    "name": None,
                 },
             ]
 
@@ -998,7 +997,6 @@ async def chat_completion_tool_call(
                             },
                         ],
                         "finish_reason": "stop",
-                        "name": None,
                     }
                 ],
             )
@@ -1451,7 +1449,6 @@ async def test_async_chat_completion_multiple_choices_streaming(
                     }
                 ],
                 "finish_reason": "stop",
-                "name": None,
             },
             {
                 "role": "assistant",
@@ -1462,7 +1459,6 @@ async def test_async_chat_completion_multiple_choices_streaming(
                     }
                 ],
                 "finish_reason": "stop",
-                "name": None,
             },
         ]
         assert_messages_attribute(
@@ -1670,6 +1666,10 @@ async def async_chat_completion_multiple_tools_streaming(
         response_stream_usage.completion_tokens,
     )
 
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
+
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
         if expect_content:
@@ -1697,7 +1697,6 @@ async def async_chat_completion_multiple_tools_streaming(
                         },
                     ],
                     "finish_reason": "tool_call",
-                    "name": None,
                 }
             ]
             assert_messages_attribute(
@@ -1837,8 +1836,10 @@ async def test_async_chat_completion_streaming_messages_generator(
 
     assert seen["body"]["messages"] == test_messages
     (span,) = span_exporter.get_finished_spans()
-    recorded = json.loads(span.attributes["gen_ai.input.messages"])
-    assert recorded[0]["parts"][0]["content"] == "hello"
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        [{"role": "user", "parts": [{"type": "text", "content": "hello"}]}],
+    )
 
 
 @pytest.mark.asyncio()
@@ -1974,10 +1975,13 @@ async def test_async_chat_completion_messages_generator_reusing_mutable_dict(
 
     spans = span_exporter.get_finished_spans()
     (span,) = spans
-    recorded = json.loads(span.attributes["gen_ai.input.messages"])
-    assert len(recorded) == 2
-    assert [part["content"] for part in recorded[0]["parts"]] == ["first"]
-    assert [part["content"] for part in recorded[1]["parts"]] == ["second"]
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        [
+            {"role": "user", "parts": [{"type": "text", "content": text}]}
+            for text in ("first", "second")
+        ],
+    )
 
 
 @pytest.mark.asyncio
@@ -2016,8 +2020,17 @@ async def test_async_chat_completion_nested_content_iterator_captured(
     ]
     spans = span_exporter.get_finished_spans()
     (span,) = spans
-    recorded = json.loads(span.attributes["gen_ai.input.messages"])
-    assert [part["content"] for part in recorded[0]["parts"]] == ["a", "b"]
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        [
+            {
+                "role": "user",
+                "parts": [
+                    {"type": "text", "content": text} for text in ("a", "b")
+                ],
+            }
+        ],
+    )
 
 
 @pytest.mark.asyncio
@@ -2049,10 +2062,15 @@ async def test_async_chat_completion_generator_sdk_error_records_captured(
 
     spans = span_exporter.get_finished_spans()
     (span,) = spans
-    recorded = json.loads(span.attributes["gen_ai.input.messages"])
-    assert [part["content"] for part in recorded[0]["parts"]] == [
-        "before the failure"
-    ]
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        [
+            {
+                "role": "user",
+                "parts": [{"type": "text", "content": "before the failure"}],
+            }
+        ],
+    )
 
 
 @pytest.mark.asyncio()

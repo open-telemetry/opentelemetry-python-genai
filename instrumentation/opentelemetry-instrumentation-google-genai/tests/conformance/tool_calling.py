@@ -23,7 +23,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class ToolCallingScenario(Scenario):
-    expected_spans = {"generate_content": 1}
+    expected_spans = {"generate_content": 1, "execute_tool": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -32,6 +32,12 @@ class ToolCallingScenario(Scenario):
         ExpectedViolation(
             advice_id="genai_expected_attribute_missing",
             message_substring="gen_ai.response.id",
+        ),
+        # The SDK invokes the tool with its arguments only, and the Gemini API
+        # does not return a function call id here.
+        ExpectedViolation(
+            advice_id="genai_expected_attribute_missing",
+            message_substring="gen_ai.tool.call.id",
         ),
     )
 

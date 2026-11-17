@@ -33,6 +33,7 @@ def _wrap_tool_function(
         ) -> Any:
             with telemetry_handler.tool(
                 tool_function.__name__,
+                tool_type="function",
             ) as tool_invocation:
                 tool_invocation.tool_description = tool_function.__doc__
                 # Snapshot before the call: the tool may mutate its inputs.
@@ -52,6 +53,7 @@ def _wrap_tool_function(
         def wrapped_function(*args: object, **kwargs: object) -> Any:
             with telemetry_handler.tool(
                 tool_function.__name__,
+                tool_type="function",
             ) as tool_invocation:
                 tool_invocation.tool_description = tool_function.__doc__
                 # Snapshot before the call: the tool may mutate its inputs.

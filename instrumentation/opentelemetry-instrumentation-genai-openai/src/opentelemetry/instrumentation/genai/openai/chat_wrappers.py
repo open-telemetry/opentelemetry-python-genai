@@ -168,7 +168,7 @@ class _ChatStreamMixin:
                 invocation=self._self_invocation, usage=self._self_usage
             )
         finish_reasons = [
-            choice.finish_reason
+            map_finish_reason(choice.finish_reason)
             for choice in self._self_choice_buffers
             if choice.finish_reason
         ]

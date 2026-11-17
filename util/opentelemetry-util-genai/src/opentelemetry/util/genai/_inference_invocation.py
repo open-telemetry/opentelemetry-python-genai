@@ -3,14 +3,12 @@
 
 from __future__ import annotations
 
-import logging
-import os
 import timeit
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
-from opentelemetry._logs import Logger, LogRecord
+from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import Context, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -22,16 +20,13 @@ from opentelemetry.trace import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
     _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-)
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
@@ -44,8 +39,6 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
-
-_logger = logging.getLogger(__name__)
 
 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
     "gen_ai.usage.cache_write.input_tokens"
@@ -88,37 +81,13 @@ _GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
 _GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
 
 
-def _should_emit_event(
-    content_capturing_mode: ContentCapturingMode,
-) -> bool:
-    """Check if event emission is enabled."""
-    if (
-        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
-        .lower()
-        .strip()
-    ):
-        if envvar == "true":
-            return True
-        if envvar == "false":
-            return False
-        _logger.warning(
-            "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
-            envvar,
-            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-        )
-    return content_capturing_mode in (
-        ContentCapturingMode.EVENT_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
-
-
 CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
     "opentelemetry.genai.client.inference.context"
 )
 
 
 @dataclass
-class InferenceData(_ContextData):
+class InferenceData(ContextData):
     """Typed data passed from inner inference invocations to the outer invocation."""
 
     conversation_id: str | None = None
@@ -177,7 +146,7 @@ class InferenceInvocation(GenAIInvocation):
     Use handler.inference(provider) rather than constructing this directly.
     """
 
-    _records_stream_telemetry = True
+    _exception_event_name = "gen_ai.client.inference.exception"
 
     # Set once the invocation is handed to a stream wrapper.
     _request_stream: bool | None = None
@@ -255,8 +224,10 @@ class InferenceInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
-        self._emit_event: bool = _should_emit_event(
-            self._content_capturing_mode
+        self._emit_event: bool = self._logger.enabled(
+            context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
+            event_name="gen_ai.client.inference.operation.details",
         )
 
     @property
@@ -880,7 +851,7 @@ class InferenceInvocation(GenAIInvocation):
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
-    def enrich_from_context(self, data: InferenceData) -> None:
+    def _enrich_from_context(self, data: InferenceData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
@@ -892,7 +863,7 @@ class InferenceInvocation(GenAIInvocation):
         prompt_variable = self.data.prompt_variable
         tool_definitions = self.data.tool_definitions
 
-        self.data.merge(data, overwrite=False)
+        self._merge_context_data(self.data, data)
 
         if data.capture_content:
             self.data.input_messages = (
@@ -953,7 +924,7 @@ class InferenceInvocation(GenAIInvocation):
             CLIENT_INFERENCE_CONTEXT_KEY, context=self._span_context
         )
         if isinstance(ctx_data, InferenceData):
-            self.enrich_from_context(ctx_data)
+            self._enrich_from_context(ctx_data)
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
         if self._request_stream is not None:
@@ -997,6 +968,7 @@ class InferenceInvocation(GenAIInvocation):
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,
             context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
         )
 
 

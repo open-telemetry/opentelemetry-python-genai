@@ -51,6 +51,9 @@ from tests._api import (
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+from opentelemetry.instrumentation.genai.langchain.agent_context import (
+    _PendingAgent,
+)
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
     _document_to_retrieval_document,
@@ -72,6 +75,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -103,6 +107,8 @@ from opentelemetry.util.genai.types import (
 def _make_agent_inv_mock() -> mock.MagicMock:
     agent_inv = mock.MagicMock(spec=LocalAgentInvocation)
     agent_inv.agent_id = None
+    agent_inv.inference_calls = None
+    agent_inv.tool_calls = None
     return agent_inv
 
 
@@ -118,6 +124,35 @@ def _make_handler():
 
 def _run_id():
     return uuid.uuid4()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("native_agent", [False, True])
+def test_chat_model_start_does_not_count_untraced_calls(
+    enabled: bool, native_agent: bool
+) -> None:
+    handler, telemetry, _, agent = _make_handler()
+    parent_run_id = _run_id()
+    with mock.patch(
+        "opentelemetry.instrumentation.genai.langchain.callback_handler.claim_agent",
+        return_value=_PendingAgent("math_agent") if native_agent else None,
+    ):
+        handler.on_chain_start(
+            {"name": "math_agent"}, {}, run_id=parent_run_id
+        )
+    initial_count = 0 if native_agent else None
+    assert agent.inference_calls == initial_count
+    assert agent.tool_calls == initial_count
+    handler._enabled = enabled
+
+    for _ in range(2):
+        handler.on_chat_model_start(
+            {}, [], run_id=_run_id(), parent_run_id=parent_run_id
+        )
+
+    assert agent.inference_calls == initial_count
+    assert agent.tool_calls == initial_count
+    telemetry.inference.assert_not_called()
 
 
 class TestExtractPromptContext:
@@ -293,6 +328,7 @@ async def test_chain_classification_and_completion(
     metadata: dict[str, object],
     expected_name: str,
     span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
     content_capture: ContentCapturingMode,
     instrument_langchain: None,
 ) -> None:
@@ -313,15 +349,28 @@ async def test_chain_classification_and_completion(
         assert attrs[GenAI.GEN_AI_AGENT_DESCRIPTION] == "does math"
         assert GenAI.GEN_AI_AGENT_ID not in attrs
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        inputs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
-        outputs = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
-        assert inputs[0]["parts"] == [
+        inputs = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
+        outputs = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
+        assert list(inputs[0]["parts"]) == [
             {"type": "text", "content": "Solve this"}
         ]
-        assert outputs[0]["parts"] == [{"type": "text", "content": "Solved"}]
+        assert list(outputs[0]["parts"]) == [
+            {"type": "text", "content": "Solved"}
+        ]
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metric_names = {
+        metric.name
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    assert "gen_ai.invoke_agent.inference_calls" not in metric_names
+    assert "gen_ai.invoke_agent.tool_calls" not in metric_names
 
 
 @pytest.mark.asyncio
@@ -366,7 +415,7 @@ async def test_chain_input_and_output_capture(
     attrs = span.attributes
     assert attrs is not None
     if content_capture == ContentCapturingMode.SPAN_ONLY and inputs:
-        captured = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        captured = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
         assert json.loads(captured[0]["parts"][0]["content"]) == inputs
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
@@ -375,9 +424,9 @@ async def test_chain_input_and_output_capture(
         isinstance(last, AIMessage)
         or (isinstance(last, dict) and last.get("role") == "assistant")
     ):
-        captured = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        captured = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert len(captured) == 1
-        assert captured[0]["parts"] == [
+        assert list(captured[0]["parts"]) == [
             {"type": "text", "content": "final answer"}
         ]
     else:
@@ -409,8 +458,8 @@ async def test_unnamed_agent_respects_content_capture(
     assert attrs is not None
     assert GenAI.GEN_AI_AGENT_NAME not in attrs
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (message,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
-        assert message["parts"] == [{"type": "text", "content": "hello"}]
+        (message,) = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
+        assert list(message["parts"]) == [{"type": "text", "content": "hello"}]
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
@@ -543,9 +592,9 @@ async def test_prompt_sequence_calls_real_callback_managers(
     assert chat.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 5
     assert chat.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 2
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        inputs = json.loads(chat.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+        inputs = chat.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
         assert [m["role"] for m in inputs] == ["system", "user"]
-        assert inputs[1]["parts"] == [
+        assert list(inputs[1]["parts"]) == [
             {"type": "text", "content": "What is 3 * 4?"}
         ]
 
@@ -606,9 +655,9 @@ async def test_chat_response_parts_and_finish_reason(
     attrs = span.attributes
     assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (reason,)
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        inputs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        inputs = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
         assert inputs[0]["name"] == "Alice"
-        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        (output,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert output["name"] == "weather_bot"
         assert output["role"] == "assistant"
         assert output["finish_reason"] == reason
@@ -711,9 +760,9 @@ async def test_chat_finish_reason_metadata_fallback(
     attrs = span.attributes
     assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (expected,)
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        (output,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert output["finish_reason"] == expected
-        assert output["parts"] == [{"type": "text", "content": "answer"}]
+        assert list(output["parts"]) == [{"type": "text", "content": "answer"}]
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
@@ -759,7 +808,7 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
         "length",
     )
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        outputs = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        outputs = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert [m["finish_reason"] for m in outputs] == [
             "stop",
             "error",
@@ -792,6 +841,37 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
             },
         ),
         (
+            # Shape produced by langchain-openai for flex-tier requests.
+            {
+                "input_token_details": {
+                    "flex_cache_read": 4,
+                    "flex_cache_creation": 2,
+                    "flex": 6,
+                },
+                "output_token_details": {"flex_reasoning": 5, "flex": 15},
+            },
+            {
+                "gen_ai.usage.cache_write.input_tokens": 2,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 4,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 5,
+            },
+        ),
+        (
+            {
+                "input_token_details": {
+                    "audio": 1,
+                    "priority_cache_read": 3,
+                    "priority": 7,
+                },
+                "output_token_details": {"priority_reasoning": 8},
+            },
+            {
+                "gen_ai.usage.audio.input_tokens": 1,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 3,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 8,
+            },
+        ),
+        (
             {
                 "input_token_details": {"text": 7, "image": 2, "audio": 1},
                 "output_token_details": {"text": 14, "image": 4, "audio": 2},
@@ -807,7 +887,14 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
         ),
         ({}, {}),
     ],
-    ids=["cache-creation", "cache-write", "modalities", "no-details"],
+    ids=[
+        "cache-creation",
+        "cache-write",
+        "flex-tier",
+        "priority-tier",
+        "modalities",
+        "no-details",
+    ],
 )
 async def test_chat_token_details(
     asynchronous: bool,
@@ -987,9 +1074,9 @@ async def test_streamed_chat_response(
     assert attrs.get(GenAI.GEN_AI_RESPONSE_ID) == expected_id
     assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        (output,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert output["role"] == "assistant"
-        assert output["parts"] == [{"type": "text", "content": "hello"}]
+        assert list(output["parts"]) == [{"type": "text", "content": "hello"}]
     else:
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
@@ -1074,7 +1161,7 @@ async def test_retriever_invocation(
         assert (
             attrs[GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT] == "semantic search query"
         )
-        captured = json.loads(attrs[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS])
+        captured = attrs[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
         assert len(captured) == 2
         assert captured[0]["id"] == "doc-1"
         expected_score = (
@@ -1385,7 +1472,7 @@ async def test_multimodal_input_content_capture(
     ).content == "a red pixel"
     attrs = finished_chat(span_exporter).attributes
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (captured,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        (captured,) = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
         assert captured["name"] == "Alice"
         assert captured["parts"][0] == {
             "type": "text",
@@ -1393,7 +1480,7 @@ async def test_multimodal_input_content_capture(
         }
         blob = captured["parts"][1]
         assert blob["type"] == "blob"
-        assert base64.b64decode(blob["content"]) == _REAL_PNG_BYTES
+        assert blob["content"] == _REAL_PNG_BYTES
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
 
@@ -2096,6 +2183,28 @@ def test_extract_token_details_cache_write_key():
     details = extract_token_details(usage)
     assert details == {
         "cache_write_input_tokens": 4,
+        "cache_read_input_tokens": 2,
+        "reasoning_tokens": 5,
+    }
+
+
+@pytest.mark.parametrize("tier", ["flex", "priority"])
+def test_extract_token_details_service_tier_prefix(tier: str):
+    # Shape produced by langchain-openai for flex and priority requests.
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+        "input_token_details": {
+            f"{tier}_cache_read": 2,
+            f"{tier}_cache_creation": 3,
+            tier: 8,
+        },
+        "output_token_details": {f"{tier}_reasoning": 5, tier: 15},
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_write_input_tokens": 3,
         "cache_read_input_tokens": 2,
         "reasoning_tokens": 5,
     }

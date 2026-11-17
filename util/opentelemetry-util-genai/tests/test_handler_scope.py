@@ -39,7 +39,6 @@ class TelemetryHandlerScopeTest(TestBase):
             "os.environ",
             {
                 "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-                "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
             },
         ):
             handler = TelemetryHandler(

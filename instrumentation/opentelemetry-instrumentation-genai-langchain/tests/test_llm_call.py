@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import json
+import base64
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
@@ -72,12 +72,16 @@ def _langchain_openai_version() -> tuple:
 # cannot hold on those versions.
 _supports_reasoning_token_details = _langchain_openai_version() >= (0, 2, 1)
 _supports_responses_api = _langchain_openai_version() >= (1, 3, 0)
+# langchain-openai prefixes token detail keys with the service tier (e.g.
+# ``flex_reasoning``) from 1.0.0 onward.
+_supports_service_tier_token_details = _langchain_openai_version() >= (1, 0, 0)
 
 _REAL_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
     "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
     "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
 )
+_REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 
 # An Anthropic Files API image reference. Pinned to the recorded cassette.
 _ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
@@ -373,7 +377,14 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
         log_record = logs[0].log_record
         assert_log_record(log_record, spans[0], response)
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        assert len(logs) == 0
+        (log,) = logs
+        assert (
+            log.log_record.event_name
+            == "gen_ai.client.inference.operation.details"
+        )
+        attributes = log.log_record.attributes or {}
+        assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -443,14 +454,28 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     assert metrics[0].name == gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION
     assert_duration_metric_when_error(metrics[0], spans[0])
 
-    # verify logs
+    # verify logs: the operation details event and the exception event
     logs = log_exporter.get_finished_logs()
+    assert len(logs) == 2
+    (log,) = [
+        log
+        for log in logs
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    ]
+    (exception_event,) = [
+        log.log_record
+        for log in logs
+        if log.log_record.event_name == "gen_ai.client.inference.exception"
+    ]
+    assert exception_event.attributes["exception.type"] == error_type
+    assert exception_event.span_id == spans[0].context.span_id
     if capture_content in ("SPAN_AND_EVENT", "EVENT_ONLY"):
-        assert len(logs) == 1
-        log_record = logs[0].log_record
-        assert_log_record_when_error(log_record, spans[0])
+        assert_log_record_when_error(log.log_record, spans[0])
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        assert len(logs) == 0
+        attributes = log.log_record.attributes or {}
+        assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
 
 
 def test_chat_openai_multimodal_image_llm_call(
@@ -508,13 +533,17 @@ def test_chat_openai_multimodal_image_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"role":"user"' in input_message
-    assert '"type":"text"' in input_message
-    assert '"content":"What is in this image?"' in input_message
-    assert '"type":"blob"' in input_message
-    assert '"modality":"image"' in input_message
-    assert '"mime_type":"image/png"' in input_message
-    assert _REAL_PNG_B64 in input_message
+    assert input_message[0]["role"] == "user"
+    assert input_message[0]["parts"][0] == {
+        "type": "text",
+        "content": "What is in this image?",
+    }
+    assert input_message[0]["parts"][1] == {
+        "type": "blob",
+        "modality": "image",
+        "mime_type": "image/png",
+        "content": _REAL_PNG_BYTES,
+    }
 
 
 def test_chat_openai_standard_image_block_llm_call(
@@ -575,10 +604,12 @@ def test_chat_openai_standard_image_block_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"type":"blob"' in input_message
-    assert '"modality":"image"' in input_message
-    assert '"mime_type":"image/png"' in input_message
-    assert _REAL_PNG_B64 in input_message
+    assert input_message[0]["parts"][1] == {
+        "type": "blob",
+        "modality": "image",
+        "mime_type": "image/png",
+        "content": _REAL_PNG_BYTES,
+    }
 
 
 # span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0 are coming from fixtures defined in conftest.py
@@ -745,20 +776,21 @@ def test_chat_openai_legacy_function_call(
         gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert '"type":"tool_call"' in output_messages
-    assert '"name":"get_current_weather"' in output_messages
-    assert '"location":"Paris"' in output_messages
+    tool_call_part = output_messages[0]["parts"][0]
+    assert tool_call_part["type"] == "tool_call"
+    assert tool_call_part["name"] == "get_current_weather"
+    assert tool_call_part["arguments"] == {"location": "Paris"}
 
     tool_definitions = span.attributes.get(
         gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
     )
     assert tool_definitions is not None
-    assert '"name":"get_current_weather"' in tool_definitions
+    assert tool_definitions[0]["name"] == "get_current_weather"
     assert (
-        '"description":"Get the current weather in a given location."'
-        in tool_definitions
+        tool_definitions[0]["description"]
+        == "Get the current weather in a given location."
     )
-    assert '"location"' in tool_definitions
+    assert "location" in tool_definitions[0]["parameters"]["properties"]
 
 
 @pytest.mark.vcr()
@@ -808,13 +840,17 @@ def test_chat_anthropic_multimodal_image_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"role":"user"' in input_message
-    assert '"type":"text"' in input_message
-    assert '"content":"What is in this image?"' in input_message
-    assert '"type":"blob"' in input_message
-    assert '"modality":"image"' in input_message
-    assert '"mime_type":"image/png"' in input_message
-    assert _REAL_PNG_B64 in input_message
+    assert input_message[0]["role"] == "user"
+    assert input_message[0]["parts"][0] == {
+        "type": "text",
+        "content": "What is in this image?",
+    }
+    assert input_message[0]["parts"][1] == {
+        "type": "blob",
+        "modality": "image",
+        "mime_type": "image/png",
+        "content": _REAL_PNG_BYTES,
+    }
 
 
 @pytest.mark.vcr()
@@ -858,10 +894,15 @@ def test_chat_anthropic_file_ref_image_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"content":"What is in this image?"' in input_message
-    assert '"type":"file"' in input_message
-    assert '"modality":"image"' in input_message
-    assert f'"file_id":"{_ANTHROPIC_FILE_ID}"' in input_message
+    assert input_message[0]["parts"][0] == {
+        "type": "text",
+        "content": "What is in this image?",
+    }
+    assert input_message[0]["parts"][1] == {
+        "type": "file",
+        "modality": "image",
+        "file_id": _ANTHROPIC_FILE_ID,
+    }
 
 
 @pytest.mark.skipif(
@@ -909,11 +950,16 @@ def test_chat_openai_responses_api_input_image_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"content":"What is in this image?"' in input_message
-    assert '"type":"blob"' in input_message
-    assert '"modality":"image"' in input_message
-    assert '"mime_type":"image/png"' in input_message
-    assert _REAL_PNG_B64 in input_message
+    assert input_message[0]["parts"][0] == {
+        "type": "text",
+        "content": "What is in this image?",
+    }
+    assert input_message[0]["parts"][1] == {
+        "type": "blob",
+        "modality": "image",
+        "mime_type": "image/png",
+        "content": _REAL_PNG_BYTES,
+    }
 
 
 def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
@@ -1055,12 +1101,8 @@ def test_chat_model_preserves_input_and_output_message_names(
         model.invoke([HumanMessage(content="Hi!", name="user_alice")])
 
     (span,) = span_exporter.get_finished_spans()
-    input_messages = json.loads(
-        span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
-    )
-    output_messages = json.loads(
-        span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    input_messages = span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
+    output_messages = span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
 
     assert len(input_messages) == 1
     assert input_messages[0]["name"] == "user_alice"
@@ -1237,17 +1279,26 @@ def assert_openai_completion_attributes(
     if verify_content:
         input_message = attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
         assert input_message is not None
-        assert '"role":"system"' in input_message
-        assert '"content":"You are a helpful assistant!"' in input_message
-        assert '"role":"user"' in input_message
-        assert '"content":"What is the capital of France?"' in input_message
+        assert input_message[0]["role"] == "system"
+        assert input_message[0]["parts"][0] == {
+            "type": "text",
+            "content": "You are a helpful assistant!",
+        }
+        assert input_message[1]["role"] == "user"
+        assert input_message[1]["parts"][0] == {
+            "type": "text",
+            "content": "What is the capital of France?",
+        }
 
         # Assert output message
         output_message = attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
         assert output_message is not None
-        assert '"role":"assistant"' in output_message
-        assert '"content":"The capital of France is Paris."' in output_message
-        assert '"finish_reason":"stop"' in output_message
+        assert output_message[0]["role"] == "assistant"
+        assert output_message[0]["parts"][0] == {
+            "type": "text",
+            "content": "The capital of France is Paris.",
+        }
+        assert output_message[0]["finish_reason"] == "stop"
     else:
         assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
         assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
@@ -1288,10 +1339,16 @@ def assert_openai_completion_attributes_with_error(
     if verify_content:
         input_message = attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
         assert input_message is not None
-        assert '"role":"system"' in input_message
-        assert '"content":"You are a helpful assistant!"' in input_message
-        assert '"role":"user"' in input_message
-        assert '"content":"What is the capital of France?"' in input_message
+        assert input_message[0]["role"] == "system"
+        assert input_message[0]["parts"][0] == {
+            "type": "text",
+            "content": "You are a helpful assistant!",
+        }
+        assert input_message[1]["role"] == "user"
+        assert input_message[1]["parts"][0] == {
+            "type": "text",
+            "content": "What is the capital of France?",
+        }
 
         # Assert output message
         assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
@@ -1729,6 +1786,49 @@ def test_chat_openai_reasoning_token_details(
             gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
         )
         == 1088
+    )
+
+
+@pytest.mark.skipif(
+    not _supports_service_tier_token_details,
+    reason="langchain-openai does not prefix token details with the service tier",
+)
+@pytest.mark.vcr()
+def test_chat_openai_flex_tier_token_details(
+    span_exporter, start_instrumentation, chat_openai_reasoning
+):
+    # OpenAI only caches prompts of at least 1024 tokens.
+    llm = chat_openai_reasoning.model_copy(update={"service_tier": "flex"})
+    messages = [
+        SystemMessage(
+            content="You are a careful mathematical reasoner. " * 200
+        ),
+        HumanMessage(
+            content=(
+                "A snail climbs a 12 meter well. Each day it climbs up 3 "
+                "meters, and each night it slides back 2 meters. On which day "
+                "does it first reach the top?"
+            )
+        ),
+    ]
+
+    llm.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 1536
+    )
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        )
+        == 512
     )
 
 
