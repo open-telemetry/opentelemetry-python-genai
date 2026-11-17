@@ -106,10 +106,6 @@ class InteractionsServerToolCallingScenario(Scenario):
             advice_id="genai_operation_name_unknown",
             message_substring="interactions.create",
         ),
-        ExpectedViolation(
-            advice_id="missing_attribute",
-            message_substring="gcp.gen_ai.usage.initial_input_tokens",
-        ),
     )
 
     def validate(self, report: LiveCheckReport) -> None:

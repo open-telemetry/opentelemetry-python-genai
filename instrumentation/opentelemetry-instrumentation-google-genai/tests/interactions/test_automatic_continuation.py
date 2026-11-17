@@ -44,8 +44,6 @@ except ImportError:
         "This SDK has no automatic continuation", allow_module_level=True
     )
 
-_INITIAL_INPUT_TOKENS = "gcp.gen_ai.usage.initial_input_tokens"
-
 _HOPS: list[dict[str, Any]] = [
     {
         "id": "v1_hop_1",
@@ -231,7 +229,6 @@ def _assert_summed_usage(span: ReadableSpan) -> None:
         GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS: 25,
         GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS: 12,
         GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 10,
-        _INITIAL_INPUT_TOKENS: 10,
     }
     for name, value in expected.items():
         assert attributes[name] == value, name
@@ -324,7 +321,6 @@ async def test_interrupted_continuation_keeps_completed_hop_usage(
     )
     assert attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10
     assert attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
-    assert attributes[_INITIAL_INPUT_TOKENS] == 10
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

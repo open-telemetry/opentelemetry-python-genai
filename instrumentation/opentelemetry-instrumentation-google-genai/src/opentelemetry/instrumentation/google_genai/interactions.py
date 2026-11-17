@@ -111,9 +111,6 @@ from opentelemetry.instrumentation.google_genai._error_type import (
 from opentelemetry.instrumentation.google_genai.client_info import (
     get_client_info as _get_client_info,
 )
-from opentelemetry.instrumentation.google_genai.custom_semconv import (
-    GCP_GENAI_USAGE_INITIAL_INPUT_TOKENS,
-)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -262,11 +259,6 @@ def _apply_usage(
     invocation.cache_read_input_tokens = _sum_tokens(
         usage.total_cached_tokens for usage in hop_usages
     )
-    initial_input_tokens = _initial_input_tokens(hop_usages[0])
-    if initial_input_tokens is not None:
-        invocation.attributes[GCP_GENAI_USAGE_INITIAL_INPUT_TOKENS] = (
-            initial_input_tokens
-        )
 
     if isinstance(invocation, InferenceInvocation):
         invocation.thinking_tokens = _sum_tokens(
@@ -286,15 +278,6 @@ def _apply_usage(
 def _sum_tokens(counts: Iterable[int | None]) -> int | None:
     present = [count for count in counts if count is not None]
     return sum(present) if present else None
-
-
-def _initial_input_tokens(first_hop_usage: Usage) -> int | None:
-    # `initial_input_tokens` only exists from google-genai 2.34; the SDK falls
-    # back to the first hop's input tokens when merging hops, and so do we.
-    initial = _get_field(first_hop_usage, "initial_input_tokens")
-    if isinstance(initial, int):
-        return initial
-    return first_hop_usage.total_input_tokens
 
 
 def _modality_tokens(
