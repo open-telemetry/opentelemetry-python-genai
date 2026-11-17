@@ -3300,8 +3300,18 @@ def test_model_async_stream_delegating_subclass_before_base_class(
     import httpx
     import openai
     from agno.models.base import Model
-    from agno.models.minimax import MiniMax
     from agno.models.openai import OpenAIChat
+
+    try:
+        from agno.models.minimax import MiniMax as _DelegatingOpenAISubclass
+    except ImportError:
+
+        class _DelegatingOpenAISubclass(OpenAIChat):
+            async def ainvoke_stream(
+                self, *args: Any, **kwargs: Any
+            ) -> AsyncIterator[ModelResponse]:
+                async for response in super().ainvoke_stream(*args, **kwargs):
+                    yield response
 
     # Re-instrument cleanly so OpenAIChat.ainvoke_stream is not pre-wrapped by earlier tests.
     AgnoInstrumentor().uninstrument()
@@ -3311,7 +3321,9 @@ def test_model_async_stream_delegating_subclass_before_base_class(
         meter_provider=meter_provider,
     )
     assert not hasattr(OpenAIChat.__dict__["ainvoke_stream"], "__wrapped__")
-    assert not hasattr(MiniMax.__dict__["ainvoke_stream"], "__wrapped__")
+    assert not hasattr(
+        _DelegatingOpenAISubclass.__dict__["ainvoke_stream"], "__wrapped__"
+    )
 
     sse_lines = [
         'data: {"id":"chatcmpl-mm-1","object":"chat.completion.chunk","created":1700000000,"model":"MiniMax-M2.1","choices":[{"index":0,"delta":{"role":"assistant","content":"chunk1"},"finish_reason":null}]}',
@@ -3333,7 +3345,7 @@ def test_model_async_stream_delegating_subclass_before_base_class(
             )
         ),
     )
-    minimax_model = MiniMax(
+    minimax_model = _DelegatingOpenAISubclass(
         id="MiniMax-M2.1", api_key="test-key", async_client=client
     )
 
@@ -3390,7 +3402,9 @@ def test_model_async_stream_delegating_subclass_before_base_class(
         assert getattr(first_ev, "event", None) == "ModelRequestStarted"
         first_chunk = await anext(m_stream)
         assert getattr(first_chunk, "content", None) == "chunk1"
-        assert hasattr(MiniMax.__dict__["ainvoke_stream"], "__wrapped__")
+        assert hasattr(
+            _DelegatingOpenAISubclass.__dict__["ainvoke_stream"], "__wrapped__"
+        )
         assert hasattr(OpenAIChat.__dict__["ainvoke_stream"], "__wrapped__")
         await m_stream.aclose()
 
@@ -3426,7 +3440,9 @@ def test_model_async_stream_delegating_subclass_before_base_class(
     assert len(spans) == 3
 
     AgnoInstrumentor().uninstrument()
-    assert not hasattr(MiniMax.__dict__["ainvoke_stream"], "__wrapped__")
+    assert not hasattr(
+        _DelegatingOpenAISubclass.__dict__["ainvoke_stream"], "__wrapped__"
+    )
     assert not hasattr(OpenAIChat.__dict__["ainvoke_stream"], "__wrapped__")
     assert not hasattr(
         _DelegatingSubStreamModel.__dict__["ainvoke_stream"], "__wrapped__"
