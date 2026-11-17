@@ -19,8 +19,10 @@ The request's session ID is propagated to nested GenAI invocations through
 OpenTelemetry context.
 
 The span remains open until the response stream is drained or closed.
-Successful finalization records ``gen_ai.response.finish_reasons`` when the
-last emitted assistant message is complete. Closing a partial message
+For the 1.x runner, successful finalization records
+``gen_ai.response.finish_reasons`` when the last emitted assistant message
+is complete. The 2.x runtime spans omit finish reasons because runtime
+completion does not expose a model finish reason. Closing a partial message
 preserves captured output without reporting a finish reason. Local agent
 turns record the ``gen_ai.invoke_agent.duration`` metric.
 
@@ -41,9 +43,9 @@ Supported versions
 ------------------
 
 QwenPaw >= 1.1.0, < 3.0.0. Version 1.x uses the agent runner; version
-2.x uses the runtime request entry point and captures text, reasoning,
-tool calls/results, and image/audio/video/file content from request messages and
-streamed SSE envelopes. Request normalization and span creation remain lazy;
+2.x uses the runtime request entry point and captures text (including refusals),
+reasoning, tool calls/results, and image/audio/video/file content from request
+messages and streamed SSE envelopes. Request normalization and span creation remain lazy;
 SDK-generated session IDs propagate to nested GenAI invocations.
 Version 2.x support requires ``opentelemetry-util-genai`` 1.4b0 or newer.
 QwenPaw 2.x requires Python >= 3.11,

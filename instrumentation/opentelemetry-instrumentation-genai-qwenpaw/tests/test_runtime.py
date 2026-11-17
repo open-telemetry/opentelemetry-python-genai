@@ -115,6 +115,54 @@ async def test_disabled_capture(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("capture_mode", ["NO_CONTENT", "SPAN_ONLY"])
+@pytest.mark.parametrize("as_dict", [False, True])
+@pytest.mark.parametrize("refusal", ["I cannot help with that.", ""])
+async def test_runtime_captures_refusal_history(
+    tracer_provider: Any,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: Any,
+    capture_mode: str,
+    as_dict: bool,
+    refusal: str,
+) -> None:
+    from qwenpaw.schemas import Message, RefusalContent, Role
+
+    request = runtime_request()
+    request.input.insert(
+        0,
+        Message(
+            role=Role.ASSISTANT, content=[RefusalContent(refusal=refusal)]
+        ),
+    )
+    with instrument(
+        QwenPawInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture=capture_mode,
+    ):
+        await drain(
+            make_runtime().run(
+                request.model_dump(mode="json") if as_dict else request
+            )
+        )
+    (span,) = span_exporter.get_finished_spans()
+    if capture_mode == "SPAN_ONLY":
+        messages = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert [message["role"] for message in messages] == [
+            "assistant",
+            "user",
+        ]
+        assert messages[0]["parts"] == [{"type": "text", "content": refusal}]
+        assert messages[1]["parts"] == [{"type": "text", "content": "/test"}]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in span.attributes
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.asyncio
 async def test_runtime_iteration_limit_has_no_model_finish_reason(
     instrument_with_content: Any, span_exporter: Any
 ) -> None:

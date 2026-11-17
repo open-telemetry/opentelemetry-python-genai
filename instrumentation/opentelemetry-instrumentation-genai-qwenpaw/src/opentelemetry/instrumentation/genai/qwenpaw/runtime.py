@@ -67,6 +67,10 @@ def _part(
         if message_type == "reasoning":
             return ReasoningPart(content=text)
         return TextPart(content=text)
+    if kind == "refusal" and isinstance(
+        refusal := _field(block, "refusal"), str
+    ):
+        return TextPart(content=refusal)
     if kind == "data":
         data = _field(block, "data")
         call_id = non_empty_str(_field(data, "call_id"))

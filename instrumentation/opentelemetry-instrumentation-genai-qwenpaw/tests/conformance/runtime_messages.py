@@ -37,7 +37,13 @@ class RuntimeMessagesScenario(Scenario):
             attribute["name"]: attribute["value"]
             for attribute in span["attributes"]
         }
-        (input_message,) = json.loads(attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+        history, input_message = json.loads(
+            attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+        )
+        assert history["role"] == "assistant"
+        assert history["parts"] == [
+            {"type": "text", "content": "I cannot help with that."}
+        ]
         assert input_message["role"] == "user"
         input_parts = input_message["parts"]
         assert [
@@ -133,6 +139,9 @@ async def _drive_events() -> None:
         AudioContent,
         FileContent,
         ImageContent,
+        Message,
+        RefusalContent,
+        Role,
         VideoContent,
     )
 
@@ -175,7 +184,14 @@ async def _drive_events() -> None:
                 )
 
     request = runtime_request("Describe the weather.")
-    request.input[0].content.extend(
+    request.input.insert(
+        0,
+        Message(
+            role=Role.ASSISTANT,
+            content=[RefusalContent(refusal="I cannot help with that.")],
+        ),
+    )
+    request.input[-1].content.extend(
         [
             ImageContent(image_url="https://example.invalid/image.png"),
             VideoContent(video_url="https://example.invalid/video.mp4"),
