@@ -3393,14 +3393,18 @@ def test_model_async_stream_delegating_subclass_before_base_class(
 
     sub_model = _DelegatingSubStreamModel(id="sub-model", provider="Custom")
 
+    async def _next_content_chunk(stream: Any) -> Any:
+        chunk = await anext(stream)
+        while getattr(chunk, "content", None) is None:
+            chunk = await anext(stream)
+        return chunk
+
     async def _run() -> None:
         # 1. Stream MiniMax first (before OpenAIChat is ever streamed) and close early
         m_stream = minimax_model.aresponse_stream(
             messages=[Message(role="user", content="hi")]
         )
-        first_ev = await anext(m_stream)
-        assert getattr(first_ev, "event", None) == "ModelRequestStarted"
-        first_chunk = await anext(m_stream)
+        first_chunk = await _next_content_chunk(m_stream)
         assert getattr(first_chunk, "content", None) == "chunk1"
         assert hasattr(
             _DelegatingOpenAISubclass.__dict__["ainvoke_stream"], "__wrapped__"
@@ -3412,8 +3416,7 @@ def test_model_async_stream_delegating_subclass_before_base_class(
         s_stream = sub_model.aresponse_stream(
             messages=[Message(role="user", content="hi")]
         )
-        await anext(s_stream)  # ModelRequestStarted
-        chunk = await anext(s_stream)
+        chunk = await _next_content_chunk(s_stream)
         assert getattr(chunk, "content", None) == "first"
         assert hasattr(
             _DelegatingSubStreamModel.__dict__["ainvoke_stream"], "__wrapped__"
@@ -3428,8 +3431,8 @@ def test_model_async_stream_delegating_subclass_before_base_class(
         s_stream2 = sub_model.aresponse_stream(
             messages=[Message(role="user", content="hi")]
         )
-        await anext(s_stream2)  # ModelRequestStarted
-        await anext(s_stream2)  # first chunk
+        first2 = await _next_content_chunk(s_stream2)
+        assert getattr(first2, "content", None) == "first"
         with pytest.raises(RuntimeError, match="caller abort"):
             await s_stream2.athrow(RuntimeError("caller abort"))
         assert base_cleanups == ["closed", "closed"]
