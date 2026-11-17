@@ -43,6 +43,7 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     File,
     FilePart,
+    FunctionToolDefinition,
     GenericPart,
     InputMessage,
     MessagePart,
@@ -50,10 +51,13 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     Reasoning,
     ReasoningPart,
+    RetrievalDocument,
     Role,
     SystemInstructionPart,
     Text,
     TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     Uri,
     UriPart,
 )
@@ -125,8 +129,8 @@ def _get_messages_from_attr(
 ) -> list[dict[str, Any]]:
     payload = span_attrs.get(attribute_name)
     assert payload is not None
-    assert isinstance(payload, str)
-    return json.loads(payload)
+    assert isinstance(payload, tuple)
+    return list(payload)
 
 
 def _get_single_message(
@@ -145,7 +149,7 @@ def _assert_text_message(
 ) -> None:
     assert message.get("role") == role
     parts = message.get("parts")
-    assert isinstance(parts, list) and parts
+    assert isinstance(parts, (list, tuple)) and parts
     assert parts[0].get("content") == content
     if finish_reason is not None:
         assert message.get("finish_reason") == finish_reason
@@ -310,10 +314,10 @@ class TestTelemetryHandler(unittest.TestCase):
         self.assertEqual(invocation.attributes.get("custom_attr"), "value")
         self.assertEqual(invocation.attributes.get("extra"), "info")
 
-        # Verify system instruction is present in span as JSON string
+        # Verify system instruction is present in span
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
-        span_system = json.loads(span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
-        self.assertIsInstance(span_system, list)
+        span_system = span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]
+        self.assertIsInstance(span_system, (list, tuple))
         self.assertEqual(
             span_system[0]["content"], "You are a helpful assistant."
         )
@@ -336,9 +340,9 @@ class TestTelemetryHandler(unittest.TestCase):
         span = _get_single_span(self.span_exporter)
         span_attrs = _get_span_attributes(span)
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
-        instructions = json.loads(span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
+        instructions = span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]
         self.assertEqual(
-            instructions,
+            list(instructions),
             [
                 {"type": "text", "content": "You are helpful"},
                 {"type": "custom"},
@@ -1278,7 +1282,7 @@ class TestTelemetryHandler(unittest.TestCase):
             GenAI.GEN_AI_OUTPUT_MESSAGES,
         ):
             with self.subTest(key=key):
-                span_parts = json.loads(span_attrs[key])[0]["parts"]
+                span_parts = span_attrs[key][0]["parts"]
                 event_parts = event_attrs[key][0]["parts"]
                 for recorded_parts in (span_parts, event_parts):
                     values = [part["modality"] for part in recorded_parts]
@@ -2143,6 +2147,65 @@ class TestObjectToAnyValue(unittest.TestCase):
         value = WithGenerator(name="a", items=(i for i in range(2)))
         self.assertEqual(object_to_any_value(value), {"name": "a"})
         self.assertEqual(list(cast(Any, value.items)), [0, 1])
+
+    def test_genai_types_omit_unset_optional_fields(self):
+        message = InputMessage(
+            role="user",
+            parts=[
+                TextPart(content="hi"),
+                ToolCallRequestPart(arguments=None, name="get_time", id=None),
+                BlobPart(content=b"x", mime_type=None, modality="image"),
+            ],
+        )
+        self.assertEqual(
+            object_to_any_value(message),
+            {
+                "role": "user",
+                "parts": [
+                    {"content": "hi", "type": "text"},
+                    {"name": "get_time", "type": "tool_call"},
+                    {"content": b"x", "modality": "image", "type": "blob"},
+                ],
+            },
+        )
+        self.assertEqual(
+            object_to_any_value(
+                OutputMessage(role="assistant", parts=[], finish_reason="stop")
+            ),
+            {"role": "assistant", "parts": [], "finish_reason": "stop"},
+        )
+
+    def test_genai_types_keep_set_falsy_fields(self):
+        self.assertEqual(
+            object_to_any_value(RetrievalDocument(id="", score=0.0)),
+            {"id": "", "score": 0.0},
+        )
+        self.assertEqual(object_to_any_value(RetrievalDocument()), {})
+
+    def test_genai_types_omit_unset_tool_definition_parameters(self):
+        self.assertEqual(
+            object_to_any_value(
+                FunctionToolDefinition(
+                    name="get_time", description=None, parameters=None
+                )
+            ),
+            {"name": "get_time", "type": "function"},
+        )
+
+    def test_user_dataclass_keeps_none(self):
+        @dataclass
+        class Result:
+            detail: str | None
+
+        result = Result(detail=None)
+        expected = {"detail": None}
+        self.assertEqual(object_to_any_value(result), expected)
+        self.assertEqual(
+            object_to_any_value(
+                ToolCallResponsePart(response=result, id=None)
+            ),
+            {"response": expected, "type": "tool_call_response"},
+        )
 
     def test_model_non_any_value_fields_converted(self):
         class Model:
