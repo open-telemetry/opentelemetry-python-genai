@@ -120,7 +120,7 @@ def test_invoke_model_anthropic_messages(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 18
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 8
     assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 2
     assert (
@@ -133,21 +133,17 @@ def test_invoke_model_anthropic_messages(
     )
 
     # Verify captured content
-    input_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["content"] == "Hello!"
 
-    sys_instruction = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
-    )
+    sys_instruction = span.attributes[
+        GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
+    ]
     assert sys_instruction[0]["content"] == "You are a helpful assistant."
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["parts"][0]["content"] == "Hi there!"
@@ -431,6 +427,37 @@ def test_extract_invoke_model_response_headers(tracer_provider) -> None:
         assert invocation.output_tokens == 22
 
 
+def test_extract_invoke_model_response_headers_with_cache(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_invoke_model_response(
+            {
+                "ResponseMetadata": {
+                    "HTTPHeaders": {
+                        "x-amzn-bedrock-input-token-count": "10",
+                        "x-amzn-bedrock-output-token-count": "5",
+                    }
+                }
+            },
+            json.dumps(
+                {
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "cache_read_input_tokens": 4,
+                        "cache_creation_input_tokens": 2,
+                    }
+                }
+            ).encode(),
+            invocation,
+        )
+        assert invocation.input_tokens == 16
+        assert invocation.cache_read_input_tokens == 4
+        assert invocation.cache_write_input_tokens == 2
+
+
 def test_extract_invoke_model_request_zero_values(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     with handler.inference(provider="aws.bedrock") as invocation:
@@ -540,18 +567,14 @@ def test_invoke_model_anthropic_tool_call_and_result(
         "tool_call",
     )
 
-    input_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["type"] == "tool_call_response"
     assert input_msgs[0]["parts"][0]["id"] == "toolu_prev"
     assert input_msgs[0]["parts"][0]["response"] == "72 degrees and sunny"
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["finish_reason"] == "tool_call"
@@ -677,9 +700,7 @@ def test_invoke_model_mistral(
     )
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 15
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         output_msgs[0]["parts"][0]["content"]
         == "The capital of France is Paris."
@@ -749,9 +770,7 @@ def test_invoke_model_cohere(
     )
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 5
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         output_msgs[0]["parts"][0]["content"] == "Spring brings blossoms pink"
     )

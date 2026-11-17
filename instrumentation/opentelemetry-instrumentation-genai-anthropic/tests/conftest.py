@@ -4,6 +4,7 @@
 """Test configuration and fixtures for Anthropic instrumentation tests."""
 # pylint: disable=redefined-outer-name
 
+import base64
 import json
 import logging
 import os
@@ -81,6 +82,33 @@ def assert_unset_sampling_attributes_omitted(span, caplog) -> None:
     ]
 
 
+_REAL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
+    "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
+    "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
+)
+_REAL_PDF_B64 = (
+    "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq"
+    "CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq"
+    "CjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAyMDAg"
+    "MjAwXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4g"
+    "Pj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA0NCA+PgpzdHJlYW0KQlQKL0YxIDEyIFRm"
+    "CjcyIDEyMCBUZAooSGVsbG8gV29ybGQpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8"
+    "PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2ZXRpY2EgPj4KZW5k"
+    "b2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAw"
+    "MDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAow"
+    "MDAwMDAwMzMzIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFy"
+    "dHhyZWYKNDAzCiUlRU9GCg=="
+)
+_REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
+_REAL_PDF_BYTES = base64.b64decode(_REAL_PDF_B64)
+_IMAGE_URL = "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png"
+_NESTED_IMAGE_URL = "https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png"
+_PDF_URL = (
+    "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+)
+
+
 def multimodal_input_message():
     return {
         "role": "user",
@@ -91,14 +119,14 @@ def multimodal_input_message():
                 "source": {
                     "type": "base64",
                     "media_type": "image/png",
-                    "data": "QUJD",
+                    "data": _REAL_PNG_B64,
                 },
             },
             {
                 "type": "image",
                 "source": {
                     "type": "url",
-                    "url": "https://example.com/image.png",
+                    "url": _IMAGE_URL,
                 },
             },
             {
@@ -106,14 +134,14 @@ def multimodal_input_message():
                 "source": {
                     "type": "base64",
                     "media_type": "application/pdf",
-                    "data": "QUJD",
+                    "data": _REAL_PDF_B64,
                 },
             },
             {
                 "type": "document",
                 "source": {
                     "type": "url",
-                    "url": "https://example.com/document.pdf",
+                    "url": _PDF_URL,
                 },
             },
             {
@@ -128,7 +156,6 @@ def multimodal_input_message():
                 "type": "document",
                 "title": "Reference",
                 "context": "Use the nested content.",
-                "citations": {"enabled": True},
                 "source": {
                     "type": "content",
                     "content": [
@@ -137,7 +164,7 @@ def multimodal_input_message():
                             "type": "image",
                             "source": {
                                 "type": "url",
-                                "url": "https://example.com/nested.png",
+                                "url": _NESTED_IMAGE_URL,
                             },
                         },
                     ],
@@ -302,11 +329,11 @@ def incomplete_thinking_text_stream_sse_body(
 
 
 def assert_multimodal_input(span: ReadableSpan) -> None:
-    value = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    assert value is not None
-    assert isinstance(value, str)
-    messages = json.loads(value)
-    assert isinstance(messages, list)
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    messages = get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
 
@@ -320,31 +347,29 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
         "type": "blob",
         "mime_type": "image/png",
         "modality": "image",
-        "content": "QUJD",
+        "content": _REAL_PNG_BYTES,
     }
     assert parts[2] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "image",
-        "uri": "https://example.com/image.png",
+        "uri": _IMAGE_URL,
     }
     assert parts[3] == {
         "type": "blob",
         "mime_type": "application/pdf",
         "modality": "document",
-        "content": "QUJD",
+        "content": _REAL_PDF_BYTES,
     }
     assert parts[4] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "document",
-        "uri": "https://example.com/document.pdf",
+        "uri": _PDF_URL,
     }
     assert parts[5] == {
         "type": "blob",
         "mime_type": "text/plain",
         "modality": "document",
-        "content": "RG9jdW1lbnQgdGV4dA==",
+        "content": b"Document text",
     }
     assert parts[6] == {
         "type": "text",
@@ -352,9 +377,8 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
     }
     assert parts[7] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "image",
-        "uri": "https://example.com/nested.png",
+        "uri": _NESTED_IMAGE_URL,
     }
 
 

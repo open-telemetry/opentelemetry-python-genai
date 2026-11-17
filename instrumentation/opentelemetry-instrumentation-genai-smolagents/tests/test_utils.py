@@ -13,7 +13,6 @@ Agent fakes emit no ``chat`` spans.
 
 from __future__ import annotations
 
-import json
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -304,8 +303,10 @@ def attr(span: ReadableSpan, name: str) -> Any:
 
 
 def parse_messages(span: ReadableSpan, name: str) -> list[dict[str, Any]]:
-    raw = attr(span, name)
-    return json.loads(raw) if isinstance(raw, str) else []
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    attrs = span.attributes or {}
+    return get_content_attribute(attrs, name) if name in attrs else []
 
 
 def part_types(messages: list[dict[str, Any]]) -> list[str]:

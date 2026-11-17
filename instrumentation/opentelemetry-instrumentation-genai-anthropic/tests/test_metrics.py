@@ -10,7 +10,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
-MODEL = "claude-sonnet-4-20250514"
+MODEL = "claude-sonnet-5-5"
 MESSAGES = [{"role": "user", "content": "Say hello in one word."}]
 
 
