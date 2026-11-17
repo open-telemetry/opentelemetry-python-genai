@@ -126,10 +126,6 @@ def exception_events(span) -> list[Any]:
     ]
 
 
-def _assistant_reports_usage() -> bool:
-    return "usage" in inspect.signature(sdk_types.AssistantMessage).parameters
-
-
 def _result_reports_stop_reason() -> bool:
     return (
         "stop_reason" in inspect.signature(sdk_types.ResultMessage).parameters
@@ -276,38 +272,6 @@ def test_finish_reason_normalized_to_finish_reason_vocabulary(
 
     span = agent_spans(span_exporter)[0]
     assert span.attributes["gen_ai.response.finish_reasons"] == (expected,)
-
-
-@pytest.mark.skipif(
-    not _assistant_reports_usage(),
-    reason="this claude-agent-sdk release reports usage only on ResultMessage",
-)
-@pytest.mark.parametrize(
-    ("usage", "expected"),
-    [
-        ({"input_tokens": 7, "output_tokens": 9}, {"input": 7, "output": 9}),
-        ({"input_tokens": 0, "output_tokens": 0}, {"input": 0, "output": 0}),
-        ({"input_tokens": 7}, {"input": 7}),
-    ],
-)
-def test_usage_falls_back_to_assistant_messages(
-    span_exporter, instrument_claude_agent_sdk, usage, expected
-) -> None:
-    # No ResultMessage: the run ended early, so the per-message usage is the
-    # only available total.
-    message = assistant(
-        [{"type": "text", "text": "hi"}], stop_reason="end_turn"
-    )
-    message["message"]["usage"] = usage
-    run_query([_message(), message])
-
-    span = agent_spans(span_exporter)[0]
-    assert span.attributes.get("gen_ai.usage.input_tokens") == expected.get(
-        "input"
-    )
-    assert span.attributes.get("gen_ai.usage.output_tokens") == expected.get(
-        "output"
-    )
 
 
 def test_result_without_usage_exports_no_tokens(

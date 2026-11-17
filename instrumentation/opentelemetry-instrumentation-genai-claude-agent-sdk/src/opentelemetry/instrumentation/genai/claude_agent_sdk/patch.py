@@ -7,7 +7,7 @@ from __future__ import annotations
 import importlib
 import os
 from collections.abc import AsyncIterator
-from typing import Any, cast
+from typing import Any
 
 from claude_agent_sdk.types import (
     AssistantMessage,
@@ -21,14 +21,16 @@ from claude_agent_sdk.types import (
     ToolUseBlock,
     UserMessage,
 )
-from wrapt import FunctionWrapper
+from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.stream import AsyncStreamWrapper
 from opentelemetry.util.genai.types import (
     Error,
     InputMessage,
+    MessagePart,
     OutputMessage,
     ReasoningPart,
     TextPart,
@@ -48,14 +50,6 @@ _FINISH_REASONS = {
 
 def _finish_reason(stop_reason: str) -> str:
     return _FINISH_REASONS.get(stop_reason, stop_reason)
-
-
-def _usage_of(message: AssistantMessage | ResultMessage) -> dict[str, Any]:
-    # AssistantMessage only carries usage in newer SDK releases.
-    usage = getattr(message, "usage", None)
-    if isinstance(usage, dict):
-        return cast("dict[str, Any]", usage)
-    return {}
 
 
 def _input_tokens(usage: dict[str, Any]) -> int | None:
@@ -90,10 +84,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
         self._self_outputs: list[OutputMessage] = []
         self._self_result_usage: dict[str, Any] | None = None
         self._self_result_error: Error | None = None
-        self._self_result_seen = False
         self._self_sdk_session_seen = False
-        self._self_assistant_input: int | None = None
-        self._self_assistant_output: int | None = None
 
     def _process_chunk(self, chunk: Message) -> None:
         if isinstance(chunk, AssistantMessage):
@@ -120,19 +111,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
             self._set_conversation_id(session_id)
 
     def _handle_assistant(self, chunk: AssistantMessage) -> None:
-        usage = _usage_of(chunk)
-        input_tokens = _input_tokens(usage)
-        if input_tokens is not None:
-            self._self_assistant_input = (
-                self._self_assistant_input or 0
-            ) + input_tokens
-        output_tokens = usage.get("output_tokens")
-        if output_tokens is not None:
-            self._self_assistant_output = (
-                self._self_assistant_output or 0
-            ) + output_tokens
-
-        parts: list[Any] = []
+        parts: list[MessagePart] = []
         for block in chunk.content:
             if isinstance(block, TextBlock) and block.text:
                 if self._self_invocation.should_capture_content:
@@ -155,7 +134,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
             )
 
     def _handle_user(self, chunk: UserMessage) -> None:
-        parts: list[Any] = []
+        parts: list[MessagePart] = []
         if isinstance(chunk.content, list):
             for block in chunk.content:
                 if isinstance(block, ToolResultBlock):
@@ -172,7 +151,6 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
     def _handle_result(self, chunk: ResultMessage) -> None:
         if chunk.session_id:
             self._set_conversation_id(chunk.session_id)
-        self._self_result_seen = True
         if chunk.usage:
             self._self_result_usage = dict(chunk.usage)
         # ``stop_reason`` only exists in newer SDK releases.
@@ -189,22 +167,10 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
             )
 
     def _apply_usage(self) -> None:
-        # The ResultMessage carries the run totals; AssistantMessage usage is
-        # only a fallback for runs that end without one, because counting both
-        # would double count.
-        if self._self_result_seen:
-            usage = self._self_result_usage
-            if usage is not None:
-                self._self_invocation.input_tokens = _input_tokens(usage)
-                self._self_invocation.output_tokens = usage.get(
-                    "output_tokens"
-                )
-            return
-        if self._self_assistant_input is not None or (
-            self._self_assistant_output is not None
-        ):
-            self._self_invocation.input_tokens = self._self_assistant_input
-            self._self_invocation.output_tokens = self._self_assistant_output
+        usage = self._self_result_usage
+        if usage is not None:
+            self._self_invocation.input_tokens = _input_tokens(usage)
+            self._self_invocation.output_tokens = usage.get("output_tokens")
 
     def _apply_output(self) -> None:
         if self._self_outputs:
@@ -255,24 +221,16 @@ def _wrap_query(handler: TelemetryHandler) -> Any:
     return wrapper
 
 
-_PATCHED: list[tuple[Any, str, Any]] = []
-
-
-def _patch(module_name: str, attr: str, handler: TelemetryHandler) -> None:
-    module = importlib.import_module(module_name)
-    original = getattr(module, attr)
-    if isinstance(original, FunctionWrapper):
-        return
-    setattr(module, attr, FunctionWrapper(original, _wrap_query(handler)))
-    _PATCHED.append((module, attr, original))
+_TARGET_MODULES = ("claude_agent_sdk.query", "claude_agent_sdk")
 
 
 def instrument(handler: TelemetryHandler) -> None:
-    for module_name in ("claude_agent_sdk.query", "claude_agent_sdk"):
-        _patch(module_name, "query", handler)
+    for module_name in _TARGET_MODULES:
+        wrap_function_wrapper(module_name, "query", _wrap_query(handler))
 
 
 def uninstrument() -> None:
-    while _PATCHED:
-        module, attr, original = _PATCHED.pop()
-        setattr(module, attr, original)
+    # Pass the module object: `claude_agent_sdk.query` as a dotted string
+    # resolves to the function, which shadows the submodule.
+    for module_name in _TARGET_MODULES:
+        unwrap(importlib.import_module(module_name), "query")
