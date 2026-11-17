@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 from google.genai import Client, types
 
@@ -22,14 +20,14 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 _JSON_SCHEMA = {
     "type": "object",
-    "properties": {"city": {"type": "string", "enum": ["Paris", "London"]}},
-    "required": ["city"],
+    "properties": {"city": {"type": "string", "enum": ("Paris", "London")}},
+    "required": ("city",),
     "additionalProperties": False,
 }
 _PARAMETERS = {
     "type": "OBJECT",
     "properties": {"city": {"type": "STRING"}},
-    "required": ["city"],
+    "required": ("city",),
 }
 
 
@@ -96,12 +94,11 @@ def test_tool_definition_parameters(
         == "gemini-2.5-flash"
     )
     definitions = span.attributes[gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS]
-    assert isinstance(definitions, str)
-    assert json.loads(definitions) == [
+    assert definitions == (
         {
             "type": "function",
             "name": "get_weather",
             "description": "Get the weather for a city.",
             "parameters": expected_parameters,
-        }
-    ]
+        },
+    )

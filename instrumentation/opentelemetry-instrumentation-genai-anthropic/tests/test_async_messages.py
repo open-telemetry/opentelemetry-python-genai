@@ -6,7 +6,6 @@
 import asyncio
 import inspect
 import json
-from dataclasses import asdict
 
 import pytest
 
@@ -51,7 +50,6 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.trace import StatusCode
-from opentelemetry.util.genai.types import OutputMessage, TextPart
 
 from .conftest import (
     UNSET_SENTINELS,
@@ -97,12 +95,9 @@ def expected_input_tokens(usage):
 
 
 def _load_span_messages(span, attribute):
-    value = span.attributes.get(attribute)
-    assert value is not None
-    assert isinstance(value, str)
-    parsed = json.loads(value)
-    assert isinstance(parsed, list)
-    return parsed
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    return get_content_attribute(span.attributes, attribute)
 
 
 _WEATHER_TOOL = {
@@ -798,13 +793,10 @@ async def test_async_messages_stream_interrupted_mid_iteration(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            asdict(
-                OutputMessage(
-                    role="assistant",
-                    parts=[TextPart(content="Hello.")],
-                    finish_reason=None,
-                )
-            )
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Hello."}],
+            }
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
@@ -1278,13 +1270,10 @@ async def test_async_messages_create_stream_propagation_error(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            asdict(
-                OutputMessage(
-                    role="assistant",
-                    parts=[TextPart(content="Hello!")],
-                    finish_reason=None,
-                )
-            )
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Hello!"}],
+            }
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
@@ -2551,13 +2540,10 @@ async def test_async_messages_stream_text_stream_user_exception(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            asdict(
-                OutputMessage(
-                    role="assistant",
-                    parts=[TextPart(content="Hello.")],
-                    finish_reason=None,
-                )
-            )
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Hello."}],
+            }
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes

@@ -28,6 +28,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.semconv.attributes import server_attributes
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 
@@ -420,8 +421,8 @@ def test_sync_chat_completions_content_capture(
             span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
             == "portkey"
         )
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 2
         assert input_messages[0]["role"] == "system"
@@ -432,8 +433,8 @@ def test_sync_chat_completions_content_capture(
         assert input_messages[1]["role"] == "user"
         assert input_messages[1]["parts"][0]["content"] == "Hello there!"
 
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert len(output_messages) == 1
         assert output_messages[0]["role"] == "assistant"
@@ -494,15 +495,15 @@ def test_sync_chat_completions_tools(
         assert len(spans) == 1
         span = spans[0]
 
-        tool_defs = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
+        tool_defs = span.attributes.get(
+            GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
         )
         assert len(tool_defs) == 1
         assert tool_defs[0]["name"] == "get_weather"
         assert tool_defs[0]["description"] == "Get current weather"
 
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert len(output_messages) == 1
         parts = output_messages[0]["parts"]
@@ -718,17 +719,17 @@ def test_chat_completions_dict_and_multipart_content(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 2
-        assert input_messages[0]["parts"] == [
-            {"content": "single dict content", "type": "text"}
-        ]
-        assert input_messages[1]["parts"] == [
+        assert input_messages[0]["parts"] == (
+            {"content": "single dict content", "type": "text"},
+        )
+        assert input_messages[1]["parts"] == (
             {"content": "text part", "type": "text"},
             {"content": "nested dict part", "type": "text"},
-        ]
+        )
 
 
 def test_chat_completions_generator_content_captured(
@@ -762,8 +763,8 @@ def test_chat_completions_generator_content_captured(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = get_content_attribute(
+            span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 1
         assert input_messages[0]["parts"] == [
@@ -816,16 +817,16 @@ def test_chat_completions_generator_messages_and_tools_captured(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = get_content_attribute(
+            span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 1
         assert input_messages[0]["parts"] == [
             {"content": "Hello", "type": "text"}
         ]
 
-        tool_defs = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
+        tool_defs = get_content_attribute(
+            span.attributes, GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
         )
         assert len(tool_defs) == 1
         assert tool_defs[0]["name"] == "get_weather"
@@ -979,8 +980,8 @@ def test_chat_completions_nested_generators_captured(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = get_content_attribute(
+            span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 2
         assert input_messages[0]["parts"] == [
@@ -1133,16 +1134,16 @@ async def test_async_chat_completions_generator_messages_and_tools_captured(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = get_content_attribute(
+            span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 1
         assert input_messages[0]["parts"] == [
             {"content": "Async Hello", "type": "text"}
         ]
 
-        tool_defs = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
+        tool_defs = get_content_attribute(
+            span.attributes, GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
         )
         assert len(tool_defs) == 1
         assert tool_defs[0]["name"] == "async_weather"
@@ -1188,8 +1189,8 @@ def test_chat_completions_generator_messages_captured_on_error(
 
     span = span_exporter.get_finished_spans()[0]
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
-    input_messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    input_messages = get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_messages[0]["parts"] == [{"type": "text", "content": "Hello"}]
 
@@ -1224,8 +1225,8 @@ def test_chat_completions_generator_messages_captured_on_streaming_error(
 
     span = span_exporter.get_finished_spans()[0]
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
-    input_messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    input_messages = get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_messages[0]["parts"] == [{"type": "text", "content": "Hello"}]
 
@@ -1268,8 +1269,8 @@ async def test_async_chat_completions_generator_messages_captured_on_streaming_e
 
     span = span_exporter.get_finished_spans()[0]
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
-    input_messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    input_messages = get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_messages[0]["parts"] == [{"type": "text", "content": "Hello"}]
 
@@ -1324,26 +1325,24 @@ def test_chat_completions_image_parts(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = get_content_attribute(
+            span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 2
         assert input_messages[0]["parts"] == [
             {"content": "Describe these images:", "type": "text"},
             {
-                "mime_type": None,
                 "modality": "image",
                 "type": "uri",
                 "uri": "https://example.com/remote.png",
             },
             {
-                "mime_type": None,
                 "modality": "image",
                 "type": "uri",
                 "uri": "https://example.com/nested.png",
             },
             {
-                "content": "QUJD",
+                "content": b"ABC",
                 "mime_type": "image/png",
                 "modality": "image",
                 "type": "blob",
@@ -1351,7 +1350,6 @@ def test_chat_completions_image_parts(
         ]
         assert input_messages[1]["parts"] == [
             {
-                "mime_type": None,
                 "modality": "image",
                 "type": "uri",
                 "uri": "https://example.com/single.png",
@@ -1372,7 +1370,7 @@ def test_chat_completions_image_parts(
                     "type": "blob",
                     "modality": "audio",
                     "mime_type": "audio/wav",
-                    "content": "UklGRg==",
+                    "content": b"RIFF",
                 }
             ],
         ),
@@ -1414,7 +1412,7 @@ def test_chat_completions_image_parts(
                     "type": "blob",
                     "modality": "document",
                     "mime_type": "application/pdf",
-                    "content": "JVBERg==",
+                    "content": b"%PDF",
                 }
             ],
         ),
@@ -1428,7 +1426,7 @@ def test_chat_completions_image_parts(
                     "type": "blob",
                     "modality": "document",
                     "mime_type": "application/pdf",
-                    "content": "JVBERg==",
+                    "content": b"%PDF",
                 }
             ],
         ),
@@ -1443,7 +1441,6 @@ def test_chat_completions_image_parts(
                 {
                     "type": "uri",
                     "modality": "image",
-                    "mime_type": None,
                     "uri": "https://example.com/obj.png",
                 }
             ],
@@ -1473,8 +1470,8 @@ def test_chat_completions_content_parts(
         )
 
     span = span_exporter.get_finished_spans()[0]
-    messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    messages = get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
     assert messages[0]["parts"] == expected
 

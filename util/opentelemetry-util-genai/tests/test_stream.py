@@ -44,7 +44,6 @@ from opentelemetry.util.genai.stream import (
     finalize_on_close,
 )
 from opentelemetry.util.genai.types import ContentCapturingMode
-from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 
 def test_stream_wrapper_abstract_method_signatures_match():
@@ -1876,9 +1875,7 @@ def test_sync_tool_stream_wrapper_non_string_chunks():
     assert invocation.tool_result == chunks
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
-    assert spans[0].attributes["gen_ai.tool.call.result"] == gen_ai_json_dumps(
-        chunks
-    )
+    assert spans[0].attributes["gen_ai.tool.call.result"] == tuple(chunks)
 
 
 def test_tool_stream_wrapper_converts_model_chunks():
@@ -1894,7 +1891,7 @@ def test_tool_stream_wrapper_converts_model_chunks():
     list(wrapper)
 
     (span,) = span_exporter.get_finished_spans()
-    assert span.attributes["gen_ai.tool.call.result"] == '[{"k":"v"},{"n":1}]'
+    assert span.attributes["gen_ai.tool.call.result"] == ({"k": "v"}, {"n": 1})
 
 
 def test_async_tool_stream_wrapper_non_string_chunks():
@@ -1909,9 +1906,7 @@ def test_async_tool_stream_wrapper_non_string_chunks():
         assert invocation.tool_result == chunks
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
-        assert spans[0].attributes[
-            "gen_ai.tool.call.result"
-        ] == gen_ai_json_dumps(chunks)
+        assert spans[0].attributes["gen_ai.tool.call.result"] == tuple(chunks)
 
     asyncio.run(exercise())
 

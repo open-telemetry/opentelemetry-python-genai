@@ -171,13 +171,13 @@ def test_http_inference(
     assert type(attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS]) is int
     assert attributes[GenAI.GEN_AI_REQUEST_TEMPERATURE] == 0.2
     assert attributes[GenAI.GEN_AI_REQUEST_MAX_TOKENS] == 40
-    inputs = json.loads(attributes[GenAI.GEN_AI_INPUT_MESSAGES])
-    outputs = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    inputs = attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    outputs = attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert len(inputs) == len(outputs) == 1
     assert inputs[0]["role"] == "user"
-    assert inputs[0]["parts"] == [{"type": "text", "content": PROMPT}]
+    assert inputs[0]["parts"] == ({"type": "text", "content": PROMPT},)
     assert outputs[0]["role"] == "assistant"
-    assert outputs[0]["parts"] == [{"type": "text", "content": ANSWER}]
+    assert outputs[0]["parts"] == ({"type": "text", "content": ANSWER},)
     assert outputs[0]["finish_reason"] == "stop"
 
 
