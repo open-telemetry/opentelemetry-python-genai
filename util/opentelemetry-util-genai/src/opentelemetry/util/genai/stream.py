@@ -22,6 +22,8 @@ from typing import (
 )
 
 from opentelemetry.semconv.attributes.error_attributes import ErrorTypeValues
+from opentelemetry.util.genai._inference_invocation import InferenceInvocation
+from opentelemetry.util.genai._invocation import GenAIInvocation
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
 from opentelemetry.util.genai.utils import object_to_any_value
 
@@ -60,12 +62,11 @@ class _StreamInvocation(Protocol):
     def activate(self) -> AbstractContextManager[None]: ...
 
 
-class _StreamTimingInvocation(Protocol):
-    def _on_stream_chunk(self, chunk_at: float) -> None: ...
-
-
-def _records_stream_telemetry(invocation: object) -> bool:
-    return bool(getattr(invocation, "_records_stream_telemetry", False))
+def _mark_streamed(invocation: _StreamInvocation | None) -> None:
+    # Chunk timing is defined for inference only; other invocation types can
+    # be passed to the wrappers for context scoping without emitting it.
+    if isinstance(invocation, InferenceInvocation):
+        invocation._request_stream = True
 
 
 class _StreamingInvocation(_StreamInvocation, Protocol):
@@ -111,16 +112,19 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     def _execution_context(self) -> AbstractContextManager[None]:
         """Scope stream reads and cleanup, restoring context before returning a chunk.
 
-        By default a suspended invocation is made current again for each read:
-        an instrumentation that hands the stream back to the caller calls
-        ``invocation.suspend()`` and gets the span restored around tool or
-        provider code without overriding this hook. Invocations that are still
-        attached, or that never attached, leave the context alone.
+        By default the invocation is made current for each read when it is not
+        attached to the context: it was created with
+        ``_attach_to_context=False``, or it was suspended. Invocations that are
+        still attached, or that reuse the current span, leave the context alone.
         """
+        # getattr: __del__ can run on a wrapper whose __init__ raised.
         invocation = getattr(self, "_self_invocation", None)
-        if invocation is None or not getattr(invocation, "_suspended", False):
-            return nullcontext()
-        return invocation.activate()
+        if (
+            isinstance(invocation, GenAIInvocation)
+            and invocation._needs_activation
+        ):
+            return invocation.activate()
+        return nullcontext()
 
     def _finalize_success(self) -> None:
         if self._self_finalized:
@@ -181,8 +185,8 @@ class SyncStreamWrapper(
     ``super().__init__(stream, invocation)`` and implement the three telemetry
     hooks: ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
     successful finalization, and ``_on_stream_error`` for failure finalization.
-    ``_execution_context`` scopes each read and cleanup; by default it makes a
-    suspended invocation current again and can be overridden.
+    ``_execution_context`` scopes each read and cleanup; by default it makes an
+    unattached invocation current and can be overridden.
 
     Users should consume subclasses as normal streams, for example with
     ``for chunk in wrapper`` or ``with wrapper``. The hook methods are called
@@ -197,8 +201,7 @@ class SyncStreamWrapper(
         super().__init__(stream)
         self._self_finalized = False
         self._self_invocation = invocation
-        if _records_stream_telemetry(invocation):
-            setattr(invocation, "_request_stream", True)
+        _mark_streamed(invocation)
         self._bind_stream(stream)
 
     # The SDK stream, held loosely typed: subclasses re-expose it through a
@@ -285,17 +288,13 @@ class SyncStreamWrapper(
                 self._finalize_failure(error)
                 raise
             invocation = self._self_invocation
-            chunk_at = (
-                timeit.default_timer()
-                if _records_stream_telemetry(invocation)
-                else None
-            )
+            if not isinstance(invocation, InferenceInvocation):
+                self._process_chunk(chunk)
+                return chunk
+            chunk_at = timeit.default_timer()
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if chunk_at is not None:
-                cast(_StreamTimingInvocation, invocation)._on_stream_chunk(
-                    chunk_at
-                )
+            invocation._on_stream_chunk(chunk_at)
             return chunk
 
 
@@ -312,8 +311,8 @@ class AsyncStreamWrapper(
     ``super().__init__(stream, invocation)`` and implement the three telemetry
     hooks: ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
     successful finalization, and ``_on_stream_error`` for failure finalization.
-    ``_execution_context`` scopes each read and cleanup; by default it makes a
-    suspended invocation current again and can be overridden.
+    ``_execution_context`` scopes each read and cleanup; by default it makes an
+    unattached invocation current and can be overridden.
 
     Users should consume subclasses as normal async streams, for example with
     ``async for chunk in wrapper`` or ``async with wrapper``. The hook methods
@@ -329,8 +328,7 @@ class AsyncStreamWrapper(
         super().__init__(stream)
         self._self_finalized = False
         self._self_invocation = invocation
-        if _records_stream_telemetry(invocation):
-            setattr(invocation, "_request_stream", True)
+        _mark_streamed(invocation)
         self._bind_stream(stream)
 
     # See ``SyncStreamWrapper._self_stream``.
@@ -503,17 +501,13 @@ class AsyncStreamWrapper(
                 raise
 
             invocation = self._self_invocation
-            chunk_at = (
-                timeit.default_timer()
-                if _records_stream_telemetry(invocation)
-                else None
-            )
+            if not isinstance(invocation, InferenceInvocation):
+                self._process_chunk(chunk)
+                return chunk
+            chunk_at = timeit.default_timer()
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if chunk_at is not None:
-                cast(_StreamTimingInvocation, invocation)._on_stream_chunk(
-                    chunk_at
-                )
+            invocation._on_stream_chunk(chunk_at)
             return chunk
 
 
@@ -524,9 +518,7 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
     drained. This wrapper restores the caller's context before returning, and
     makes the tool span current only while tool code runs -- producing a chunk,
     closing, or finalizing -- so caller work between chunks is not parented
-    under the tool. This applies to invocations created attached (the default);
-    a tool invocation created with ``_attach_to_context=False`` is left alone
-    and its span is never made current by the wrapper. Per-chunk content is accumulated and set on
+    under the tool. Per-chunk content is accumulated and set on
     ``invocation.tool_result`` upon completion.
     """
 
@@ -537,7 +529,7 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
     ) -> None:
         super().__init__(stream, invocation)
         self._self_tool_invocation = invocation
-        invocation.suspend()
+        invocation._detach()
         self._self_chunks: list[Any] = []
 
     def __del__(self) -> None:
@@ -583,7 +575,7 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
     ) -> None:
         super().__init__(stream, invocation)
         self._self_tool_invocation = invocation
-        invocation.suspend()
+        invocation._detach()
         self._self_chunks: list[Any] = []
 
     def __del__(self) -> None:
