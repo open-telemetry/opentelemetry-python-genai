@@ -95,8 +95,10 @@ def _total_input_tokens(
     cache_read_input_tokens: int | None,
     cache_creation_input_tokens: int | None,
 ) -> int | None:
-    """Converse ``inputTokens`` excludes cached tokens; the semantic
-    conventions want ``gen_ai.usage.input_tokens`` to include them."""
+    """Bedrock input token counts (Converse ``inputTokens`` and InvokeModel's
+    ``x-amzn-bedrock-input-token-count`` / ``inputTokenCount``) exclude cached
+    tokens; the semantic conventions want ``gen_ai.usage.input_tokens`` to
+    include them."""
     if (
         input_tokens is None
         and cache_read_input_tokens is None
@@ -443,13 +445,13 @@ def extract_converse_response(
         invocation.cache_read_input_tokens = _safe_int(
             usage.get("cacheReadInputTokens")
         )
-        invocation.cache_creation_input_tokens = _safe_int(
+        invocation.cache_write_input_tokens = _safe_int(
             usage.get("cacheWriteInputTokens")
         )
         invocation.input_tokens = _total_input_tokens(
             _safe_int(usage.get("inputTokens")),
             invocation.cache_read_input_tokens,
-            invocation.cache_creation_input_tokens,
+            invocation.cache_write_input_tokens,
         )
 
 
@@ -662,11 +664,17 @@ def extract_invoke_model_response(
                 usage.get("cacheReadInputTokens"),
             )
         )
-        invocation.cache_creation_input_tokens = _safe_int(
+        invocation.cache_write_input_tokens = _safe_int(
             _first_not_none(
                 usage.get("cache_creation_input_tokens"),
                 usage.get("cacheWriteInputTokens"),
             )
+        )
+
+        invocation.input_tokens = _total_input_tokens(
+            invocation.input_tokens,
+            invocation.cache_read_input_tokens,
+            invocation.cache_write_input_tokens,
         )
 
     if invocation.input_tokens is None and "inputTextTokenCount" in body:

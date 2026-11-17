@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -219,8 +218,8 @@ def test_sync_prompt_completions_content_capture(
         assert len(spans) == 1
         span = spans[0]
 
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert len(output_messages) == 1
         assert (

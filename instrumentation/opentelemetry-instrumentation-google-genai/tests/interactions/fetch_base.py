@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -587,11 +586,18 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named(_SPAN_NAME)
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Fetched response!","type":"text"}],"finish_reason":null,"name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": (
+                        {"content": "Fetched response!", "type": "text"},
+                    ),
+                },
+            ),
         )
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS],
-            '[{"content":"Be terse.","type":"text"}]',
+            ({"content": "Be terse.", "type": "text"},),
         )
         # A fetched response does not carry the original request's input.
         self.assertNotIn(
@@ -630,7 +636,13 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named(_SPAN_NAME)
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
-            '[{"name":"dict_tool","description":"Dict tool desc","parameters":null,"type":"function"}]',
+            (
+                {
+                    "name": "dict_tool",
+                    "description": "Dict tool desc",
+                    "type": "function",
+                },
+            ),
         )
 
     @patch.dict(
@@ -806,7 +818,12 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named(_SPAN_NAME)
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Hello there.","type":"text"}],"finish_reason":null,"name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"content": "Hello there.", "type": "text"},),
+                },
+            ),
         )
 
     @patch.dict(
@@ -853,7 +870,12 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named(_SPAN_NAME)
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"resumed text.","type":"text"}],"finish_reason":null,"name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"content": "resumed text.", "type": "text"},),
+                },
+            ),
         )
 
     @patch.dict(
@@ -884,12 +906,10 @@ class TestCase(CommonTestCaseBase):
         self.configure_tool_call_events()
         self.run_streaming_fetch("abc-123", stream=True)
         span = self.otel.get_span_named(_SPAN_NAME)
-        messages = json.loads(
-            span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-        )
+        messages = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
         self.assertEqual(
             messages[0]["parts"],
-            [
+            (
                 {
                     "id": "call-1",
                     "name": "get_weather",
@@ -898,7 +918,7 @@ class TestCase(CommonTestCaseBase):
                     "type": "tool_call",
                 },
                 {"content": "Sunny.", "type": "text"},
-            ],
+            ),
         )
 
     @patch.dict(
@@ -910,12 +930,10 @@ class TestCase(CommonTestCaseBase):
         self.configure_server_tool_events()
         self.run_streaming_fetch("abc-123", stream=True)
         span = self.otel.get_span_named(_SPAN_NAME)
-        messages = json.loads(
-            span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-        )
+        messages = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
         self.assertEqual(
             messages[0]["parts"],
-            [
+            (
                 {
                     "id": "code-1",
                     "name": "code_execution",
@@ -938,7 +956,7 @@ class TestCase(CommonTestCaseBase):
                     },
                     "type": "server_tool_call_response",
                 },
-            ],
+            ),
         )
 
     @patch.dict(
@@ -952,17 +970,15 @@ class TestCase(CommonTestCaseBase):
         self.configure_real_model_events()
         self.run_streaming_fetch("abc-123", stream=True)
         span = self.otel.get_span_named(_SPAN_NAME)
-        messages = json.loads(
-            span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-        )
+        messages = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
         self.assertEqual(
             messages[0]["parts"],
-            [
+            (
                 {
                     "id": "s-1",
                     "name": "google_search",
                     "server_tool_call": {
-                        "arguments": {"queries": ["otel"]},
+                        "arguments": {"queries": ("otel",)},
                         "type": "google_search",
                     },
                     "type": "server_tool_call",
@@ -970,18 +986,18 @@ class TestCase(CommonTestCaseBase):
                 {
                     "id": "s-1",
                     "server_tool_call_response": {
-                        "result": [
+                        "result": (
                             {
                                 "title": "OpenTelemetry",
                                 "url": "https://opentelemetry.io",
-                            }
-                        ],
+                            },
+                        ),
                         "is_error": False,
                         "type": "google_search",
                     },
                     "type": "server_tool_call_response",
                 },
-            ],
+            ),
         )
 
     @patch.dict(
@@ -993,17 +1009,15 @@ class TestCase(CommonTestCaseBase):
         self.configure_start_content_events()
         self.run_streaming_fetch("abc-123", stream=True)
         span = self.otel.get_span_named(_SPAN_NAME)
-        messages = json.loads(
-            span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-        )
+        messages = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
         self.assertEqual(
             messages[0]["parts"],
-            [
+            (
                 # The step's own content, continued by its delta.
                 {"content": "Hello world", "type": "text"},
                 # A step whose text arrived entirely on step.start.
                 {"content": "No deltas.", "type": "text"},
-            ],
+            ),
         )
 
     @patch.dict(
@@ -1015,12 +1029,10 @@ class TestCase(CommonTestCaseBase):
         self.configure_user_input_events()
         self.run_streaming_fetch("abc-123", stream=True)
         span = self.otel.get_span_named(_SPAN_NAME)
-        messages = json.loads(
-            span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-        )
+        messages = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
         self.assertEqual(
             messages[0]["parts"],
-            [{"content": "An observability framework.", "type": "text"}],
+            ({"content": "An observability framework.", "type": "text"},),
         )
         # A fetched response never reports the original request's input.
         self.assertNotIn(
