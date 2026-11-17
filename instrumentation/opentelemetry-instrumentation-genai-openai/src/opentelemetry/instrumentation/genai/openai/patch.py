@@ -83,9 +83,7 @@ def chat_completions_create_v_new(
             try:
                 result = wrapped(*args, **kwargs)
             finally:
-                # The SDK has consumed the request iterators by the time
-                # wrapped() returns, even when it raises; extract() never
-                # advances them again and swallows its own errors.
+                # The SDK consumes request iterators even when it raises.
                 chat_invocation.input_messages = (
                     messages_capture.extract(_prepare_input_messages) or []
                 )
