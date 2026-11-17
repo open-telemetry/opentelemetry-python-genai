@@ -996,11 +996,13 @@ def test_sync_interactions_get_streaming(
     # Proves the real SSE completion event is recognised and applied.
     assert span.attributes["gen_ai.response.status"] == interaction.status
     assert span.attributes["gen_ai.response.model"] == interaction.model
-    # The create call is a separate operation with its own span.
-    assert (
-        otel_mocker.get_span_named(f"interactions.create {_BACKGROUND_MODEL}")
-        is not None
+    # The create call is a separate operation with its own span; an in-progress
+    # background response has no output parts yet and must omit output messages.
+    create_span = otel_mocker.get_span_named(
+        f"interactions.create {_BACKGROUND_MODEL}"
     )
+    assert create_span is not None
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in create_span.attributes
     # The completion event carries metadata only (`steps` comes back null), so
     # the captured content has to come from the step deltas.
     assert interaction.steps is None
@@ -1083,4 +1085,310 @@ def test_sync_interactions_get_resumed_stream(
     assert any(
         f"last_event_id={cursor}" in request.uri
         for request in vcr_cassette.requests
+    )
+
+
+def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
+    try:
+        from google.genai._interactions.types import (
+            DocumentContent,
+            Function,
+            FunctionResultStep,
+            TextContent,
+            UserInputStep,
+        )
+        from google.genai._interactions.types.tool import GoogleSearch
+    except ImportError:
+        from google.genai._gaos.types.interactions import (
+            DocumentContent,
+            Function,
+            FunctionResultStep,
+            GoogleSearch,
+            TextContent,
+            UserInputStep,
+        )
+
+    steps: list[Any] = [
+        UserInputStep(
+            type="user_input",
+            content=[
+                TextContent(type="text", text="What is the weather in Paris?"),
+                DocumentContent(
+                    type="document",
+                    mime_type="application/pdf",
+                    uri="https://example.com/doc.pdf",
+                ),
+            ],
+        ),
+        {
+            "type": "user_input",
+            "content": [
+                {"type": "text", "text": "And in London?"},
+                {
+                    "type": "document",
+                    "mime_type": "application/pdf",
+                    "uri": "https://example.com/london.pdf",
+                },
+            ],
+        },
+        FunctionResultStep(
+            type="function_result",
+            call_id="call-123",
+            name="get_weather",
+            result=[TextContent(type="text", text="22C and Sunny")],
+        ),
+    ]
+    tools: list[Any] = [
+        Function(
+            type="function",
+            name="get_weather",
+            description="Get the current weather for a city.",
+            parameters={
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        ),
+        GoogleSearch(type="google_search"),
+        {
+            "type": "function",
+            "name": "get_forecast",
+            "description": "Get forecast.",
+            "parameters": {
+                "type": "object",
+                "properties": {"days": {"type": "integer"}},
+            },
+        },
+    ]
+    return steps, tools
+
+
+def _assert_create_tool_call_and_steps_span(
+    otel_mocker: OTelMocker, response: Any, content_mode: str
+) -> None:
+    assert response.status == "requires_action"
+    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    assert span is not None
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("tool_calls",)
+    assert span.attributes["gen_ai.usage.input_tokens"] == 42
+    assert span.attributes["gen_ai.usage.output_tokens"] == 15
+    assert span.attributes["gen_ai.usage.cache_read.input_tokens"] == 5
+    if content_mode == "no_content_capture":
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+        assert "gen_ai.tool.definitions" not in span.attributes
+        return
+
+    assert get_content_attribute(
+        span.attributes, "gen_ai.tool.definitions"
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+        {"type": "google_search", "name": "google_search"},
+        {
+            "type": "function",
+            "name": "get_forecast",
+            "description": "Get forecast.",
+            "parameters": {
+                "type": "object",
+                "properties": {"days": {"type": "integer"}},
+            },
+        },
+    ]
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    ) == [
+        {
+            "role": "user",
+            "parts": [
+                {"type": "text", "content": "What is the weather in Paris?"},
+                {
+                    "type": "uri",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "uri": "https://example.com/doc.pdf",
+                },
+                {"type": "text", "content": "And in London?"},
+                {
+                    "type": "uri",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "uri": "https://example.com/london.pdf",
+                },
+                {
+                    "type": "tool_call_response",
+                    "id": "call-123",
+                    "response": [{"type": "text", "text": "22C and Sunny"}],
+                },
+            ],
+        }
+    ]
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "id": "call-2",
+                    "name": "get_forecast",
+                    "arguments": {
+                        "location": {"city": "London"},
+                        "days": 3,
+                    },
+                }
+            ],
+        }
+    ]
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_tool_call_and_steps")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_tool_call_and_steps(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps, tools = _create_tool_call_and_steps_args()
+    response = client.interactions.create(
+        model="gemini-2.5-flash",
+        input=steps,
+        tools=tools,
+    )
+
+    _assert_create_tool_call_and_steps_span(
+        otel_mocker, response, content_mode
+    )
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_tool_call_and_steps")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_tool_call_and_steps(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps, tools = _create_tool_call_and_steps_args()
+    response = await client.aio.interactions.create(
+        model="gemini-2.5-flash",
+        input=steps,
+        tools=tools,
+    )
+
+    _assert_create_tool_call_and_steps_span(
+        otel_mocker, response, content_mode
+    )
+
+
+def _assert_fetched_tools_and_function_result_span(
+    otel_mocker: OTelMocker, response: Any, content_mode: str
+) -> None:
+    assert response.id == _INTERACTION_ID
+    assert response.status == "completed"
+    span = _fetch_span(otel_mocker)
+    assert span.attributes["gen_ai.response.id"] == response.id
+    assert span.attributes["gen_ai.response.status"] == "completed"
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    if content_mode == "no_content_capture":
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+        assert "gen_ai.tool.definitions" not in span.attributes
+        return
+
+    assert get_content_attribute(
+        span.attributes, "gen_ai.tool.definitions"
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+        {"type": "google_search", "name": "google_search"},
+    ]
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "get_weather",
+                    "arguments": {"location": {"city": "Paris"}},
+                },
+                {
+                    "type": "text",
+                    "content": "It is 22C and Sunny in Paris.",
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.vcr(match_on=_GET_MATCH_ON)
+@pytest.mark.cassette(
+    "test_sync_interactions_get_with_tools_and_function_result"
+)
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_get_with_tools_and_function_result(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    response = client.interactions.get(_INTERACTION_ID)
+
+    _assert_fetched_tools_and_function_result_span(
+        otel_mocker, response, content_mode
+    )
+
+
+@pytest.mark.vcr(match_on=_GET_MATCH_ON)
+@pytest.mark.cassette(
+    "test_async_interactions_get_with_tools_and_function_result"
+)
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_get_with_tools_and_function_result(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    response = await client.aio.interactions.get(id=_INTERACTION_ID)
+
+    _assert_fetched_tools_and_function_result_span(
+        otel_mocker, response, content_mode
     )
