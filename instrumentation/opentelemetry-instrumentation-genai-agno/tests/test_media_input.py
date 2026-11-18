@@ -42,7 +42,9 @@ def _run_agent(
         messages = kwargs.get("messages") or (args[0] if args else ())
         for msg in messages:
             if getattr(msg, "images", None):
-                sent_image_urls.extend(img.url for img in msg.images if img.url)
+                sent_image_urls.extend(
+                    img.url for img in msg.images if img.url
+                )
 
     def _sync_resp(*args: Any, **kwargs: Any) -> ModelResponse:
         _record(*args, **kwargs)
@@ -72,7 +74,9 @@ def _run_agent(
 
         asyncio.run(_consume())
     elif is_async:
-        with patch("agno.models.base.Model.aresponse", side_effect=_async_resp):
+        with patch(
+            "agno.models.base.Model.aresponse", side_effect=_async_resp
+        ):
             asyncio.run(agent.arun(**run_kwargs))
     elif stream:
         with patch(
@@ -114,7 +118,9 @@ def test_agent_captures_url_media_parts(
         ],
         videos=[Video(url="https://example.com/clip.mp4")],
         files=[
-            File(url="https://example.com/doc.pdf", mime_type="application/pdf")
+            File(
+                url="https://example.com/doc.pdf", mime_type="application/pdf"
+            )
         ],
     )
 
@@ -447,7 +453,9 @@ def test_agent_run_error_preserves_list_and_does_not_drain_generator(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].status.status_code == StatusCode.ERROR
-    assert spans[0].attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+    assert (
+        spans[0].attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+    )
     assert _input_parts(span_exporter) == (
         {"type": "text", "content": "Fail with media"},
         {
@@ -481,7 +489,9 @@ def test_team_run_captures_media_parts(
         ):
             asyncio.run(team.arun(**kwargs))
     else:
-        with patch("agno.models.base.Model.response", return_value=mock_output):
+        with patch(
+            "agno.models.base.Model.response", return_value=mock_output
+        ):
             team.run(**kwargs)
 
     assert _input_parts(span_exporter) == (
