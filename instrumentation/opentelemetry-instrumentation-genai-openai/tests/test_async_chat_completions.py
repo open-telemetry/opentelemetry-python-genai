@@ -1952,7 +1952,10 @@ async def test_async_chat_completion_messages_generator_reusing_mutable_dict(
 ):
     """Async: same mutated dict yielded twice records both values."""
 
+    seen = {}
+
     async def respond(request):
+        seen["messages"] = json.loads(request.content)["messages"]
         return httpx.Response(
             200,
             json=_ASYNC_GENERATOR_TEST_COMPLETION,
@@ -1973,6 +1976,10 @@ async def test_async_chat_completion_messages_generator_reusing_mutable_dict(
         model="gpt-4o-mini", messages=messages()
     )
 
+    assert seen["messages"] == [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "second"},
+    ]
     spans = span_exporter.get_finished_spans()
     (span,) = spans
     assert_messages_attribute(

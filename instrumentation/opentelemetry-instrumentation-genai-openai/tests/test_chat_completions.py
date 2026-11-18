@@ -2246,7 +2246,10 @@ def test_chat_completion_messages_generator_reusing_mutable_dict(
     message.
     """
 
+    seen = {}
+
     def respond(request):
+        seen["messages"] = json.loads(request.content)["messages"]
         return httpx.Response(
             200,
             json=_REQUEST_TEST_COMPLETION,
@@ -2265,6 +2268,10 @@ def test_chat_completion_messages_generator_reusing_mutable_dict(
     )
     client.chat.completions.create(model="gpt-4o-mini", messages=messages())
 
+    assert seen["messages"] == [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "second"},
+    ]
     spans = span_exporter.get_finished_spans()
     (span,) = spans
     assert_messages_attribute(
