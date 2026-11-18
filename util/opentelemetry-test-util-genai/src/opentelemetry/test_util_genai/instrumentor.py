@@ -27,6 +27,7 @@ from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
+from opentelemetry.util.genai.types import ContentCapturingMode
 
 # Sentinel marking "completion_hook not supplied" so ``None`` stays a valid,
 # explicitly-forwardable value.
@@ -41,6 +42,7 @@ def instrument(
     logger_provider: Any,
     meter_provider: Any,
     content_capture: str | None = None,
+    content_capturing_mode: ContentCapturingMode | None = None,
     extra_env: Mapping[str, str] | None = None,
     completion_hook: Any = _UNSET,
 ) -> Iterator[BaseInstrumentor]:
@@ -66,7 +68,8 @@ def instrument(
     default). Pass ``extra_env`` for anything else. ``completion_hook`` is
     forwarded to ``instrumentor.instrument(completion_hook=...)`` when provided
     (left off entirely by default so the instrumentor's own default resolution
-    runs).
+    runs). ``content_capturing_mode`` is forwarded when non-None to override
+    the environment-configured content capture mode.
 
     Previous values are restored on exit so tests stay isolated.
     """
@@ -86,6 +89,8 @@ def instrument(
     }
     if completion_hook is not _UNSET:
         instrument_kwargs["completion_hook"] = completion_hook
+    if content_capturing_mode is not None:
+        instrument_kwargs["content_capturing_mode"] = content_capturing_mode
 
     os.environ.update(overrides)
     try:
