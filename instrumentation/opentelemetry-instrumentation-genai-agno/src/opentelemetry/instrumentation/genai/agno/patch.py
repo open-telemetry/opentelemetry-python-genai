@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
     from agno.knowledge.knowledge import Knowledge
+    from agno.media import Audio, File, Image, Video
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
     from wrapt import BoundFunctionWrapper, FunctionWrapper
@@ -58,9 +59,12 @@ from opentelemetry.instrumentation.genai.agno.stream import (
 )
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
+    extract_media_parts,
     extract_session_id,
     format_content,
     format_retrieval_document,
+    is_agno_message,
+    is_workflow_execution_input,
     prepare_tool_definitions,
     resolve_embedder_provider,
     safe_int,
@@ -77,6 +81,7 @@ from opentelemetry.util.genai.invocation import (
     ToolInvocation,
     WorkflowInvocation,
 )
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 from opentelemetry.util.genai.stream import (
     AsyncToolStreamWrapper,
     SyncToolStreamWrapper,
@@ -84,6 +89,7 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     Error,
     InputMessage,
+    MessagePart,
     OutputMessage,
     Role,
     SystemInstructionPart,
@@ -635,23 +641,142 @@ def _set_tool_invocation_output(
         )
 
 
+def _build_user_input_messages(
+    input_val: object,
+    *,
+    images: Sequence[Image] | None = None,
+    audio: Sequence[Audio] | None = None,
+    videos: Sequence[Video] | None = None,
+    files: Sequence[File] | None = None,
+) -> list[InputMessage]:
+    role = Role.USER.value
+    if is_agno_message(input_val):
+        role = input_val.role or Role.USER.value
+        text = (
+            format_content(input_val.content)
+            if input_val.content is not None
+            else ""
+        )
+        images, audio, videos, files = (
+            input_val.images,
+            input_val.audio,
+            input_val.videos,
+            input_val.files,
+        )
+    else:
+        text = (
+            _extract_input_content(input_val) if input_val is not None else ""
+        )
+
+    parts: list[MessagePart] = [TextPart(content=text)] if text else []
+    parts.extend(
+        extract_media_parts(
+            images=images, audio=audio, videos=videos, files=files
+        )
+    )
+    return [InputMessage(role=role, parts=parts)] if parts else []
+
+
+_MEDIA_KWARG_NAMES: tuple[str, ...] = ("images", "audio", "videos", "files")
+
+
+class _InputMediaCapture:
+    """Wrap media kwargs with IteratorCapture so generators are recorded as Agno reads them."""
+
+    def __init__(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        wrapped: Callable[..., Any],
+        captures: dict[str, IteratorCapture],
+    ) -> None:
+        self._args = args
+        self._kwargs = kwargs
+        self._wrapped = wrapped
+        self._captures = captures
+
+    def apply(
+        self, invocation: LocalAgentInvocation | WorkflowInvocation
+    ) -> None:
+        _set_invocation_input(
+            invocation,
+            self._args,
+            self._kwargs,
+            True,
+            self._wrapped,
+            self._captures,
+        )
+
+    def finalizer(
+        self, invocation: LocalAgentInvocation | WorkflowInvocation
+    ) -> Callable[[], None]:
+        return functools.partial(self.apply, invocation)
+
+
+def _capture_input_media(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    wrapped: Callable[..., Any],
+    *,
+    enabled: bool,
+) -> _InputMediaCapture | None:
+    if not enabled:
+        return None
+    captures = {
+        name: IteratorCapture.from_property(kwargs, name, enabled=True)
+        for name in _MEDIA_KWARG_NAMES
+        if name in kwargs
+    }
+    if not captures:
+        return None
+    return _InputMediaCapture(args, kwargs, wrapped, captures)
+
+
 def _set_invocation_input(
     invocation: LocalAgentInvocation | WorkflowInvocation,
-    instance: Any,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     capture_content: bool,
     wrapped: Callable[..., Any],
+    media_captures: dict[str, IteratorCapture] | None = None,
 ) -> None:
-    if capture_content:
-        input_val = get_argument("input", wrapped, args, kwargs)
-        if input_val is not None:
-            content_str = _extract_input_content(input_val)
-            invocation.input_messages = [
-                InputMessage(
-                    role=Role.USER.value, parts=[TextPart(content=content_str)]
-                )
-            ]
+    if not capture_content:
+        return
+    bound = bind_arguments(wrapped, args, kwargs)
+
+    def _media(name: str) -> object:
+        if media_captures and name in media_captures:
+            return media_captures[name].extract(lambda snapshot: snapshot)
+        return bound.get(name)
+
+    messages = _build_user_input_messages(
+        bound.get("input"),
+        images=cast("Sequence[Image] | None", _media("images")),
+        audio=cast("Sequence[Audio] | None", _media("audio")),
+        videos=cast("Sequence[Video] | None", _media("videos")),
+        files=cast("Sequence[File] | None", _media("files")),
+    )
+    if messages:
+        invocation.input_messages = messages
+
+
+def _set_workflow_execution_input_messages(
+    invocation: WorkflowInvocation,
+    input_val: object,
+    exec_input: object,
+) -> None:
+    if is_workflow_execution_input(exec_input):
+        messages = _build_user_input_messages(
+            input_val,
+            images=exec_input.images,
+            audio=exec_input.audio,
+            videos=exec_input.videos,
+            files=exec_input.files,
+        )
+    else:
+        messages = _build_user_input_messages(input_val)
+    if messages:
+        invocation.input_messages = messages
 
 
 def _to_tool_executions(raw_tools: object) -> list[ToolExecution]:
@@ -877,6 +1002,7 @@ def _start_agent_invocation(
     wrapped: Callable[..., Any],
     *,
     is_continue: bool = False,
+    defer_input: bool = False,
 ) -> LocalAgentInvocation:
     agent_name = getattr(instance, "name", None)
     conversation_id = extract_session_id(
@@ -906,9 +1032,9 @@ def _start_agent_invocation(
         _set_continue_invocation_input(
             invocation, wrapped, args, kwargs, capture_content
         )
-    else:
+    elif not defer_input:
         _set_invocation_input(
-            invocation, instance, args, kwargs, capture_content, wrapped
+            invocation, args, kwargs, capture_content, wrapped
         )
 
     tool_defs = prepare_tool_definitions(getattr(instance, "tools", None))
@@ -950,6 +1076,9 @@ def _agent_run(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        media_capture = _capture_input_media(
+            args, kwargs, wrapped, enabled=capture_content and not is_continue
+        )
         invocation = _start_agent_invocation(
             handler,
             instance,
@@ -958,6 +1087,7 @@ def _agent_run(
             capture_content,
             wrapped=wrapped,
             is_continue=is_continue,
+            defer_input=media_capture is not None,
         )
         try:
             result = wrapped(*args, **kwargs)
@@ -966,12 +1096,21 @@ def _agent_run(
                     result,
                     invocation,
                     capture_content,
+                    on_before_stop=(
+                        media_capture.finalizer(invocation)
+                        if media_capture
+                        else None
+                    ),
                 )
 
+            if media_capture:
+                media_capture.apply(invocation)
             _set_invocation_output(invocation, result, capture_content)
             invocation.stop()
             return result
         except BaseException as error:
+            if media_capture:
+                media_capture.apply(invocation)
             invocation.fail(error)
             raise
 
@@ -991,50 +1130,48 @@ def _agent_arun(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        media_capture = _capture_input_media(
+            args, kwargs, wrapped, enabled=capture_content and not is_continue
+        )
+        start_invocation = functools.partial(
+            _start_agent_invocation,
+            handler,
+            instance,
+            args,
+            kwargs,
+            capture_content,
+            wrapped=wrapped,
+            is_continue=is_continue,
+            defer_input=media_capture is not None,
+        )
+
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as error:
-            invocation = _start_agent_invocation(
-                handler,
-                instance,
-                args,
-                kwargs,
-                capture_content,
-                wrapped=wrapped,
-                is_continue=is_continue,
-            )
+            invocation = start_invocation()
+            if media_capture:
+                media_capture.apply(invocation)
             invocation.fail(error)
             raise
 
         if isinstance(result, AsyncIterator):
-            invocation = _start_agent_invocation(
-                handler,
-                instance,
-                args,
-                kwargs,
-                capture_content,
-                wrapped=wrapped,
-                is_continue=is_continue,
-            )
+            invocation = start_invocation()
             return AsyncAgnoAgentStreamWrapper(
                 result,
                 invocation,
                 capture_content,
+                on_before_stop=(
+                    media_capture.finalizer(invocation)
+                    if media_capture
+                    else None
+                ),
             )
 
         if isinstance(result, Awaitable):
 
             @functools.wraps(wrapped)
             async def _await_result() -> object:
-                invocation = _start_agent_invocation(
-                    handler,
-                    instance,
-                    args,
-                    kwargs,
-                    capture_content,
-                    wrapped=wrapped,
-                    is_continue=is_continue,
-                )
+                invocation = start_invocation()
                 try:
                     awaitable = cast(Awaitable[object], result)
                     response: object = await awaitable
@@ -1043,27 +1180,30 @@ def _agent_arun(
                             response,
                             invocation,
                             capture_content,
+                            on_before_stop=(
+                                media_capture.finalizer(invocation)
+                                if media_capture
+                                else None
+                            ),
                         )
+                    if media_capture:
+                        media_capture.apply(invocation)
                     _set_invocation_output(
                         invocation, response, capture_content
                     )
                     invocation.stop()
                     return response
                 except BaseException as error:
+                    if media_capture:
+                        media_capture.apply(invocation)
                     invocation.fail(error)
                     raise
 
             return _await_result()
 
-        invocation = _start_agent_invocation(
-            handler,
-            instance,
-            args,
-            kwargs,
-            capture_content,
-            wrapped=wrapped,
-            is_continue=is_continue,
-        )
+        invocation = start_invocation()
+        if media_capture:
+            media_capture.apply(invocation)
         _set_invocation_output(invocation, result, capture_content)
         invocation.stop()
         return result
@@ -1148,6 +1288,7 @@ def _start_workflow_invocation(
     wrapped: Callable[..., Any],
     *,
     is_continue: bool = False,
+    defer_input: bool = False,
 ) -> WorkflowInvocation:
     workflow_name = getattr(instance, "name", None)
     conversation_id = extract_session_id(
@@ -1160,9 +1301,9 @@ def _start_workflow_invocation(
         _set_continue_invocation_input(
             invocation, wrapped, args, kwargs, capture_content
         )
-    else:
+    elif not defer_input:
         _set_invocation_input(
-            invocation, instance, args, kwargs, capture_content, wrapped
+            invocation, args, kwargs, capture_content, wrapped
         )
     return invocation
 
@@ -1180,6 +1321,9 @@ def _workflow_run(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        media_capture = _capture_input_media(
+            args, kwargs, wrapped, enabled=capture_content and not is_continue
+        )
         invocation = _start_workflow_invocation(
             handler,
             instance,
@@ -1188,6 +1332,7 @@ def _workflow_run(
             capture_content,
             wrapped=wrapped,
             is_continue=is_continue,
+            defer_input=media_capture is not None,
         )
         try:
             result = wrapped(*args, **kwargs)
@@ -1196,12 +1341,21 @@ def _workflow_run(
                     result,
                     invocation,
                     capture_content,
+                    on_before_stop=(
+                        media_capture.finalizer(invocation)
+                        if media_capture
+                        else None
+                    ),
                 )
 
+            if media_capture:
+                media_capture.apply(invocation)
             _set_invocation_output(invocation, result, capture_content)
             invocation.stop()
             return result
         except BaseException as error:
+            if media_capture:
+                media_capture.apply(invocation)
             invocation.fail(error)
             raise
 
@@ -1267,54 +1421,52 @@ def _workflow_arun(
             if not is_continue:
                 kwargs["run_id"] = run_id
 
+        media_capture = _capture_input_media(
+            args, kwargs, wrapped, enabled=capture_content and not is_continue
+        )
+        start_invocation = functools.partial(
+            _start_workflow_invocation,
+            handler,
+            instance,
+            args,
+            kwargs,
+            capture_content,
+            wrapped=wrapped,
+            is_continue=is_continue,
+            defer_input=media_capture is not None,
+        )
+
         _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
 
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as error:
             _release_run_id(run_id)
-            invocation = _start_workflow_invocation(
-                handler,
-                instance,
-                args,
-                kwargs,
-                capture_content,
-                wrapped=wrapped,
-                is_continue=is_continue,
-            )
+            invocation = start_invocation()
+            if media_capture:
+                media_capture.apply(invocation)
             invocation.fail(error)
             raise
 
         if isinstance(result, AsyncIterator):
-            invocation = _start_workflow_invocation(
-                handler,
-                instance,
-                args,
-                kwargs,
-                capture_content,
-                wrapped=wrapped,
-                is_continue=is_continue,
-            )
+            invocation = start_invocation()
             return AsyncAgnoWorkflowStreamWrapper(
                 result,
                 invocation,
                 capture_content,
                 on_close=functools.partial(_release_run_id, run_id),
+                on_before_stop=(
+                    media_capture.finalizer(invocation)
+                    if media_capture
+                    else None
+                ),
             )
 
         if isinstance(result, Awaitable):
 
             @functools.wraps(wrapped)
             async def _await_result() -> object:
-                invocation = _start_workflow_invocation(
-                    handler,
-                    instance,
-                    args,
-                    kwargs,
-                    capture_content,
-                    wrapped=wrapped,
-                    is_continue=is_continue,
-                )
+                invocation = start_invocation()
                 discard_on_exit = True
                 try:
                     awaitable = cast(Awaitable[object], result)
@@ -1328,13 +1480,22 @@ def _workflow_arun(
                             on_close=functools.partial(
                                 _release_run_id, run_id
                             ),
+                            on_before_stop=(
+                                media_capture.finalizer(invocation)
+                                if media_capture
+                                else None
+                            ),
                         )
+                    if media_capture:
+                        media_capture.apply(invocation)
                     _set_invocation_output(
                         invocation, response, capture_content
                     )
                     invocation.stop()
                     return response
                 except BaseException as error:
+                    if media_capture:
+                        media_capture.apply(invocation)
                     invocation.fail(error)
                     raise
                 finally:
@@ -1344,15 +1505,9 @@ def _workflow_arun(
             return _await_result()
 
         try:
-            invocation = _start_workflow_invocation(
-                handler,
-                instance,
-                args,
-                kwargs,
-                capture_content,
-                wrapped=wrapped,
-                is_continue=is_continue,
-            )
+            invocation = start_invocation()
+            if media_capture:
+                media_capture.apply(invocation)
             _set_invocation_output(invocation, result, capture_content)
             invocation.stop()
             return result
@@ -1394,15 +1549,10 @@ def _start_background_workflow_invocation(
         conversation_id=session_id,
     )
 
-    if capture_content and input_val is not None:
-        content_str = _extract_input_content(input_val)
-        if content_str:
-            invocation.input_messages = [
-                InputMessage(
-                    role=Role.USER.value,
-                    parts=[TextPart(content=content_str)],
-                )
-            ]
+    if capture_content:
+        _set_workflow_execution_input_messages(
+            invocation, input_val, exec_input
+        )
 
     return invocation
 
@@ -1512,15 +1662,10 @@ def _workflow_aexecute_workflow_agent(
             conversation_id=session_id,
         )
 
-        if capture_content and user_input is not None:
-            content_str = _extract_input_content(user_input)
-            if content_str:
-                invocation.input_messages = [
-                    InputMessage(
-                        role=Role.USER.value,
-                        parts=[TextPart(content=content_str)],
-                    )
-                ]
+        if capture_content:
+            _set_workflow_execution_input_messages(
+                invocation, user_input, bound_args.get("execution_input")
+            )
 
         if run_id:
             _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)

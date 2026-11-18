@@ -5,25 +5,39 @@
 
 from __future__ import annotations
 
+import mimetypes
 import os
-from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable, Iterable, Sequence
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
+    from agno.media import Audio, File, Image, Video
+    from agno.media.reference import MediaReference
+    from agno.models.message import Message
+    from agno.workflow.types import WorkflowExecutionInput
+
+    _AgnoMedia = Image | Audio | Video | File
 
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
+    MessagePart,
+    Modality,
     RetrievalDocument,
     ToolDefinition,
+    UriPart,
 )
 from opentelemetry.util.genai.utils import (
     gen_ai_json_dumps,
     get_argument,
+    image_from_url,
     object_to_any_value,
 )
 
@@ -64,6 +78,198 @@ def format_content(val: object) -> str:
     if any_value is None:
         return str(val)
     return gen_ai_json_dumps(any_value, ensure_ascii=False)
+
+
+@lru_cache(maxsize=1)
+def _load_media_classes() -> tuple[
+    type[Image], type[Audio], type[Video], type[File]
+]:
+    from agno.media import (  # pylint: disable=import-outside-toplevel
+        Audio,
+        File,
+        Image,
+        Video,
+    )
+
+    return (Image, Audio, Video, File)
+
+
+@lru_cache(maxsize=1)
+def _load_message_class() -> type[Message]:
+    from agno.models.message import (  # pylint: disable=import-outside-toplevel
+        Message,
+    )
+
+    return Message
+
+
+@lru_cache(maxsize=1)
+def _load_workflow_execution_input_class() -> type[WorkflowExecutionInput]:
+    from agno.workflow.types import (  # pylint: disable=import-outside-toplevel
+        WorkflowExecutionInput,
+    )
+
+    return WorkflowExecutionInput
+
+
+def _get_media_reference(media: _AgnoMedia) -> MediaReference | None:
+    # media_reference was added in Agno 3.x.
+    return cast(
+        "MediaReference | None", getattr(media, "media_reference", None)
+    )
+
+
+# "audio/mp3" is not a registered media type, and mimetypes.guess_type returns
+# "audio/x-wav" on some Linux systems.
+_FORMAT_MIME_TYPES: dict[str, str] = {
+    "wav": "audio/wav",
+    "mp3": "audio/mpeg",
+}
+
+
+def _resolve_media_mime_type(
+    media: _AgnoMedia,
+    file_cls: type[File],
+    media_ref: MediaReference | None,
+) -> str | None:
+    if media.mime_type:
+        return media.mime_type
+    if media.format:
+        if "/" in media.format:
+            return media.format
+        ext = media.format.lstrip(".").lower()
+        if ext in _FORMAT_MIME_TYPES:
+            return _FORMAT_MIME_TYPES[ext]
+        guessed, _ = mimetypes.guess_type(f"file.{ext}")
+        if guessed:
+            return guessed
+    if isinstance(media, file_cls) and media.filename:
+        guessed, _ = mimetypes.guess_type(media.filename)
+        if guessed:
+            return guessed
+    if media_ref is not None and media_ref.mime_type:
+        return media_ref.mime_type
+    return None
+
+
+def _url_to_media_part(
+    url: str,
+    *,
+    modality: Modality,
+    mime_type: str | None,
+) -> MessagePart | None:
+    part = image_from_url(url, modality=modality)
+    if (
+        isinstance(part, (BlobPart, UriPart))
+        and part.mime_type is None
+        and mime_type is not None
+    ):
+        part.mime_type = mime_type
+    return part
+
+
+def _media_to_part(
+    media: _AgnoMedia,
+    modality: Modality,
+    file_cls: type[File],
+) -> MessagePart | None:
+    media_ref = _get_media_reference(media)
+    mime_type = _resolve_media_mime_type(media, file_cls, media_ref)
+
+    if media.url:
+        return _url_to_media_part(
+            media.url, modality=modality, mime_type=mime_type
+        )
+
+    if isinstance(media.content, (bytes, bytearray)):
+        return BlobPart(
+            mime_type=mime_type,
+            modality=modality,
+            content=bytes(media.content),
+        )
+    if isinstance(media, file_cls) and isinstance(media.content, str):
+        return BlobPart(
+            mime_type=mime_type,
+            modality=modality,
+            content=media.content.encode("utf-8"),
+        )
+
+    if media.filepath is not None:
+        filepath_str = str(media.filepath)
+        if filepath_str:
+            return UriPart(
+                mime_type=mime_type,
+                modality=modality,
+                uri=filepath_str,
+            )
+
+    if media_ref is not None:
+        if media_ref.url:
+            return _url_to_media_part(
+                media_ref.url, modality=modality, mime_type=mime_type
+            )
+        return None
+
+    # File.id is a provider file reference only when no other source was supplied;
+    # Agno 3.x auto-generates a UUID id whenever another source is present.
+    if isinstance(media, file_cls) and media.external is None and media.id:
+        return FilePart(
+            mime_type=mime_type,
+            modality=modality,
+            file_id=media.id,
+        )
+
+    return None
+
+
+def extract_media_parts(
+    *,
+    images: Sequence[Image] | None = None,
+    audio: Sequence[Audio] | None = None,
+    videos: Sequence[Video] | None = None,
+    files: Sequence[File] | None = None,
+) -> list[MessagePart]:
+    """Convert Agno media sequences into GenAI message parts."""
+    if not (images or audio or videos or files):
+        return []
+
+    image_cls, audio_cls, video_cls, file_cls = _load_media_classes()
+    parts: list[MessagePart] = []
+    media_groups: tuple[
+        tuple[Sequence[_AgnoMedia] | None, type[_AgnoMedia], Modality], ...
+    ] = (
+        (images, image_cls, Modality.IMAGE),
+        (audio, audio_cls, Modality.AUDIO),
+        (videos, video_cls, Modality.VIDEO),
+        (files, file_cls, Modality.DOCUMENT),
+    )
+    for items, expected_cls, modality in media_groups:
+        if not isinstance(items, Sequence) or isinstance(
+            items, (str, bytes, bytearray)
+        ):
+            continue
+        for item in items:
+            if isinstance(item, expected_cls):
+                part = _media_to_part(item, modality, file_cls)
+                if part is not None:
+                    parts.append(part)
+    return parts
+
+
+def is_agno_message(val: object) -> TypeGuard[Message]:
+    """Return True if val is an Agno Message instance."""
+    if val is None or isinstance(val, (str, bytes, dict, list, tuple)):
+        return False
+    return isinstance(val, _load_message_class())
+
+
+def is_workflow_execution_input(
+    val: object,
+) -> TypeGuard[WorkflowExecutionInput]:
+    """Return True if val is an Agno WorkflowExecutionInput instance."""
+    if val is None:
+        return False
+    return isinstance(val, _load_workflow_execution_input_class())
 
 
 def _get_property_value(obj: Any, property_name: str) -> Any:

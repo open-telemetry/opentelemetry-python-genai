@@ -43,6 +43,7 @@ class _AgentStreamMixin:
     _self_content_parts: list[str]
     _self_completed_content: str | None
     _self_finish_reason: str
+    _self_on_before_stop: Callable[[], None] | None
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
@@ -116,6 +117,11 @@ class _AgentStreamMixin:
                     self._self_content_parts.append(content)
 
     def _finalize(self, error: BaseException | None = None) -> None:
+        if self._self_on_before_stop is not None:
+            on_before_stop = self._self_on_before_stop
+            self._self_on_before_stop = None
+            on_before_stop()
+
         if self._self_capture_content:
             if self._self_completed_content is not None:
                 final_content = self._self_completed_content
@@ -154,6 +160,7 @@ class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncStreamWrapper[Any]):
         stream: Any,
         invocation: LocalAgentInvocation,
         capture_content: bool,
+        on_before_stop: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(stream)
         self._self_agent_invocation = invocation
@@ -161,6 +168,7 @@ class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncStreamWrapper[Any]):
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+        self._self_on_before_stop = on_before_stop
 
 
 class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
@@ -171,6 +179,7 @@ class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
         stream: Any,
         invocation: LocalAgentInvocation,
         capture_content: bool,
+        on_before_stop: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(stream)
         self._self_agent_invocation = invocation
@@ -178,6 +187,7 @@ class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+        self._self_on_before_stop = on_before_stop
 
 
 class _WorkflowStreamMixin:
@@ -187,6 +197,7 @@ class _WorkflowStreamMixin:
     _self_completed_content: str | None
     _self_finish_reason: str
     _self_on_close: Callable[[], None] | None
+    _self_on_before_stop: Callable[[], None] | None
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
@@ -238,6 +249,11 @@ class _WorkflowStreamMixin:
 
     def _finalize(self, error: BaseException | None = None) -> None:
         try:
+            if self._self_on_before_stop is not None:
+                on_before_stop = self._self_on_before_stop
+                self._self_on_before_stop = None
+                on_before_stop()
+
             if self._self_capture_content:
                 if self._self_completed_content is not None:
                     final_content = self._self_completed_content
@@ -290,6 +306,7 @@ class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
         invocation: WorkflowInvocation,
         capture_content: bool,
         on_close: Callable[[], None] | None = None,
+        on_before_stop: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(stream)
         self._self_workflow_invocation = invocation
@@ -298,6 +315,7 @@ class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
         self._self_completed_content = None
         self._self_finish_reason = "stop"
         self._self_on_close = on_close
+        self._self_on_before_stop = on_before_stop
 
 
 class AsyncAgnoWorkflowStreamWrapper(
@@ -311,6 +329,7 @@ class AsyncAgnoWorkflowStreamWrapper(
         invocation: WorkflowInvocation,
         capture_content: bool,
         on_close: Callable[[], None] | None = None,
+        on_before_stop: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(stream)
         self._self_workflow_invocation = invocation
@@ -319,3 +338,4 @@ class AsyncAgnoWorkflowStreamWrapper(
         self._self_completed_content = None
         self._self_finish_reason = "stop"
         self._self_on_close = on_close
+        self._self_on_before_stop = on_before_stop
