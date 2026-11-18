@@ -51,7 +51,9 @@ class _AgentStreamMixin:
             self._self_agent_invocation.conversation_id = str(session_id)
 
         record_token_usage(
-            self._self_agent_invocation, getattr(chunk, "metrics", None)
+            self._self_agent_invocation,
+            getattr(chunk, "metrics", None),
+            getattr(chunk, "model_provider", None),
         )
 
         event_name = str(getattr(chunk, "event", ""))

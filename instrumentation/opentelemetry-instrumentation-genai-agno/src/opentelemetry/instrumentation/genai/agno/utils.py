@@ -12,9 +12,15 @@ from typing import TYPE_CHECKING, Any, cast
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
+    from agno.metrics import RunMetrics
+    from agno.workflow.types import WorkflowMetrics
 
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
+)
+from opentelemetry.util.genai.invocation import (
+    LocalAgentInvocation,
+    WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
@@ -38,43 +44,77 @@ def safe_int(val: Any) -> int | None:
         return None
 
 
+# agno reports cache reads and writes outside ``input_tokens`` only for these
+# providers. OpenAI, Azure and Gemini fold the cached part into ``input_tokens``,
+# so adding it there would count the same tokens twice.
+_CACHE_TOKENS_OUTSIDE_INPUT = frozenset({"anthropic", "awsbedrock"})
+
+
+def _normalize_provider(provider: str | None) -> str | None:
+    """Reduce agno's provider string to the shape the lookup uses.
+
+    agno sets ``provider`` on each model class ("Anthropic", "AwsBedrock"), and
+    falls back to ``"{name} ({id})"`` when a model leaves it unset.
+    """
+    if not provider:
+        return None
+    name = provider.split(" (")[0]
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
 def total_input_tokens(
     input_tokens: int | None,
     cache_read_input_tokens: int | None,
     cache_write_input_tokens: int | None,
+    provider: str | None = None,
 ) -> int | None:
-    """agno reports cached prompt tokens outside ``input_tokens``; the
-    semantic conventions want ``gen_ai.usage.input_tokens`` to include them.
+    """Fold agno's cached prompt tokens into ``gen_ai.usage.input_tokens``.
+
+    Whether the cached tokens belong in the sum depends on the provider: agno
+    keeps them outside ``input_tokens`` for Anthropic and Bedrock, and inside it
+    for OpenAI, Azure and Gemini. An unrecognized or missing provider is left
+    unsummed rather than guessed at.
 
     A zero total means agno had nothing to report, so it returns ``None``
     rather than recording ``0`` on the span.
     """
-    total = (
-        (input_tokens or 0)
-        + (cache_read_input_tokens or 0)
-        + (cache_write_input_tokens or 0)
-    )
+    total = input_tokens or 0
+    if _normalize_provider(provider) in _CACHE_TOKENS_OUTSIDE_INPUT:
+        total += (cache_read_input_tokens or 0) + (
+            cache_write_input_tokens or 0
+        )
     return total or None
 
 
-def record_token_usage(invocation: Any, metrics: Any) -> None:
+def record_token_usage(
+    invocation: LocalAgentInvocation | WorkflowInvocation,
+    metrics: RunMetrics | WorkflowMetrics | None,
+    provider: str | None = None,
+) -> None:
     """Record agno run metrics as ``gen_ai.usage.*`` on an invocation.
 
-    agno keeps cached prompt tokens in ``cache_read_tokens`` and
-    ``cache_write_tokens`` instead of folding them into ``input_tokens``, so
-    the sum is what a span reports. Invocation types that carry no token
-    fields, such as workflows, are left alone.
+    ``provider`` is agno's ``RunOutput.model_provider``; it decides whether the
+    cached prompt tokens sit outside ``input_tokens``. Workflow results carry a
+    ``WorkflowMetrics`` with no token fields, and workflow invocations carry no
+    ``input_tokens``, so both are left alone.
     """
-    if metrics is None or not hasattr(invocation, "input_tokens"):
+    # Imported here rather than at module level: this module must stay
+    # importable before agno is installed, the same way the instrumentor does.
+    from agno.metrics import RunMetrics
+
+    if not isinstance(invocation, LocalAgentInvocation) or not isinstance(
+        metrics, RunMetrics
+    ):
         return
     input_tokens = total_input_tokens(
-        safe_int(getattr(metrics, "input_tokens", None)),
-        safe_int(getattr(metrics, "cache_read_tokens", None)),
-        safe_int(getattr(metrics, "cache_write_tokens", None)),
+        safe_int(metrics.input_tokens),
+        safe_int(metrics.cache_read_tokens),
+        safe_int(metrics.cache_write_tokens),
+        provider,
     )
     if input_tokens:
         invocation.input_tokens = input_tokens
-    output_tokens = safe_int(getattr(metrics, "output_tokens", None))
+    output_tokens = safe_int(metrics.output_tokens)
     if output_tokens:
         invocation.output_tokens = output_tokens
 

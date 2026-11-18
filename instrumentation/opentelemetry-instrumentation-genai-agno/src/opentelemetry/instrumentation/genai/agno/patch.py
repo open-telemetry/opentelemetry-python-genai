@@ -868,7 +868,11 @@ def _set_invocation_output(
     session_id = getattr(result, "session_id", None)
     if session_id:
         invocation.conversation_id = str(session_id)
-    record_token_usage(invocation, getattr(result, "metrics", None))
+    record_token_usage(
+        invocation,
+        getattr(result, "metrics", None),
+        getattr(result, "model_provider", None),
+    )
 
 
 def _start_agent_invocation(
