@@ -1,1 +1,1 @@
-agno: record token usage for `agent.run()`, and include cached prompt tokens in `gen_ai.usage.input_tokens`.
+agno: record token usage for `agent.run()`, and fold cached prompt tokens into `gen_ai.usage.input_tokens` for the providers that report them outside it (Anthropic, Bedrock). OpenAI, Azure and Gemini already include them, so they are not added twice.

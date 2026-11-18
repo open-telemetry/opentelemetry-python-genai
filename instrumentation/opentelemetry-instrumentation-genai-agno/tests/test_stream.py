@@ -1168,7 +1168,7 @@ def test_agent_run_stream_records_usage_from_completed_event(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test that stream usage includes cached prompt tokens."""
+    """Test that stream usage includes cached prompt tokens (Anthropic)."""
     from dataclasses import dataclass
 
     from agno.metrics import RunMetrics
@@ -1178,6 +1178,7 @@ def test_agent_run_stream_records_usage_from_completed_event(
         content: str = "done"
         event: str = "RunCompletedEvent"
         metrics: RunMetrics | None = None
+        model_provider: str | None = "Anthropic"
 
     agent = Agent(
         name="test-stream-usage-agent", model=MockModel(id="mock-model")
@@ -1204,3 +1205,41 @@ def test_agent_run_stream_records_usage_from_completed_event(
         span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1052
     )
     assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3
+
+
+def test_agent_run_stream_does_not_double_count_openai_cached_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """OpenAI stream usage already counts the cached part in input_tokens."""
+    from dataclasses import dataclass
+
+    from agno.metrics import RunMetrics
+
+    @dataclass
+    class FakeCompletedChunk:
+        content: str = "done"
+        event: str = "RunCompletedEvent"
+        metrics: RunMetrics | None = None
+        model_provider: str | None = "OpenAI"
+
+    agent = Agent(
+        name="test-stream-usage-agent", model=MockModel(id="mock-model")
+    )
+
+    def fake_stream(*args, **kwargs):
+        yield FakeCompletedChunk(
+            metrics=RunMetrics(
+                input_tokens=1000,
+                output_tokens=3,
+                cache_read_tokens=800,
+            )
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello stream", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1000
+    )

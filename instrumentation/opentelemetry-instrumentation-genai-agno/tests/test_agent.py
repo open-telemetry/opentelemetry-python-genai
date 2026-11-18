@@ -2530,14 +2530,15 @@ def test_agent_run_input_tokens_include_cached_tokens(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test that cached prompt tokens are part of gen_ai.usage.input_tokens."""
+    """Anthropic and Bedrock report cached tokens outside input_tokens."""
     from agno.agent import RunOutput
     from agno.metrics import RunMetrics
 
     agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
     run_output = RunOutput(
         content="hello back",
-        # agno reports the cache reads and writes outside input_tokens
+        model_provider="Anthropic",
+        # agno reports the cache reads and writes outside input_tokens here
         metrics=RunMetrics(
             input_tokens=12,
             output_tokens=3,
@@ -2556,6 +2557,64 @@ def test_agent_run_input_tokens_include_cached_tokens(
         span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1052
     )
     assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3
+
+
+@pytest.mark.parametrize("provider", ["OpenAI", "Azure", "Google"])
+def test_agent_run_cached_tokens_are_not_double_counted(
+    instrument_agno,
+    span_exporter,
+    provider: str,
+) -> None:
+    """OpenAI-shaped providers already count the cached part in input_tokens."""
+    from agno.agent import RunOutput
+    from agno.metrics import RunMetrics
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        model_provider=provider,
+        # prompt_tokens (1000) already contains the 800 cached tokens
+        metrics=RunMetrics(
+            input_tokens=1000,
+            output_tokens=3,
+            cache_read_tokens=800,
+        ),
+    )
+
+    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+        agent.run("hello world")
+
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1000
+    )
+
+
+def test_agent_run_unknown_provider_does_not_sum_cached_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Without a provider to decide on, the raw input_tokens are reported."""
+    from agno.agent import RunOutput
+    from agno.metrics import RunMetrics
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        metrics=RunMetrics(
+            input_tokens=1000,
+            output_tokens=3,
+            cache_read_tokens=800,
+        ),
+    )
+
+    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+        agent.run("hello world")
+
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1000
+    )
 
 
 def test_agent_run_without_metrics_records_no_usage(
