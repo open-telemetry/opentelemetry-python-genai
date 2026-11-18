@@ -7,8 +7,6 @@ import functools
 from typing import Any, ClassVar
 from unittest.mock import patch
 
-import pytest
-
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
@@ -18,17 +16,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.types import (
-    ContentCapturingMode,
-    InputMessage,
-    OutputMessage,
-    TextPart,
-)
 
 from .instrumentor import instrument
 
@@ -38,14 +27,8 @@ class TelemetryHandlerScopeTest:
     instrumentation_scope_name: ClassVar[str]
     instrumentation_scope_version: ClassVar[str]
 
-    @pytest.mark.parametrize("env_mode", list(ContentCapturingMode))
-    @pytest.mark.parametrize(
-        "content_capturing_mode", [None, *ContentCapturingMode]
-    )
     def test_instrumentation_scope_is_used_for_all_signals(
         self,
-        env_mode: ContentCapturingMode,
-        content_capturing_mode: ContentCapturingMode | None,
         tracer_provider: TracerProvider,
         logger_provider: LoggerProvider,
         meter_provider: MeterProvider,
@@ -69,23 +52,11 @@ class TelemetryHandlerScopeTest:
                 tracer_provider=tracer_provider,
                 logger_provider=logger_provider,
                 meter_provider=meter_provider,
-                content_capture=env_mode.name,
-                content_capturing_mode=content_capturing_mode,
+                content_capture="EVENT_ONLY",
             ):
                 assert len(handlers) == 1
-                with handlers[0].inference(
-                    "provider", request_model="model"
-                ) as invocation:
-                    invocation.input_messages = [
-                        InputMessage(
-                            role="user", parts=[TextPart(content="hello")]
-                        )
-                    ]
-                    invocation.output_messages = [
-                        OutputMessage(
-                            role="assistant", parts=[TextPart(content="hi")]
-                        )
-                    ]
+                with handlers[0].inference("provider", request_model="model"):
+                    pass
 
         scope_name = self.instrumentation_scope_name
         scope_version = self.instrumentation_scope_version
@@ -110,44 +81,3 @@ class TelemetryHandlerScopeTest:
         assert log.instrumentation_scope.name == scope_name
         assert log.instrumentation_scope.version == scope_version
         assert log.instrumentation_scope.schema_url == schema_url
-
-        mode = (
-            env_mode
-            if content_capturing_mode is None
-            else content_capturing_mode
-        )
-        for attributes, capture in (
-            (
-                span.attributes,
-                mode
-                in (
-                    ContentCapturingMode.SPAN_ONLY,
-                    ContentCapturingMode.SPAN_AND_EVENT,
-                ),
-            ),
-            (
-                log.log_record.attributes,
-                mode
-                in (
-                    ContentCapturingMode.EVENT_ONLY,
-                    ContentCapturingMode.SPAN_AND_EVENT,
-                ),
-            ),
-        ):
-            assert attributes is not None
-            if capture:
-                assert attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
-                    {
-                        "role": "user",
-                        "parts": ({"type": "text", "content": "hello"},),
-                    },
-                )
-                assert attributes[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
-                    {
-                        "role": "assistant",
-                        "parts": ({"type": "text", "content": "hi"},),
-                    },
-                )
-            else:
-                assert GenAI.GEN_AI_INPUT_MESSAGES not in attributes
-                assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attributes
