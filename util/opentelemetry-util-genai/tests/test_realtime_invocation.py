@@ -32,6 +32,7 @@ from opentelemetry.semconv.attributes import (
 from opentelemetry.trace import SpanKind, StatusCode
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
@@ -75,7 +76,10 @@ def _make_handler():
 def test_realtime_session_events_and_invocations():
     with patch.dict(
         os.environ,
-        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_AND_EVENT"},
+        {
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_AND_EVENT",
+            OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true",
+        },
     ):
         handler, span_exporter, log_exporter, _ = _make_handler()
 
@@ -280,9 +284,13 @@ def test_realtime_session_ended_normal_and_custom_error_resolver():
 
 
 def test_user_speech_omits_optional_attributes_when_unset():
-    handler, span_exporter, _, _ = _make_handler()
-    with handler.user_speech():
-        pass
+    with patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"},
+    ):
+        handler, span_exporter, _, _ = _make_handler()
+        with handler.user_speech():
+            pass
 
     (speech_span,) = span_exporter.get_finished_spans()
     assert speech_span.name == "user_speech"
@@ -518,25 +526,29 @@ def test_nested_realtime_inference_preserves_outer_session_id_and_inner_inferenc
 
 
 def test_user_speech_failure_default_and_custom_resolver():
-    handler, span_exporter, log_exporter, _ = _make_handler()
+    with patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"},
+    ):
+        handler, span_exporter, log_exporter, _ = _make_handler()
 
-    # Default error_type resolution via context manager exception path.
-    with pytest.raises(RuntimeError, match="mic lost"):
-        with handler.user_speech(
+        # Default error_type resolution via context manager exception path.
+        with pytest.raises(RuntimeError, match="mic lost"):
+            with handler.user_speech(
+                provider="gcp.gemini",
+                realtime_session_id="sess-default",
+            ):
+                raise RuntimeError("mic lost")
+
+        # Custom error_type_resolver + explicit fail() followed by repeated finalize calls.
+        speech = handler.user_speech(
             provider="gcp.gemini",
-            realtime_session_id="sess-default",
-        ):
-            raise RuntimeError("mic lost")
-
-    # Custom error_type_resolver + explicit fail() followed by repeated finalize calls.
-    speech = handler.user_speech(
-        provider="gcp.gemini",
-        realtime_session_id="sess-custom",
-        error_type_resolver=lambda exc: f"custom.{type(exc).__name__}",
-    )
-    speech.fail(RuntimeError("mic disconnected"))
-    speech.stop()
-    speech.fail(Error(message="ignored second fail", type="IgnoredError"))
+            realtime_session_id="sess-custom",
+            error_type_resolver=lambda exc: f"custom.{type(exc).__name__}",
+        )
+        speech.fail(RuntimeError("mic disconnected"))
+        speech.stop()
+        speech.fail(Error(message="ignored second fail", type="IgnoredError"))
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 2
@@ -707,3 +719,62 @@ def test_should_capture_realtime_content_matches_invocation_policy(
                             pre_suppressed_explicit
                             is inner.should_capture_content
                         )
+
+
+def test_user_speech_disabled_by_default_and_env_parsing(caplog, monkeypatch):
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.util.genai.utils import get_emit_user_speech
+
+    monkeypatch.delenv(
+        OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, raising=False
+    )
+    assert get_emit_user_speech() is False
+    handler, span_exporter, _, _ = _make_handler()
+    assert handler.should_emit_user_speech() is False
+
+    with handler._tracer.start_as_current_span("caller") as caller_span:
+        with handler.user_speech(
+            provider="gcp.gemini", realtime_session_id="sess-noop"
+        ) as speech:
+            speech.attributes["custom"] = "ignored"
+            assert get_current_span() is caller_span
+
+        with pytest.raises(RuntimeError, match="boom"):
+            with handler.user_speech(
+                provider="gcp.gemini", realtime_session_id="sess-noop"
+            ):
+                raise RuntimeError("boom")
+
+        assert caller_span.is_recording()
+        assert get_current_span() is caller_span
+
+    # Only the caller span was exported, and it was neither ended early nor
+    # mutated with user_speech attributes or error status.
+    (exported_caller,) = span_exporter.get_finished_spans()
+    assert exported_caller.name == "caller"
+    assert exported_caller.status.status_code == StatusCode.UNSET
+    assert "gen_ai.operation.name" not in exported_caller.attributes
+    assert "gen_ai.realtime_session.id" not in exported_caller.attributes
+    assert error_attributes.ERROR_TYPE not in exported_caller.attributes
+
+    for val, expected in (
+        ("", False),
+        ("false", False),
+        ("FALSE", False),
+        ("true", True),
+        ("TRUE", True),
+        (" True ", True),
+    ):
+        with patch.dict(
+            os.environ, {OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: val}
+        ):
+            assert get_emit_user_speech() is expected
+            h, _, _, _ = _make_handler()
+            assert h.should_emit_user_speech() is expected
+
+    caplog.clear()
+    with patch.dict(
+        os.environ, {OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "invalid"}
+    ):
+        assert get_emit_user_speech() is False
+    assert OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH in caplog.text

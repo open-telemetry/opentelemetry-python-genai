@@ -194,6 +194,11 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 - ``EVENT_ONLY``: Capture message content in events only.
 - ``SPAN_AND_EVENT``: Capture message content in both spans and events.
 
+Realtime opt-in signals:
+
+- ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH``: Set to ``true`` (case-insensitive) to enable
+  opt-in ``user_speech`` spans for realtime sessions. Defaults to ``false`` (disabled).
+
 When a ``LoggerProvider`` is configured, the package emits ``gen_ai.client.inference.operation.details``
 events (with ``DEBUG`` severity) regardless of the content capturing mode. Message content is
 included as structured dictionaries in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
