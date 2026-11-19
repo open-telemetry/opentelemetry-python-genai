@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import patch
@@ -4496,7 +4497,9 @@ async def test_live_transport_error_after_generation_complete_or_interrupted_pre
             ) as session:
                 # Receive completed frame (end timestamp frozen via mark_end).
                 await session._receive()
+                after_complete_ns = time.time_ns()
                 await asyncio.sleep(0.05)
+                before_error_ns = time.time_ns()
 
                 if fail_on == "recv":
                     with pytest.raises(
@@ -4530,8 +4533,8 @@ async def test_live_transport_error_after_generation_complete_or_interrupted_pre
     assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
         expected_finish_reason,
     )
-    span_duration_s = (span.end_time - span.start_time) / 1e9
-    assert span_duration_s < 0.04
+    assert span.end_time <= after_complete_ns
+    assert span.end_time < before_error_ns
 
     ended_log = next(
         log.log_record
@@ -6403,3 +6406,670 @@ async def test_live_close_during_outstanding_receive_ignores_late_buffered_frame
         ]
         assert logs[1].severity_number == SeverityNumber.INFO
         assert ErrorAttributes.ERROR_TYPE not in logs[1].attributes
+
+
+@pytest.mark.asyncio
+async def test_live_multimodal_tool_response_preserves_inline_and_file_parts(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    if not hasattr(genai_types, "FunctionResponsePart"):
+        return
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-mm-1",
+                            "name": "capture_screen",
+                            "args": {},
+                        },
+                        {
+                            "id": "call-mm-2",
+                            "name": "read_doc",
+                            "args": {},
+                        },
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Analyzed image and document."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[
+                            genai_types.Part(text="Inspect screen and doc")
+                        ],
+                    ),
+                    turn_complete=True,
+                )
+                msg1 = await session._receive()
+                assert msg1.tool_call is not None
+
+                await session.send_tool_response(
+                    function_responses=[
+                        genai_types.FunctionResponse(
+                            id="call-mm-1",
+                            name="capture_screen",
+                            response={"status": "ok"},
+                            parts=[
+                                genai_types.FunctionResponsePart(
+                                    inline_data=genai_types.FunctionResponseBlob(
+                                        mime_type="image/png",
+                                        data=b"\x89PNG\r\n",
+                                    )
+                                ),
+                                genai_types.FunctionResponsePart(
+                                    file_data=genai_types.FunctionResponseFileData(
+                                        mime_type="image/jpeg",
+                                        file_uri="gs://bucket/frame.jpg",
+                                    )
+                                ),
+                            ],
+                        ),
+                        genai_types.FunctionResponse(
+                            id="call-mm-2",
+                            name="read_doc",
+                            parts=[
+                                genai_types.FunctionResponsePart(
+                                    file_data=genai_types.FunctionResponseFileData(
+                                        mime_type="application/pdf",
+                                        file_uri="https://example.com/report.pdf",
+                                    )
+                                )
+                            ],
+                        ),
+                    ]
+                )
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    gen2_inputs = spans[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    assert gen2_inputs == (
+        {
+            "role": "tool",
+            "parts": (
+                {
+                    "type": "tool_call_response",
+                    "id": "call-mm-1",
+                    "response": {"status": "ok"},
+                },
+                {
+                    "type": "blob",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "content": b"\x89PNG\r\n",
+                },
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "mime_type": "image/jpeg",
+                    "uri": "gs://bucket/frame.jpg",
+                },
+                {
+                    "type": "tool_call_response",
+                    "id": "call-mm-2",
+                    "response": None,
+                },
+                {
+                    "type": "uri",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "uri": "https://example.com/report.pdf",
+                },
+            ),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_legacy_send_client_content_uses_payload_turn_complete_ignoring_end_of_turn(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply for Turn 1"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply for Turn 2"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # Dict payload without turn_complete ignores outer end_of_turn=True.
+                await session.send(
+                    input={
+                        "turns": [
+                            {
+                                "role": "user",
+                                "parts": [{"text": "Dict part A"}],
+                            }
+                        ]
+                    },
+                    end_of_turn=True,
+                )
+                # Second dict sets turn_complete=True (ignoring end_of_turn=False).
+                await session.send(
+                    input={
+                        "turns": [
+                            {
+                                "role": "user",
+                                "parts": [{"text": "Dict part B"}],
+                            }
+                        ],
+                        "turn_complete": True,
+                    },
+                    end_of_turn=False,
+                )
+                # LiveClientContent without turn_complete ignores end_of_turn=True.
+                await session.send(
+                    input=genai_types.LiveClientContent(
+                        turns=[
+                            genai_types.Content(
+                                role="user",
+                                parts=[genai_types.Part(text="Model part C")],
+                            )
+                        ]
+                    ),
+                    end_of_turn=True,
+                )
+                # Plain string honors end_of_turn=True and seals Turn 2.
+                await session.send(input="Text part D", end_of_turn=True)
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Dict part A"},),
+        },
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Dict part B"},),
+        },
+    )
+    assert spans[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Model part C"},),
+        },
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Text part D"},),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_gemini_2_silent_progress_tool_response_preserves_turn_boundary(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            # Batch 1: non-blocking tool call receiving silent progress then final result.
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-nb-1",
+                            "name": "long_job",
+                            "args": {"job": "build"},
+                        }
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Build finished!"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Follow-up answer."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            # Batch 2: final response is also SILENT; next user prompt triggers reply.
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-nb-2",
+                            "name": "log_metric",
+                            "args": {"name": "latency"},
+                        }
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Summarized silent result."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Start build")],
+                    ),
+                    turn_complete=True,
+                )
+                msg1 = await session._receive()
+                assert msg1.tool_call is not None
+
+                # Silent progress update (will_continue=True) must NOT complete
+                # the batch or seal the turn.
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-nb-1",
+                        name="long_job",
+                        response={"progress": "50%"},
+                        scheduling=genai_types.FunctionResponseScheduling.SILENT,
+                        will_continue=True,
+                    )
+                )
+                # Final result sent before reply is read joins the same turn
+                # and seals it.
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-nb-1",
+                        name="long_job",
+                        response={"result": "done"},
+                        scheduling=genai_types.FunctionResponseScheduling.WHEN_IDLE,
+                        will_continue=False,
+                    )
+                )
+                # Follow-up user prompt starts a distinct turn.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Next question")],
+                    ),
+                    turn_complete=True,
+                )
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+                # Batch 2: final SILENT tool response does not trigger a reply
+                # on its own, so the triggering user prompt joins the turn.
+                msg4 = await session._receive()
+                assert msg4.tool_call is not None
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-nb-2",
+                        name="log_metric",
+                        response={"logged": True},
+                        scheduling=genai_types.FunctionResponseScheduling.SILENT,
+                        will_continue=False,
+                    )
+                )
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[
+                            genai_types.Part(text="Summarize silent result")
+                        ],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 5
+    gen1, gen2, gen3, gen4, gen5 = spans
+
+    assert gen1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    assert gen2.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "tool",
+            "parts": (
+                {
+                    "type": "tool_call_response",
+                    "id": "call-nb-1",
+                    "response": {"progress": "50%"},
+                },
+            ),
+        },
+        {
+            "role": "tool",
+            "parts": (
+                {
+                    "type": "tool_call_response",
+                    "id": "call-nb-1",
+                    "response": {"result": "done"},
+                },
+            ),
+        },
+    )
+    assert gen3.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Next question"},),
+        },
+    )
+    assert gen4.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    assert gen5.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "tool",
+            "parts": (
+                {
+                    "type": "tool_call_response",
+                    "id": "call-nb-2",
+                    "response": {"logged": True},
+                },
+            ),
+        },
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Summarize silent result"},),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_interrupted_before_first_output_retires_queued_input_without_phantom_span(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            # Case A: Turn 1 interrupted before any model output.
+            {
+                "serverContent": {
+                    "interrupted": True,
+                    "turnComplete": True,
+                }
+            },
+            # Turn 2 succeeds normally.
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Answer to Turn 2"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            # Case B: stray trailing completion frame while Turn 3 is queued.
+            {
+                "serverContent": {
+                    "generationComplete": True,
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Answer to Turn 3"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            # Case C: audio + inputTranscription interrupted before output,
+            # followed by a successful audio turn.
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Aborted audio speech"},
+                }
+            },
+            {
+                "serverContent": {
+                    "interrupted": True,
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Kept audio speech"},
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Answer to audio 2"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # Case A: Queue Turn 1 and Turn 2 before reading Turn 1's
+                # no-output interruption frame.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Interrupted prompt")],
+                    ),
+                    turn_complete=True,
+                )
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Successful prompt")],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+                # Case B: Queue Turn 3 before consuming a stray trailing
+                # generationComplete+turnComplete frame.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[
+                            genai_types.Part(
+                                text="Turn 3 after stray completion"
+                            )
+                        ],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+                # Case C: Audio + inputTranscription interrupted before output,
+                # then followed by a successful audio turn.
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"AAAA", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+                async for _ in session.receive():
+                    pass
+
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"BBBB", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    span1, span2, span3 = spans
+
+    assert span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Successful prompt"},),
+        },
+    )
+    assert span1.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "Answer to Turn 2"},),
+            "finish_reason": "stop",
+        },
+    )
+
+    assert span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {"type": "text", "content": "Turn 3 after stray completion"},
+            ),
+        },
+    )
+    assert span2.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "Answer to Turn 3"},),
+            "finish_reason": "stop",
+        },
+    )
+
+    assert span3.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"BBBB",
+                },
+                {"type": "transcription", "content": "Kept audio speech"},
+            ),
+        },
+    )
+    assert span3.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "Answer to audio 2"},),
+            "finish_reason": "stop",
+        },
+    )

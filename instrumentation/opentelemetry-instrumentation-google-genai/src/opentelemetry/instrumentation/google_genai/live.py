@@ -62,6 +62,7 @@ from opentelemetry.util.genai.types import (
     ToolCallResponsePart,
     ToolDefinition,
     TranscriptionPart,
+    UriPart,
 )
 from opentelemetry.util.genai.utils import (
     decode_base64,
@@ -239,6 +240,64 @@ def _extract_blob_bytes_and_mime(
     return None
 
 
+def _modality_from_mime_type(mime_type: str | None) -> Modality:
+    lower = (mime_type or "").lower()
+    if "image" in lower:
+        return Modality.IMAGE
+    if "audio" in lower:
+        return Modality.AUDIO
+    if "video" in lower:
+        return Modality.VIDEO
+    if "text" in lower:
+        return Modality.TEXT
+    return Modality.DOCUMENT
+
+
+def _extract_function_response_parts(item: object) -> list[MessagePart]:
+    raw_parts = _get_config_field(item, "parts")
+    if not isinstance(raw_parts, Sequence) or isinstance(
+        raw_parts, (str, bytes, bytearray)
+    ):
+        return []
+    converted: list[MessagePart] = []
+    for raw_part in cast(Sequence[object], raw_parts):
+        inline_data = _get_config_field(raw_part, "inline_data")
+        if inline_data is not None:
+            raw_mime = _get_config_field(inline_data, "mime_type")
+            mime_type = str(raw_mime) if raw_mime else None
+            raw_data = _get_config_field(inline_data, "data")
+            data_bytes: bytes | None = None
+            if isinstance(raw_data, (bytes, bytearray)):
+                data_bytes = bytes(raw_data)
+            elif isinstance(raw_data, str):
+                data_bytes = decode_base64(raw_data) or raw_data.encode(
+                    "utf-8"
+                )
+            if data_bytes is not None:
+                converted.append(
+                    BlobPart(
+                        mime_type=mime_type,
+                        modality=_modality_from_mime_type(mime_type),
+                        content=data_bytes,
+                    )
+                )
+            continue
+        file_data = _get_config_field(raw_part, "file_data")
+        if file_data is not None:
+            file_uri = _get_config_field(file_data, "file_uri")
+            if file_uri is not None and str(file_uri):
+                raw_mime = _get_config_field(file_data, "mime_type")
+                mime_type = str(raw_mime) if raw_mime else None
+                converted.append(
+                    UriPart(
+                        mime_type=mime_type,
+                        modality=_modality_from_mime_type(mime_type),
+                        uri=str(file_uri),
+                    )
+                )
+    return converted
+
+
 def _build_tool_response_input_message(
     function_responses: FunctionResponseOrDict
     | Sequence[FunctionResponseOrDict]
@@ -258,15 +317,18 @@ def _build_tool_response_input_message(
             else function_responses
         )
 
-    parts: list[MessagePart] = [
-        ToolCallResponsePart(
-            id=str(call_id)
-            if (call_id := _get_config_field(item, "id")) is not None
-            else None,
-            response=object_to_any_value(_get_config_field(item, "response")),
+    parts: list[MessagePart] = []
+    for item in items:
+        call_id = _get_config_field(item, "id")
+        parts.append(
+            ToolCallResponsePart(
+                id=str(call_id) if call_id is not None else None,
+                response=object_to_any_value(
+                    _get_config_field(item, "response")
+                ),
+            )
         )
-        for item in items
-    ]
+        parts.extend(_extract_function_response_parts(item))
     return InputMessage(role="tool", parts=parts) if parts else None
 
 
@@ -301,14 +363,21 @@ def _is_interaction_complete(
     return bool(getattr(server_content, "turn_complete", False))
 
 
-def _extract_tool_response_keys(
+def _is_silent_scheduling(scheduling: object) -> bool:
+    if scheduling is None:
+        return False
+    val = str(getattr(scheduling, "value", scheduling)).upper()
+    return val == "SILENT"
+
+
+def _extract_tool_response_metadata(
     function_responses: FunctionResponseOrDict
     | Sequence[FunctionResponseOrDict]
     | None,
-) -> tuple[tuple[str, ...], int]:
-    """Return ``(call_ids, unidentified_count)`` for a tool-response payload."""
+) -> tuple[tuple[str, ...], int, bool, bool]:
+    """Return ``(completed_ids, completed_unidentified, has_non_silent, has_continuing_non_silent)``."""
     if function_responses is None:
-        return (), 0
+        return (), 0, False, False
     items: Sequence[object]
     try:
         tool_resp = genai_transformers.t_tool_response(function_responses)
@@ -320,15 +389,32 @@ def _extract_tool_response_keys(
             or not isinstance(function_responses, Sequence)
             else function_responses
         )
-    ids: list[str] = []
-    unidentified = 0
+    completed_ids: list[str] = []
+    completed_unidentified = 0
+    has_non_silent = False
+    has_continuing_non_silent = False
     for item in items:
+        will_continue = bool(_get_config_field(item, "will_continue"))
+        is_silent = _is_silent_scheduling(
+            _get_config_field(item, "scheduling")
+        )
+        if not is_silent:
+            has_non_silent = True
+            if will_continue:
+                has_continuing_non_silent = True
+        if will_continue:
+            continue
         call_id = _get_config_field(item, "id")
         if call_id is not None and str(call_id):
-            ids.append(str(call_id))
+            completed_ids.append(str(call_id))
         else:
-            unidentified += 1
-    return tuple(ids), unidentified
+            completed_unidentified += 1
+    return (
+        tuple(completed_ids),
+        completed_unidentified,
+        has_non_silent,
+        has_continuing_non_silent,
+    )
 
 
 @dataclass(eq=False)
@@ -356,10 +442,11 @@ class _StagedSend:
     completes_turn_if_nonempty: bool = False
     has_input_payload: bool = False
     omit_tool_response: bool = False
-    starts_new_turn: bool = False
     is_tool_response: bool = False
     tool_response_ids: tuple[str, ...] = ()
     tool_response_unidentified: int = 0
+    tool_response_has_non_silent: bool = False
+    tool_response_has_continuing_non_silent: bool = False
     consumed_tool_batch: _PendingToolCallBatch | None = None
     consumed_tool_ids: list[str] = field(default_factory=list)
     consumed_tool_unidentified: int = 0
@@ -381,6 +468,7 @@ class _OutboundTurn:
     pending_audio_bytes: int = 0
     pending_audio_mime_type: str | None = None
     input_messages: list[InputMessage] = field(default_factory=list)
+    input_transcript_deltas: list[str] = field(default_factory=list)
     media_bytes: int = 0
     system_instruction: list[SystemInstructionPart] | None = None
     system_instruction_rev: int = 0
@@ -388,8 +476,10 @@ class _OutboundTurn:
     tool_definitions_rev: int = 0
     staged_sends: deque[_StagedSend] = field(default_factory=deque)
     sealed: bool = False
+    retired: bool = False
     has_confirmed_turn_complete: bool = False
     has_confirmed_input_payload: bool = False
+    has_confirmed_non_silent_tool_response: bool = False
     tool_batch: _PendingToolCallBatch | None = None
     bound_gen: _ActiveGeneration | None = None
 
@@ -399,21 +489,21 @@ def _classify_legacy_send(
     end_of_turn: bool,
     *,
     omit_tool_response: bool,
-) -> tuple[bool, bool, bool, tuple[str, ...], int]:
-    """Return ``(completes_turn, omit_from_queue, is_tool_response, tool_ids, unidentified)``."""
+) -> tuple[bool, bool, bool, tuple[str, ...], int, bool, bool]:
+    """Return ``(completes_turn, omit_from_queue, is_tool_response, tool_ids, unidentified, has_non_silent, has_continuing_non_silent)``."""
     if not input_val:
         # AsyncSession._parse_client_message treats any falsy input as
         # client_content(turn_complete=True).
-        return True, False, False, (), 0
+        return True, False, False, (), 0, False, False
     if isinstance(input_val, genai_types.LiveClientRealtimeInput) or (
         isinstance(input_val, Mapping)
         and ("media_chunks" in input_val or "mediaChunks" in input_val)
     ):
-        return False, False, False, (), 0
+        return False, False, False, (), 0, False, False
     if isinstance(input_val, genai_types.Blob) or (
         isinstance(input_val, Mapping) and "data" in input_val
     ):
-        return False, False, False, (), 0
+        return False, False, False, (), 0, False, False
     if isinstance(input_val, genai_types.LiveClientToolResponse) or (
         isinstance(input_val, Mapping)
         and (
@@ -425,35 +515,53 @@ def _classify_legacy_send(
             FunctionResponseOrDict | Sequence[FunctionResponseOrDict] | None,
             _get_config_field(input_val, "function_responses"),
         )
-        ids, unidentified = _extract_tool_response_keys(fn_resps)
+        (
+            ids,
+            unidentified,
+            has_non_silent,
+            has_continuing_non_silent,
+        ) = _extract_tool_response_metadata(fn_resps)
         return (
-            (not omit_tool_response),
+            (not omit_tool_response and has_non_silent),
             omit_tool_response,
             True,
             ids,
             unidentified,
+            has_non_silent,
+            has_continuing_non_silent,
         )
     if isinstance(input_val, genai_types.FunctionResponse) or (
         isinstance(input_val, Mapping)
         and "name" in input_val
         and "response" in input_val
     ):
-        ids, unidentified = _extract_tool_response_keys(
+        (
+            ids,
+            unidentified,
+            has_non_silent,
+            has_continuing_non_silent,
+        ) = _extract_tool_response_metadata(
             cast(FunctionResponseOrDict, input_val)
         )
         return (
-            (not omit_tool_response),
+            (not omit_tool_response and has_non_silent),
             omit_tool_response,
             True,
             ids,
             unidentified,
+            has_non_silent,
+            has_continuing_non_silent,
         )
     if isinstance(input_val, genai_types.LiveClientContent) or (
         isinstance(input_val, Mapping)
         and ("turns" in input_val or "content" in input_val)
     ):
-        tc = _get_config_field(input_val, "turn_complete")
-        return bool(end_of_turn if tc is None else tc), False, False, (), 0
+        tc = (
+            input_val.turn_complete
+            if isinstance(input_val, genai_types.LiveClientContent)
+            else input_val.get("turn_complete")
+        )
+        return bool(tc), False, False, (), 0, False, False
     if isinstance(input_val, Sequence) and not isinstance(
         input_val, (str, bytes, bytearray)
     ):
@@ -467,23 +575,30 @@ def _classify_legacy_send(
             )
             for item in seq_val
         ):
-            ids, unidentified = _extract_tool_response_keys(
+            (
+                ids,
+                unidentified,
+                has_non_silent,
+                has_continuing_non_silent,
+            ) = _extract_tool_response_metadata(
                 cast(Sequence[FunctionResponseOrDict], seq_val)
             )
             return (
-                (not omit_tool_response),
+                (not omit_tool_response and has_non_silent),
                 omit_tool_response,
                 True,
                 ids,
                 unidentified,
+                has_non_silent,
+                has_continuing_non_silent,
             )
         if seq_val and any(
             isinstance(item, genai_types.Blob)
             or (isinstance(item, Mapping) and "data" in item)
             for item in seq_val
         ):
-            return False, False, False, (), 0
-    return bool(end_of_turn), False, False, (), 0
+            return False, False, False, (), 0, False, False
+    return bool(end_of_turn), False, False, (), 0, False, False
 
 
 def _completed_finish_reason(active_gen: _ActiveGeneration) -> str | None:
@@ -767,6 +882,8 @@ class _LiveSessionTracker:
         self._capture_content_override: bool | None = None
         self._active_gen: _ActiveGeneration | None = None
         self._speech_invocation: UserSpeechInvocation | None = None
+        self._awaiting_post_tool_call_turn_complete: bool = False
+        self._awaiting_post_interrupted_turn_complete: bool = False
         self._session_finalized: bool = False
         self.terminal_error: BaseException | None = None
 
@@ -842,54 +959,32 @@ class _LiveSessionTracker:
         ) and staged not in self._pending_context_updates:
             self._pending_context_updates.append(staged)
         matched_batch: _PendingToolCallBatch | None = None
-        if staged.is_tool_response:
-            if self._pending_tool_call_batches:
-                batch = self._pending_tool_call_batches[0]
-                matched_batch = batch
-                staged.consumed_tool_batch = batch
-                for call_id in staged.tool_response_ids:
-                    if call_id in batch.remaining_ids:
-                        batch.remaining_ids.remove(call_id)
-                        staged.consumed_tool_ids.append(call_id)
-                unidentified_left = staged.tool_response_unidentified
-                while (
-                    unidentified_left > 0 and batch.remaining_unidentified > 0
-                ):
-                    batch.remaining_unidentified -= 1
-                    staged.consumed_tool_unidentified += 1
-                    unidentified_left -= 1
-                while unidentified_left > 0 and batch.remaining_ids:
-                    popped_id = next(iter(batch.remaining_ids))
-                    batch.remaining_ids.remove(popped_id)
-                    staged.consumed_tool_ids.append(popped_id)
-                    unidentified_left -= 1
-                if batch.is_complete:
-                    self._pending_tool_call_batches.popleft()
-                    staged.popped_tool_batch = True
-                    staged.completes_turn = True
-                else:
-                    staged.completes_turn = False
-            else:
-                staged.completes_turn = True
-        if (
-            staged.starts_new_turn
-            and self._outbound_turns
-            and not self._outbound_turns[-1].sealed
-        ):
-            last = self._outbound_turns[-1]
-            if (
-                last.input_messages
-                or last.pending_audio_chunks
-                or any(
-                    other.has_input_payload and other.status != "aborted"
-                    for other in last.staged_sends
-                )
-            ):
-                last.sealed = True
+        if staged.is_tool_response and self._pending_tool_call_batches:
+            batch = self._pending_tool_call_batches[0]
+            matched_batch = batch
+            staged.consumed_tool_batch = batch
+            for call_id in staged.tool_response_ids:
+                if call_id in batch.remaining_ids:
+                    batch.remaining_ids.remove(call_id)
+                    staged.consumed_tool_ids.append(call_id)
+            unidentified_left = staged.tool_response_unidentified
+            while unidentified_left > 0 and batch.remaining_unidentified > 0:
+                batch.remaining_unidentified -= 1
+                staged.consumed_tool_unidentified += 1
+                unidentified_left -= 1
+            while unidentified_left > 0 and batch.remaining_ids:
+                popped_id = next(iter(batch.remaining_ids))
+                batch.remaining_ids.remove(popped_id)
+                staged.consumed_tool_ids.append(popped_id)
+                unidentified_left -= 1
+            if batch.is_complete:
+                self._pending_tool_call_batches.popleft()
+                staged.popped_tool_batch = True
         if (
             matched_batch is not None
             and matched_batch.turn is not None
             and matched_batch.turn in self._outbound_turns
+            and not matched_batch.turn.sealed
             and matched_batch.turn.bound_gen is None
         ):
             turn = matched_batch.turn
@@ -898,11 +993,31 @@ class _LiveSessionTracker:
         if matched_batch is not None:
             matched_batch.turn = turn
             turn.tool_batch = matched_batch
+        if staged.is_tool_response:
+            if matched_batch is not None:
+                if staged.tool_response_has_continuing_non_silent:
+                    staged.completes_turn = True
+                elif staged.popped_tool_batch:
+                    turn_has_non_silent = (
+                        staged.tool_response_has_non_silent
+                        or turn.has_confirmed_non_silent_tool_response
+                        or any(
+                            other.tool_response_has_non_silent
+                            and other.status != "aborted"
+                            for other in turn.staged_sends
+                        )
+                    )
+                    staged.completes_turn = turn_has_non_silent
+                else:
+                    staged.completes_turn = False
+            else:
+                staged.completes_turn = staged.tool_response_has_non_silent
         if staged.completes_turn_if_nonempty and not staged.completes_turn:
             has_prior_input = (
                 turn.has_confirmed_input_payload
                 or bool(turn.input_messages)
                 or bool(turn.pending_audio_chunks)
+                or bool(turn.input_transcript_deltas)
                 or any(
                     other.has_input_payload and other.status != "aborted"
                     for other in turn.staged_sends
@@ -1017,10 +1132,46 @@ class _LiveSessionTracker:
             staged.applied = True
             if staged.has_input_payload:
                 turn.has_confirmed_input_payload = True
-            if staged.completes_turn and staged.consumed_tool_batch is None:
+            if staged.tool_response_has_non_silent:
+                turn.has_confirmed_non_silent_tool_response = True
+            if staged.completes_turn and (
+                staged.consumed_tool_batch is None
+                or staged.tool_response_has_continuing_non_silent
+            ):
                 turn.has_confirmed_turn_complete = True
             if turn.bound_gen is not None:
                 self._commit_to_bound_generation(staged, turn.bound_gen)
+            elif turn.retired:
+                if (
+                    staged.updates_system_instruction
+                    or staged.updates_tool_definitions
+                ):
+                    saved_write_turn = self._write_turn
+                    saved_send_seq = self._current_send_seq
+                    saved_active_gen = self._active_gen
+                    saved_override = self._capture_content_override
+                    self._write_turn = turn
+                    self._current_send_seq = staged.seq
+                    self._active_gen = None
+                    any_dep_capture = any(
+                        dep.invocation.should_capture_content
+                        for dep in staged.dependent_gens
+                    )
+                    self._capture_content_override = (
+                        any_dep_capture
+                        or self._telemetry_handler.should_capture_realtime_content()
+                    )
+                    try:
+                        staged.context.run(staged.commit_fn)
+                    finally:
+                        self._write_turn = saved_write_turn
+                        self._current_send_seq = saved_send_seq
+                        self._active_gen = saved_active_gen
+                        self._capture_content_override = saved_override
+                    self._apply_session_context_update(turn)
+                    self._release_pending_context_update(staged, source=turn)
+                else:
+                    self._release_pending_context_update(staged)
             else:
                 detached_turn = turn not in self._outbound_turns
                 saved_write_turn = self._write_turn
@@ -1062,6 +1213,7 @@ class _LiveSessionTracker:
             and not turn.sealed
             and not turn.input_messages
             and not turn.pending_audio_chunks
+            and not turn.input_transcript_deltas
             and turn.system_instruction is None
             and turn.tool_definitions is None
             and turn in self._outbound_turns
@@ -1198,25 +1350,28 @@ class _LiveSessionTracker:
             return
         if reopened_batch is not None:
             for other in turn.staged_sends:
-                if other.consumed_tool_batch is reopened_batch:
+                if (
+                    other.consumed_tool_batch is reopened_batch
+                    and not other.tool_response_has_continuing_non_silent
+                ):
                     other.completes_turn = False
         if (
             staged.completes_turn
             or reopened_batch is not None
             or turn.tool_batch is not None
         ):
-            batch_has_active_response = (
-                turn.has_confirmed_input_payload
-                or bool(turn.input_messages)
+            batch_has_active_non_silent_response = (
+                turn.has_confirmed_non_silent_tool_response
                 or any(
-                    other.has_input_payload and other.status != "aborted"
+                    other.tool_response_has_non_silent
+                    and other.status != "aborted"
                     for other in turn.staged_sends
                 )
             )
             batch_completed = bool(
                 turn.tool_batch is not None
                 and turn.tool_batch.is_complete
-                and batch_has_active_response
+                and batch_has_active_non_silent_response
             )
             turn.sealed = (
                 turn.has_confirmed_turn_complete
@@ -1301,6 +1456,7 @@ class _LiveSessionTracker:
             if (
                 not turn.input_messages
                 and not turn.pending_audio_chunks
+                and not turn.input_transcript_deltas
                 and not turn.staged_sends
                 and not turn.sealed
                 and turn.system_instruction is None
@@ -1598,7 +1754,9 @@ class _LiveSessionTracker:
             return
         tool_msg = _build_tool_response_input_message(function_responses)
         if tool_msg is not None:
-            self._target_turn().input_messages.append(tool_msg)
+            turn = self._target_turn()
+            turn.input_messages.append(tool_msg)
+            self._track_input_message_media(turn, [tool_msg])
 
     def on_send_context_update(
         self,
@@ -1694,10 +1852,14 @@ class _LiveSessionTracker:
             turns = _get_config_field(input_val, "turns")
             if turns is None:
                 turns = _get_config_field(input_val, "content")
-            tc = _get_config_field(input_val, "turn_complete")
+            tc = (
+                input_val.turn_complete
+                if isinstance(input_val, genai_types.LiveClientContent)
+                else input_val.get("turn_complete")
+            )
             self.on_send_client_content(
                 cast(ContentListUnion | ContentListUnionDict | None, turns),
-                turn_complete=bool(end_of_turn if tc is None else tc),
+                turn_complete=bool(tc),
             )
             return
 
@@ -1751,11 +1913,16 @@ class _LiveSessionTracker:
                 mime_type = turn.pending_audio_mime_type or "audio/pcm"
                 for chunk in turn.pending_audio_chunks:
                     active_gen.append_input_audio(chunk, mime_type)
+            if turn.input_transcript_deltas:
+                active_gen.input_transcript_deltas.extend(
+                    turn.input_transcript_deltas
+                )
         turn.input_messages.clear()
         turn.pending_audio_chunks.clear()
         turn.pending_audio_bytes = 0
         turn.pending_audio_mime_type = None
         turn.media_bytes = 0
+        turn.input_transcript_deltas.clear()
 
     def _claim_outbound_inputs(
         self, active_gen: _ActiveGeneration, capture_content: bool
@@ -1775,7 +1942,11 @@ class _LiveSessionTracker:
                 bound_turn = turn
                 break
             turn = self._outbound_turns.popleft()
-            if turn.input_messages or turn.pending_audio_chunks:
+            if (
+                turn.input_messages
+                or turn.pending_audio_chunks
+                or turn.input_transcript_deltas
+            ):
                 claimed_any_input = True
             self._consume_turn(turn, active_gen, capture_content)
             if turn.sealed:
@@ -1783,8 +1954,41 @@ class _LiveSessionTracker:
 
         return bound_turn
 
+    def _retire_no_output_turn(self) -> None:
+        retired_any_input = False
+        while self._outbound_turns:
+            head = self._outbound_turns[0]
+            if head.staged_sends and retired_any_input:
+                break
+            turn = self._outbound_turns.popleft()
+            turn.retired = True
+            self._apply_session_context_update(turn)
+            if (
+                turn.input_messages
+                or turn.pending_audio_chunks
+                or turn.input_transcript_deltas
+                or turn.has_confirmed_input_payload
+                or any(
+                    staged.has_input_payload and staged.status != "aborted"
+                    for staged in turn.staged_sends
+                )
+            ):
+                retired_any_input = True
+            turn.input_messages.clear()
+            turn.pending_audio_chunks.clear()
+            turn.pending_audio_bytes = 0
+            turn.pending_audio_mime_type = None
+            turn.media_bytes = 0
+            turn.input_transcript_deltas.clear()
+            if turn.staged_sends or turn.sealed:
+                break
+        if not self._outbound_turns:
+            self._pending_input_transcript_deltas.clear()
+
     def ensure_active_generation(self) -> _ActiveGeneration:
         if self._active_gen is None:
+            self._awaiting_post_tool_call_turn_complete = False
+            self._awaiting_post_interrupted_turn_complete = False
             invocation = self._telemetry_handler.realtime_inference(
                 self.provider,
                 request_model=self.request_model,
@@ -2025,16 +2229,15 @@ class _LiveSessionTracker:
                         and batch_turn in self._outbound_turns
                         and not batch_turn.sealed
                     ):
-                        batch_has_active_response = (
-                            batch_turn.has_confirmed_input_payload
-                            or bool(batch_turn.input_messages)
+                        batch_has_active_non_silent_response = (
+                            batch_turn.has_confirmed_non_silent_tool_response
                             or any(
-                                other.has_input_payload
+                                other.tool_response_has_non_silent
                                 and other.status != "aborted"
                                 for other in batch_turn.staged_sends
                             )
                         )
-                        if batch_has_active_response:
+                        if batch_has_active_non_silent_response:
                             batch_turn.sealed = True
 
         raw_vad: object = (
@@ -2058,6 +2261,7 @@ class _LiveSessionTracker:
                     if (
                         open_turn.input_messages
                         or open_turn.pending_audio_chunks
+                        or open_turn.input_transcript_deltas
                         or any(
                             other.has_input_payload
                             and other.status != "aborted"
@@ -2067,9 +2271,15 @@ class _LiveSessionTracker:
                         open_turn.sealed = True
                 self._stop_user_speech()
 
-        if server_content is not None and getattr(
-            server_content, "interrupted", False
-        ):
+        is_interrupted = bool(
+            server_content is not None
+            and getattr(server_content, "interrupted", False)
+        )
+        is_generation_complete = bool(
+            server_content is not None
+            and getattr(server_content, "generation_complete", False)
+        )
+        if is_interrupted:
             self._mark_new_user_utterance()
 
         capture_content = self._should_capture_content()
@@ -2083,6 +2293,10 @@ class _LiveSessionTracker:
                     and self._active_gen.accepting_input_transcription
                 ):
                     self._active_gen.input_transcript_deltas.append(
+                        str(input_tx.text)
+                    )
+                elif self._outbound_turns:
+                    self._outbound_turns[-1].input_transcript_deltas.append(
                         str(input_tx.text)
                     )
                 else:
@@ -2110,8 +2324,8 @@ class _LiveSessionTracker:
         has_completion_signal = bool(
             server_content is not None
             and (
-                getattr(server_content, "interrupted", False)
-                or getattr(server_content, "generation_complete", False)
+                is_interrupted
+                or is_generation_complete
                 or interaction_complete
                 or provider_reason is not None
             )
@@ -2126,6 +2340,31 @@ class _LiveSessionTracker:
             and not has_model_output
             and not has_tool_call
         ):
+            if (
+                self._awaiting_post_tool_call_turn_complete
+                and (interaction_complete or is_generation_complete)
+                and not is_interrupted
+            ):
+                if interaction_complete:
+                    self._awaiting_post_tool_call_turn_complete = False
+                return
+            if (
+                self._awaiting_post_interrupted_turn_complete
+                and interaction_complete
+                and not is_interrupted
+            ):
+                self._awaiting_post_interrupted_turn_complete = False
+                return
+            if is_interrupted:
+                self._awaiting_post_tool_call_turn_complete = False
+                self._retire_no_output_turn()
+                if not interaction_complete:
+                    self._awaiting_post_interrupted_turn_complete = True
+                return
+            if interaction_complete and (
+                provider_reason is not None or not is_generation_complete
+            ):
+                self._retire_no_output_turn()
             return
 
         active_gen = self.ensure_active_generation()
@@ -2250,6 +2489,9 @@ class _LiveSessionTracker:
                         )
                     )
                 self._active_gen = None
+                self._awaiting_post_tool_call_turn_complete = (
+                    not interaction_complete
+                )
                 self._finish_or_defer_generation(
                     active_gen, finish_reason="tool_call"
                 )
@@ -2348,10 +2590,11 @@ async def _run_transactional_send(
     completes_turn_if_nonempty: bool = False,
     has_input_payload: bool = False,
     omit_tool_response: bool = False,
-    starts_new_turn: bool = False,
     is_tool_response: bool = False,
     tool_response_ids: tuple[str, ...] = (),
     tool_response_unidentified: int = 0,
+    tool_response_has_non_silent: bool = False,
+    tool_response_has_continuing_non_silent: bool = False,
     updates_system_instruction: bool = False,
     updates_tool_definitions: bool = False,
 ) -> object:
@@ -2362,10 +2605,15 @@ async def _run_transactional_send(
         existing_staged.completes_turn_if_nonempty = completes_turn_if_nonempty
         existing_staged.has_input_payload = has_input_payload
         existing_staged.omit_tool_response = omit_tool_response
-        existing_staged.starts_new_turn = starts_new_turn
         existing_staged.is_tool_response = is_tool_response
         existing_staged.tool_response_ids = tool_response_ids
         existing_staged.tool_response_unidentified = tool_response_unidentified
+        existing_staged.tool_response_has_non_silent = (
+            tool_response_has_non_silent
+        )
+        existing_staged.tool_response_has_continuing_non_silent = (
+            tool_response_has_continuing_non_silent
+        )
         existing_staged.updates_system_instruction = updates_system_instruction
         existing_staged.updates_tool_definitions = updates_tool_definitions
         res = call_fn()
@@ -2380,10 +2628,11 @@ async def _run_transactional_send(
         completes_turn_if_nonempty=completes_turn_if_nonempty,
         has_input_payload=has_input_payload,
         omit_tool_response=omit_tool_response,
-        starts_new_turn=starts_new_turn,
         is_tool_response=is_tool_response,
         tool_response_ids=tool_response_ids,
         tool_response_unidentified=tool_response_unidentified,
+        tool_response_has_non_silent=tool_response_has_non_silent,
+        tool_response_has_continuing_non_silent=tool_response_has_continuing_non_silent,
         updates_system_instruction=updates_system_instruction,
         updates_tool_definitions=updates_tool_definitions,
     )
@@ -2452,7 +2701,6 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
             kwargs.get(field_name) is not None
             for field_name in ("audio", "media", "video", "text")
         )
-        starts_new_turn = kwargs.get("activity_start") is not None
         await _run_transactional_send(
             tracker,
             lambda: tracker.on_send_realtime_input(kwargs),
@@ -2460,7 +2708,6 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
             completes_turn=completes_turn,
             completes_turn_if_nonempty=completes_turn_if_nonempty,
             has_input_payload=has_input_payload,
-            starts_new_turn=starts_new_turn,
         )
 
     @functools.wraps(orig_send_client_content)
@@ -2506,21 +2753,26 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
             tracker._active_gen is not None
             and tracker._active_gen.awaiting_tool_response
         )
-        tool_ids, tool_unidentified = _extract_tool_response_keys(
-            function_responses
-        )
+        (
+            tool_ids,
+            tool_unidentified,
+            tool_has_non_silent,
+            tool_has_continuing_non_silent,
+        ) = _extract_tool_response_metadata(function_responses)
         await _run_transactional_send(
             tracker,
             lambda: tracker.on_send_tool_response(
                 function_responses, omit_tool_response=omit_tool_response
             ),
             lambda: orig_send_tool_response(*args, **kwargs),  # pyright: ignore[reportArgumentType]
-            completes_turn=not omit_tool_response,
+            completes_turn=not omit_tool_response and tool_has_non_silent,
             has_input_payload=not omit_tool_response,
             omit_tool_response=omit_tool_response,
             is_tool_response=True,
             tool_response_ids=tool_ids,
             tool_response_unidentified=tool_unidentified,
+            tool_response_has_non_silent=tool_has_non_silent,
+            tool_response_has_continuing_non_silent=tool_has_continuing_non_silent,
         )
 
     @functools.wraps(orig_receive)
@@ -2565,6 +2817,8 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 is_tool_response,
                 tool_ids,
                 tool_unidentified,
+                tool_has_non_silent,
+                tool_has_continuing_non_silent,
             ) = _classify_legacy_send(
                 input_val,
                 bool(end_of_turn),
@@ -2584,6 +2838,8 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 is_tool_response=is_tool_response,
                 tool_response_ids=tool_ids,
                 tool_response_unidentified=tool_unidentified,
+                tool_response_has_non_silent=tool_has_non_silent,
+                tool_response_has_continuing_non_silent=tool_has_continuing_non_silent,
             )
 
         setattr(session, "send", wrapped_send)
