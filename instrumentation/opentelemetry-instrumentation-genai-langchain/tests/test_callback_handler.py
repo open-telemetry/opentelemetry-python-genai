@@ -9,10 +9,15 @@ import base64
 import json
 import math
 import uuid
+from collections.abc import AsyncIterator, Iterator
 from unittest import mock
 
 import langchain.agents
 import pytest
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
 from langchain_core.documents import Document
 from langchain_core.language_models.fake import FakeListLLM
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -34,6 +39,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import (
     ChatGeneration,
     ChatGenerationChunk,
+    GenerationChunk,
     LLMResult,
 )
 from langchain_core.prompts import ChatPromptTemplate
@@ -152,14 +158,14 @@ async def test_text_completion_emits_inference_span(
     assert attrs[GenAI.GEN_AI_PROVIDER_NAME] == "fakelist"
     assert attrs[GenAI.GEN_AI_REQUEST_MODEL] == "completion-model"
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (input_message,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        (input_message,) = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
         assert input_message["role"] == "user"
-        assert input_message["parts"] == [
+        assert list(input_message["parts"]) == [
             {"type": "text", "content": "complete this"}
         ]
-        (output_message,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        (output_message,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert output_message["role"] == "assistant"
-        assert output_message["parts"] == [
+        assert list(output_message["parts"]) == [
             {"type": "text", "content": "completed text"}
         ]
     else:
@@ -200,6 +206,66 @@ async def test_text_completion_records_llm_output_token_usage(
     attrs = finished_span(span_exporter, "text_completion").attributes
     assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 11
     assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_text_completion_stream_uses_string_done_reason(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    class StopSequenceLLM(FakeListLLM):
+        def _stream(
+            self,
+            prompt: str,
+            stop: list[str] | None = None,
+            run_manager: CallbackManagerForLLMRun | None = None,
+            **kwargs: object,
+        ) -> Iterator[GenerationChunk]:
+            assert stop == ["END"]
+            yield GenerationChunk(
+                text="completed text",
+                generation_info={
+                    "finish_reason": stop,
+                    "done_reason": "stop",
+                },
+            )
+
+        async def _astream(
+            self,
+            prompt: str,
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: object,
+        ) -> AsyncIterator[GenerationChunk]:
+            assert stop == ["END"]
+            yield GenerationChunk(
+                text="completed text",
+                generation_info={
+                    "finish_reason": stop,
+                    "done_reason": "stop",
+                },
+            )
+
+    model = StopSequenceLLM(responses=["unused"])
+    if asynchronous:
+        chunks = [
+            chunk
+            async for chunk in model.astream("complete this", stop=["END"])
+        ]
+    else:
+        chunks = list(model.stream("complete this", stop=["END"]))
+    assert "".join(chunks) == "completed text"
+
+    attrs = finished_span(span_exporter, "text_completion").attributes
+    assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (output,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
+        assert output["finish_reason"] == "stop"
+    else:
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
 
 def test_chat_without_model_name_still_starts_inference() -> None:

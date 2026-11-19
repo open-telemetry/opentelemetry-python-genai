@@ -31,6 +31,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _ai_message_parts,
+    _first_string,
     _message_name,
     _normalize_role,
     extract_token_details,
@@ -737,9 +738,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     # ChatOllama spells its stop reason `done_reason`;
                     # fall back to it so a successful run is not later
                     # recorded as `"error"`.
-                    finish_reason = generation_info.get(
-                        "finish_reason"
-                    ) or generation_info.get("done_reason")
+                    finish_reason = _first_string(
+                        generation_info.get("finish_reason"),
+                        generation_info.get("done_reason"),
+                    )
 
                 if message is not None:
                     # Responses API (RAPI) may include the served model in the
@@ -762,11 +764,11 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
                     # Get finish reason if not found in generation_info above
                     if not finish_reason and message.response_metadata:
-                        finish_reason = (
-                            message.response_metadata.get("finish_reason")
-                            or message.response_metadata.get("stopReason")
-                            or message.response_metadata.get("stop_reason")
-                            or message.response_metadata.get("done_reason")
+                        finish_reason = _first_string(
+                            message.response_metadata.get("finish_reason"),
+                            message.response_metadata.get("stopReason"),
+                            message.response_metadata.get("stop_reason"),
+                            message.response_metadata.get("done_reason"),
                         )
                     finish_reason = finish_reason or "error"
 
