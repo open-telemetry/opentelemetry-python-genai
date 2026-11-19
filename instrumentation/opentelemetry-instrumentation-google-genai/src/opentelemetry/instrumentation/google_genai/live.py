@@ -301,6 +301,48 @@ def _is_interaction_complete(
     return bool(getattr(server_content, "turn_complete", False))
 
 
+def _extract_tool_response_keys(
+    function_responses: FunctionResponseOrDict
+    | Sequence[FunctionResponseOrDict]
+    | None,
+) -> tuple[tuple[str, ...], int]:
+    """Return ``(call_ids, unidentified_count)`` for a tool-response payload."""
+    if function_responses is None:
+        return (), 0
+    items: Sequence[object]
+    try:
+        tool_resp = genai_transformers.t_tool_response(function_responses)
+        items = tool_resp.function_responses or []
+    except Exception:  # pylint: disable=broad-exception-caught
+        items = (
+            [function_responses]
+            if isinstance(function_responses, Mapping)
+            or not isinstance(function_responses, Sequence)
+            else function_responses
+        )
+    ids: list[str] = []
+    unidentified = 0
+    for item in items:
+        call_id = _get_config_field(item, "id")
+        if call_id is not None and str(call_id):
+            ids.append(str(call_id))
+        else:
+            unidentified += 1
+    return tuple(ids), unidentified
+
+
+@dataclass(eq=False)
+class _PendingToolCallBatch:
+    """Tracks unanswered function calls from a Gemini 2.x ``tool_call`` batch."""
+
+    remaining_ids: set[str] = field(default_factory=set)
+    remaining_unidentified: int = 0
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.remaining_ids and self.remaining_unidentified <= 0
+
+
 @dataclass(eq=False)
 class _StagedSend:
     """Represents an in-flight WebSocket send awaiting transport confirmation."""
@@ -310,6 +352,13 @@ class _StagedSend:
     completes_turn: bool = False
     omit_tool_response: bool = False
     starts_new_turn: bool = False
+    is_tool_response: bool = False
+    tool_response_ids: tuple[str, ...] = ()
+    tool_response_unidentified: int = 0
+    consumed_tool_batch: _PendingToolCallBatch | None = None
+    consumed_tool_ids: list[str] = field(default_factory=list)
+    consumed_tool_unidentified: int = 0
+    popped_tool_batch: bool = False
     seq: int = 0
     turn: _OutboundTurn | None = None
     status: str = "pending"
@@ -340,19 +389,21 @@ def _classify_legacy_send(
     end_of_turn: bool,
     *,
     omit_tool_response: bool,
-) -> tuple[bool, bool]:
-    """Return ``(completes_turn, omit_from_turn_queue)`` for legacy ``session.send``."""
-    if input_val is None:
-        return bool(end_of_turn), False
+) -> tuple[bool, bool, bool, tuple[str, ...], int]:
+    """Return ``(completes_turn, omit_from_queue, is_tool_response, tool_ids, unidentified)``."""
+    if not input_val:
+        # AsyncSession._parse_client_message treats any falsy input as
+        # client_content(turn_complete=True).
+        return True, False, False, (), 0
     if isinstance(input_val, genai_types.LiveClientRealtimeInput) or (
         isinstance(input_val, Mapping)
         and ("media_chunks" in input_val or "mediaChunks" in input_val)
     ):
-        return False, False
+        return False, False, False, (), 0
     if isinstance(input_val, genai_types.Blob) or (
         isinstance(input_val, Mapping) and "data" in input_val
     ):
-        return False, False
+        return False, False, False, (), 0
     if isinstance(input_val, genai_types.LiveClientToolResponse) or (
         isinstance(input_val, Mapping)
         and (
@@ -360,19 +411,39 @@ def _classify_legacy_send(
             or "functionResponses" in input_val
         )
     ):
-        return (not omit_tool_response), omit_tool_response
+        fn_resps = cast(
+            FunctionResponseOrDict | Sequence[FunctionResponseOrDict] | None,
+            _get_config_field(input_val, "function_responses"),
+        )
+        ids, unidentified = _extract_tool_response_keys(fn_resps)
+        return (
+            (not omit_tool_response),
+            omit_tool_response,
+            True,
+            ids,
+            unidentified,
+        )
     if isinstance(input_val, genai_types.FunctionResponse) or (
         isinstance(input_val, Mapping)
         and "name" in input_val
         and "response" in input_val
     ):
-        return (not omit_tool_response), omit_tool_response
+        ids, unidentified = _extract_tool_response_keys(
+            cast(FunctionResponseOrDict, input_val)
+        )
+        return (
+            (not omit_tool_response),
+            omit_tool_response,
+            True,
+            ids,
+            unidentified,
+        )
     if isinstance(input_val, genai_types.LiveClientContent) or (
         isinstance(input_val, Mapping)
         and ("turns" in input_val or "content" in input_val)
     ):
         tc = _get_config_field(input_val, "turn_complete")
-        return bool(end_of_turn if tc is None else tc), False
+        return bool(end_of_turn if tc is None else tc), False, False, (), 0
     if isinstance(input_val, Sequence) and not isinstance(
         input_val, (str, bytes, bytearray)
     ):
@@ -386,14 +457,23 @@ def _classify_legacy_send(
             )
             for item in seq_val
         ):
-            return (not omit_tool_response), omit_tool_response
+            ids, unidentified = _extract_tool_response_keys(
+                cast(Sequence[FunctionResponseOrDict], seq_val)
+            )
+            return (
+                (not omit_tool_response),
+                omit_tool_response,
+                True,
+                ids,
+                unidentified,
+            )
         if seq_val and any(
             isinstance(item, genai_types.Blob)
             or (isinstance(item, Mapping) and "data" in item)
             for item in seq_val
         ):
-            return False, False
-    return bool(end_of_turn), False
+            return False, False, False, (), 0
+    return bool(end_of_turn), False, False, (), 0
 
 
 def _completed_finish_reason(active_gen: _ActiveGeneration) -> str | None:
@@ -406,37 +486,13 @@ def _completed_finish_reason(active_gen: _ActiveGeneration) -> str | None:
     return None
 
 
-def _merge_input_messages(
-    target: list[InputMessage], committed: Sequence[InputMessage]
-) -> None:
-    """Merge newly confirmed input messages into ``target``, coalescing adjacent audio."""
-    for msg in committed:
-        if (
-            target
-            and target[-1].role == "user"
-            and msg.role == "user"
-            and len(target[-1].parts) == 1
-            and len(msg.parts) == 1
-            and isinstance(last_part := target[-1].parts[0], BlobPart)
-            and isinstance(new_part := msg.parts[0], BlobPart)
-            and last_part.modality == Modality.AUDIO
-            and new_part.modality == Modality.AUDIO
-            and last_part.mime_type == new_part.mime_type
-            and isinstance(last_part.content, bytes)
-            and isinstance(new_part.content, bytes)
-        ):
-            merged = last_part.content + new_part.content
-            if len(merged) > _MAX_BUFFERED_MEDIA_BYTES:
-                merged = merged[-_MAX_BUFFERED_MEDIA_BYTES:]
-            last_part.content = merged
-        else:
-            target.append(msg)
-
-
 @dataclass(eq=False)
 class _ActiveGeneration:
     invocation: RealtimeInferenceInvocation
     input_messages: list[InputMessage] = field(default_factory=list)
+    input_audio_chunks: deque[bytes] = field(default_factory=deque)
+    input_audio_bytes: int = 0
+    input_audio_mime_type: str | None = None
     system_instruction: list[SystemInstructionPart] = field(
         default_factory=list
     )
@@ -464,6 +520,72 @@ class _ActiveGeneration:
     bound_turn: _OutboundTurn | None = None
     deferred_finish_reason: str | None = None
     deferred_error: Error | BaseException | None = None
+
+    def append_input_audio(self, chunk: bytes, mime_type: str) -> None:
+        if not chunk:
+            return
+        if (
+            self.input_audio_chunks
+            and self.input_audio_mime_type
+            and mime_type != self.input_audio_mime_type
+        ):
+            self.flush_input_audio()
+        max_bytes = _MAX_BUFFERED_MEDIA_BYTES
+        if len(chunk) >= max_bytes:
+            trimmed = chunk[-max_bytes:]
+            self.input_audio_chunks.clear()
+            self.input_audio_chunks.append(trimmed)
+            self.input_audio_bytes = len(trimmed)
+        else:
+            self.input_audio_chunks.append(chunk)
+            self.input_audio_bytes += len(chunk)
+            excess = self.input_audio_bytes - max_bytes
+            while excess > 0 and self.input_audio_chunks:
+                oldest = self.input_audio_chunks[0]
+                if len(oldest) <= excess:
+                    self.input_audio_chunks.popleft()
+                    self.input_audio_bytes -= len(oldest)
+                    excess -= len(oldest)
+                else:
+                    self.input_audio_chunks[0] = oldest[excess:]
+                    self.input_audio_bytes -= excess
+                    excess = 0
+        self.input_audio_mime_type = mime_type
+
+    def flush_input_audio(self) -> None:
+        if not self.input_audio_chunks:
+            return
+        self.input_messages.append(
+            InputMessage(
+                role="user",
+                parts=[
+                    BlobPart(
+                        mime_type=self.input_audio_mime_type or "audio/pcm",
+                        modality=Modality.AUDIO,
+                        content=b"".join(self.input_audio_chunks),
+                    )
+                ],
+            )
+        )
+        self.input_audio_chunks.clear()
+        self.input_audio_bytes = 0
+        self.input_audio_mime_type = None
+
+    def append_input_messages(self, messages: Sequence[InputMessage]) -> None:
+        for msg in messages:
+            if (
+                msg.role == "user"
+                and len(msg.parts) == 1
+                and isinstance(part := msg.parts[0], BlobPart)
+                and part.modality == Modality.AUDIO
+                and isinstance(part.content, bytes)
+            ):
+                self.append_input_audio(
+                    part.content, part.mime_type or "audio/pcm"
+                )
+            else:
+                self.flush_input_audio()
+                self.input_messages.append(msg)
 
     def flush_current_turn_output_message(
         self, finish_reason: str | None
@@ -562,6 +684,7 @@ class _LiveSessionTracker:
         )
 
         self._outbound_turns: deque[_OutboundTurn] = deque()
+        self._pending_tool_call_batches: deque[_PendingToolCallBatch] = deque()
         self._write_turn: _OutboundTurn | None = None
         self._next_send_seq: int = 0
         self._current_send_seq: int = 0
@@ -638,6 +761,34 @@ class _LiveSessionTracker:
             return
         self._next_send_seq += 1
         staged.seq = self._next_send_seq
+        if staged.is_tool_response:
+            if self._pending_tool_call_batches:
+                batch = self._pending_tool_call_batches[0]
+                staged.consumed_tool_batch = batch
+                for call_id in staged.tool_response_ids:
+                    if call_id in batch.remaining_ids:
+                        batch.remaining_ids.remove(call_id)
+                        staged.consumed_tool_ids.append(call_id)
+                unidentified_left = staged.tool_response_unidentified
+                while (
+                    unidentified_left > 0 and batch.remaining_unidentified > 0
+                ):
+                    batch.remaining_unidentified -= 1
+                    staged.consumed_tool_unidentified += 1
+                    unidentified_left -= 1
+                while unidentified_left > 0 and batch.remaining_ids:
+                    popped_id = next(iter(batch.remaining_ids))
+                    batch.remaining_ids.remove(popped_id)
+                    staged.consumed_tool_ids.append(popped_id)
+                    unidentified_left -= 1
+                if batch.is_complete:
+                    self._pending_tool_call_batches.popleft()
+                    staged.popped_tool_batch = True
+                    staged.completes_turn = True
+                else:
+                    staged.completes_turn = False
+            else:
+                staged.completes_turn = True
         if (
             staged.starts_new_turn
             and self._outbound_turns
@@ -689,20 +840,19 @@ class _LiveSessionTracker:
         self._capture_content_override = target_capture
         try:
             staged.context.run(staged.commit_fn)
-            self._flush_pending_audio(
-                turn=scratch_turn, capture_content=target_capture
-            )
         finally:
             self._write_turn = saved_write_turn
             self._current_send_seq = saved_send_seq
             self._active_gen = saved_active_gen
             self._capture_content_override = saved_override
 
-        if scratch_turn.input_messages:
-            _merge_input_messages(
-                target_gen.input_messages, scratch_turn.input_messages
-            )
         if target_capture:
+            if scratch_turn.input_messages:
+                target_gen.append_input_messages(scratch_turn.input_messages)
+            if scratch_turn.pending_audio_chunks:
+                mime_type = scratch_turn.pending_audio_mime_type or "audio/pcm"
+                for chunk in scratch_turn.pending_audio_chunks:
+                    target_gen.append_input_audio(chunk, mime_type)
             if (
                 scratch_turn.system_instruction is not None
                 and scratch_turn.system_instruction_rev
@@ -851,6 +1001,19 @@ class _LiveSessionTracker:
         if staged.status != "pending":
             return
         staged.status = "aborted"
+        if staged.consumed_tool_batch is not None:
+            batch = staged.consumed_tool_batch
+            batch.remaining_ids.update(staged.consumed_tool_ids)
+            batch.remaining_unidentified += staged.consumed_tool_unidentified
+            if (
+                staged.popped_tool_batch
+                and batch not in self._pending_tool_call_batches
+            ):
+                self._pending_tool_call_batches.appendleft(batch)
+            staged.consumed_tool_batch = None
+            staged.consumed_tool_ids.clear()
+            staged.consumed_tool_unidentified = 0
+            staged.popped_tool_batch = False
         turn = staged.turn
         if turn is None:
             return
@@ -935,6 +1098,7 @@ class _LiveSessionTracker:
                 not turn.input_messages
                 and not turn.pending_audio_chunks
                 and not turn.staged_sends
+                and not turn.sealed
                 and turn.system_instruction is None
                 and turn.tool_definitions is None
             ):
@@ -986,40 +1150,21 @@ class _LiveSessionTracker:
         if should_capture:
             combined = b"".join(turn.pending_audio_chunks)
             mime_type = turn.pending_audio_mime_type or "audio/pcm"
-            if (
-                turn.input_messages
-                and turn.input_messages[-1].role == "user"
-                and len(turn.input_messages[-1].parts) == 1
-                and isinstance(
-                    last_part := turn.input_messages[-1].parts[0],
-                    BlobPart,
+            if len(combined) > _MAX_BUFFERED_MEDIA_BYTES:
+                combined = combined[-_MAX_BUFFERED_MEDIA_BYTES:]
+            turn.input_messages.append(
+                InputMessage(
+                    role="user",
+                    parts=[
+                        BlobPart(
+                            mime_type=mime_type,
+                            modality=Modality.AUDIO,
+                            content=combined,
+                        )
+                    ],
                 )
-                and last_part.modality == Modality.AUDIO
-                and last_part.mime_type == mime_type
-                and isinstance(last_part.content, bytes)
-            ):
-                merged = last_part.content + combined
-                old_len = len(last_part.content)
-                if len(merged) > _MAX_BUFFERED_MEDIA_BYTES:
-                    merged = merged[-_MAX_BUFFERED_MEDIA_BYTES:]
-                last_part.content = merged
-                turn.media_bytes += len(merged) - old_len
-            else:
-                if len(combined) > _MAX_BUFFERED_MEDIA_BYTES:
-                    combined = combined[-_MAX_BUFFERED_MEDIA_BYTES:]
-                turn.input_messages.append(
-                    InputMessage(
-                        role="user",
-                        parts=[
-                            BlobPart(
-                                mime_type=mime_type,
-                                modality=Modality.AUDIO,
-                                content=combined,
-                            )
-                        ],
-                    )
-                )
-                turn.media_bytes += len(combined)
+            )
+            turn.media_bytes += len(combined)
         turn.pending_audio_chunks.clear()
         turn.pending_audio_bytes = 0
         turn.pending_audio_mime_type = None
@@ -1278,9 +1423,8 @@ class _LiveSessionTracker:
         *,
         omit_tool_response: bool = False,
     ) -> None:
-        if input_val is None:
-            if end_of_turn:
-                self._mark_new_user_utterance()
+        if not input_val:
+            self._mark_new_user_utterance()
             self._flush_pending_audio()
             return
 
@@ -1390,20 +1534,26 @@ class _LiveSessionTracker:
     def _consume_turn(
         self,
         turn: _OutboundTurn,
-        input_msgs: list[InputMessage],
+        active_gen: _ActiveGeneration,
         capture_content: bool,
     ) -> None:
-        self._flush_pending_audio(turn=turn, capture_content=capture_content)
         if capture_content:
             self._apply_session_context_update(turn)
-            _merge_input_messages(input_msgs, turn.input_messages)
+            if turn.input_messages:
+                active_gen.append_input_messages(turn.input_messages)
+            if turn.pending_audio_chunks:
+                mime_type = turn.pending_audio_mime_type or "audio/pcm"
+                for chunk in turn.pending_audio_chunks:
+                    active_gen.append_input_audio(chunk, mime_type)
         turn.input_messages.clear()
+        turn.pending_audio_chunks.clear()
+        turn.pending_audio_bytes = 0
+        turn.pending_audio_mime_type = None
         turn.media_bytes = 0
 
     def _claim_outbound_inputs(
-        self, capture_content: bool
-    ) -> tuple[list[InputMessage], _OutboundTurn | None]:
-        input_msgs: list[InputMessage] = []
+        self, active_gen: _ActiveGeneration, capture_content: bool
+    ) -> _OutboundTurn | None:
         bound_turn: _OutboundTurn | None = None
         claimed_any_input = False
 
@@ -1415,17 +1565,17 @@ class _LiveSessionTracker:
                     # generation that already claimed prior input.
                     break
                 turn = self._outbound_turns.popleft()
-                self._consume_turn(turn, input_msgs, capture_content)
+                self._consume_turn(turn, active_gen, capture_content)
                 bound_turn = turn
                 break
             turn = self._outbound_turns.popleft()
             if turn.input_messages or turn.pending_audio_chunks:
                 claimed_any_input = True
-            self._consume_turn(turn, input_msgs, capture_content)
+            self._consume_turn(turn, active_gen, capture_content)
             if turn.sealed:
                 break
 
-        return input_msgs, bound_turn
+        return bound_turn
 
     def ensure_active_generation(self) -> _ActiveGeneration:
         if self._active_gen is None:
@@ -1448,27 +1598,23 @@ class _LiveSessionTracker:
             if self.reasoning_level is not None:
                 invocation.reasoning_level = self.reasoning_level
 
-            input_msgs, bound_turn = self._claim_outbound_inputs(
-                capture_content
-            )
             input_transcript_deltas = list(
                 self._pending_input_transcript_deltas
             )
             self._pending_input_transcript_deltas.clear()
             active_gen = _ActiveGeneration(
                 invocation=invocation,
-                input_messages=input_msgs,
-                system_instruction=(
-                    list(self.system_instruction) if capture_content else []
-                ),
-                system_instruction_rev=self._system_instruction_rev,
-                tool_definitions=(
-                    list(self.tool_definitions) if capture_content else []
-                ),
-                tool_definitions_rev=self._tool_definitions_rev,
                 input_transcript_deltas=input_transcript_deltas,
-                bound_turn=bound_turn,
             )
+            bound_turn = self._claim_outbound_inputs(
+                active_gen, capture_content
+            )
+            if capture_content:
+                active_gen.system_instruction = list(self.system_instruction)
+                active_gen.tool_definitions = list(self.tool_definitions)
+            active_gen.system_instruction_rev = self._system_instruction_rev
+            active_gen.tool_definitions_rev = self._tool_definitions_rev
+            active_gen.bound_turn = bound_turn
             if bound_turn is not None:
                 bound_turn.bound_gen = active_gen
             self._active_gen = active_gen
@@ -1483,6 +1629,9 @@ class _LiveSessionTracker:
         invocation = active_gen.invocation
         invocation.realtime_session_id = self.realtime_session_id
         capture_content = invocation.should_capture_content
+
+        if capture_content:
+            active_gen.flush_input_audio()
 
         # Attach any server-reported input audio transcription to the user message.
         if active_gen.input_transcript_deltas and capture_content:
@@ -1594,7 +1743,32 @@ class _LiveSessionTracker:
         )
         server_content = getattr(message, "server_content", None)
         tool_call = getattr(message, "tool_call", None)
+        tool_call_cancellation = getattr(
+            message, "tool_call_cancellation", None
+        )
         usage_metadata = getattr(message, "usage_metadata", None)
+
+        if tool_call_cancellation is not None:
+            cancelled_ids = getattr(tool_call_cancellation, "ids", None) or ()
+            if cancelled_ids and self._pending_tool_call_batches:
+                cancelled_set = {str(cid) for cid in cancelled_ids if cid}
+                for batch in list(self._pending_tool_call_batches):
+                    batch.remaining_ids.difference_update(cancelled_set)
+                completed_front = False
+                while (
+                    self._pending_tool_call_batches
+                    and self._pending_tool_call_batches[0].is_complete
+                ):
+                    self._pending_tool_call_batches.popleft()
+                    completed_front = True
+                if (
+                    completed_front
+                    and self._outbound_turns
+                    and not self._outbound_turns[-1].sealed
+                ):
+                    open_turn = self._outbound_turns[-1]
+                    if open_turn.input_messages or open_turn.staged_sends:
+                        open_turn.sealed = True
 
         raw_vad: object = (
             getattr(voice_activity, "voice_activity_type", None)
@@ -1766,6 +1940,21 @@ class _LiveSessionTracker:
                 # such as a tool call handled before the generation completes.
                 active_gen.awaiting_tool_response = True
             else:
+                batch_ids: set[str] = set()
+                batch_unidentified = 0
+                for fc in tool_call.function_calls or []:
+                    fc_id = getattr(fc, "id", None)
+                    if fc_id is not None and str(fc_id):
+                        batch_ids.add(str(fc_id))
+                    else:
+                        batch_unidentified += 1
+                if batch_ids or batch_unidentified:
+                    self._pending_tool_call_batches.append(
+                        _PendingToolCallBatch(
+                            remaining_ids=batch_ids,
+                            remaining_unidentified=batch_unidentified,
+                        )
+                    )
                 if capture_content:
                     tool_parts: list[MessagePart] = [
                         ToolCallRequestPart(
@@ -1881,6 +2070,9 @@ async def _run_transactional_send(
     completes_turn: bool = False,
     omit_tool_response: bool = False,
     starts_new_turn: bool = False,
+    is_tool_response: bool = False,
+    tool_response_ids: tuple[str, ...] = (),
+    tool_response_unidentified: int = 0,
 ) -> object:
     existing_staged = _ACTIVE_SEND_CALLBACK.get()
     if existing_staged is not None:
@@ -1888,6 +2080,9 @@ async def _run_transactional_send(
         existing_staged.completes_turn = completes_turn
         existing_staged.omit_tool_response = omit_tool_response
         existing_staged.starts_new_turn = starts_new_turn
+        existing_staged.is_tool_response = is_tool_response
+        existing_staged.tool_response_ids = tool_response_ids
+        existing_staged.tool_response_unidentified = tool_response_unidentified
         res = call_fn()
         if inspect.isawaitable(res):
             return await res
@@ -1899,6 +2094,9 @@ async def _run_transactional_send(
         completes_turn=completes_turn,
         omit_tool_response=omit_tool_response,
         starts_new_turn=starts_new_turn,
+        is_tool_response=is_tool_response,
+        tool_response_ids=tool_response_ids,
+        tool_response_unidentified=tool_response_unidentified,
     )
     token = _ACTIVE_SEND_CALLBACK.set(staged)
     try:
@@ -2012,6 +2210,9 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
             tracker._active_gen is not None
             and tracker._active_gen.awaiting_tool_response
         )
+        tool_ids, tool_unidentified = _extract_tool_response_keys(
+            function_responses
+        )
         await _run_transactional_send(
             tracker,
             lambda: tracker.on_send_tool_response(
@@ -2020,6 +2221,9 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
             lambda: orig_send_tool_response(*args, **kwargs),  # pyright: ignore[reportArgumentType]
             completes_turn=not omit_tool_response,
             omit_tool_response=omit_tool_response,
+            is_tool_response=True,
+            tool_response_ids=tool_ids,
+            tool_response_unidentified=tool_unidentified,
         )
 
     @functools.wraps(orig_receive)
@@ -2058,7 +2262,13 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 tracker._active_gen is not None
                 and tracker._active_gen.awaiting_tool_response
             )
-            completes_turn, omit_from_queue = _classify_legacy_send(
+            (
+                completes_turn,
+                omit_from_queue,
+                is_tool_response,
+                tool_ids,
+                tool_unidentified,
+            ) = _classify_legacy_send(
                 input_val,
                 bool(end_of_turn),
                 omit_tool_response=omit_tool_response,
@@ -2073,6 +2283,9 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 lambda: orig_send(*args, **kwargs),
                 completes_turn=completes_turn,
                 omit_tool_response=omit_from_queue,
+                is_tool_response=is_tool_response,
+                tool_response_ids=tool_ids,
+                tool_response_unidentified=tool_unidentified,
             )
 
         setattr(session, "send", wrapped_send)

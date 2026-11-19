@@ -2390,15 +2390,14 @@ async def test_live_bounded_media_buffering_during_prolonged_silence(
             async with client.aio.live.connect(
                 model="gemini-2.5-flash-native-audio-preview-12-2025",
             ) as session:
-                # Prolonged silence: repeated audio chunks, audio_stream_end,
-                # and idle video frames must not grow pending media past cap.
+                # Prolonged silence: repeated audio chunks and idle video
+                # frames must not grow pending media past cap.
                 for chunk in (b"AAAA", b"BBBB", b"CCCC", b"DDDD"):
                     await session.send_realtime_input(
                         audio=genai_types.Blob(
                             data=chunk, mime_type="audio/pcm;rate=16000"
                         )
                     )
-                    await session.send_realtime_input(audio_stream_end=True)
                 await session.send_realtime_input(
                     video=genai_types.Blob(
                         data=b"VVVVVVVV", mime_type="image/jpeg"
@@ -4936,6 +4935,18 @@ async def test_live_explicit_session_close_finalizes_once_including_close_errors
                 )
                 await session._receive()
                 await session.close()
+                # Finalization must happen immediately on close(), before
+                # post-close cleanup and before exiting the connect context.
+                assert len(span_exporter.get_finished_spans()) == 2
+                assert (
+                    sum(
+                        1
+                        for log in log_exporter.get_finished_logs()
+                        if log.log_record.event_name
+                        == "gen_ai.client.realtime_session.ended"
+                    )
+                    == 1
+                )
                 await session.close()
                 # Slow cleanup after explicit close must not extend durations.
                 await asyncio.sleep(0.06)
@@ -4965,7 +4976,10 @@ async def test_live_explicit_session_close_finalizes_once_including_close_errors
     assert len(ended_a) == 1
     assert ended_a[0].severity_number == SeverityNumber.INFO
     assert ErrorAttributes.ERROR_TYPE not in ended_a[0].attributes
-    assert (ended_a[0].timestamp - started_a[0].timestamp) / 1e9 < 0.04
+    started_ts_a = started_a[0].timestamp or started_a[0].observed_timestamp
+    ended_ts_a = ended_a[0].timestamp or ended_a[0].observed_timestamp
+    if started_ts_a is not None and ended_ts_a is not None:
+        assert (ended_ts_a - started_ts_a) / 1e9 < 0.04
 
     # Part B: Explicit session.close() failure finalizes active operations with
     # the close error immediately and emits realtime_session.ended once with
@@ -5012,6 +5026,16 @@ async def test_live_explicit_session_close_finalizes_once_including_close_errors
                     ConnectionError, match="close handshake failed"
                 ):
                     await session.close()
+                assert len(span_exporter.get_finished_spans()) == 2
+                assert (
+                    sum(
+                        1
+                        for log in log_exporter.get_finished_logs()
+                        if log.log_record.event_name
+                        == "gen_ai.client.realtime_session.ended"
+                    )
+                    == 1
+                )
                 await asyncio.sleep(0.06)
 
     spans_b = span_exporter.get_finished_spans()
@@ -5039,7 +5063,10 @@ async def test_live_explicit_session_close_finalizes_once_including_close_errors
     assert (
         ended_b[0].attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
     )
-    assert (ended_b[0].timestamp - started_b[0].timestamp) / 1e9 < 0.04
+    started_ts_b = started_b[0].timestamp or started_b[0].observed_timestamp
+    ended_ts_b = ended_b[0].timestamp or ended_b[0].observed_timestamp
+    if started_ts_b is not None and ended_ts_b is not None:
+        assert (ended_ts_b - started_ts_b) / 1e9 < 0.04
 
     # Part C: Explicit session.close() failure after generationComplete still
     # preserves generation success while recording the close error on the
@@ -5096,4 +5123,494 @@ async def test_live_explicit_session_close_finalizes_once_including_close_errors
     assert ended_c[0].severity_number == SeverityNumber.WARN
     assert (
         ended_c[0].attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_legacy_empty_send_completes_turn(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            *[
+                {
+                    "serverContent": {
+                        "modelTurn": {
+                            "role": "model",
+                            "parts": [{"text": f"Reply {label}"}],
+                        },
+                        "turnComplete": True,
+                    }
+                }
+                for label in ("A", "B", "C", "D")
+            ],
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # SDK treats empty session.send() (and falsy input="") as
+                # client_content(turn_complete=True) even when end_of_turn is
+                # omitted/False.
+                await session.send(input="A")
+                await session.send()
+                await session.send(input="B", end_of_turn=True)
+
+                await session.send(input="C")
+                await session.send(input="")
+                await session.send(input="D", end_of_turn=True)
+
+                for _ in range(4):
+                    async for _ in session.receive():
+                        pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 4
+    for span, expected in zip(spans, ("A", "B", "C", "D")):
+        assert span.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+            {
+                "role": "user",
+                "parts": ({"type": "text", "content": expected},),
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_live_bound_generation_audio_drain_keeps_bounded_chunks_until_finalization(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    chunk1_written = asyncio.Event()
+    release_chunks = asyncio.Event()
+    audio_index = 0
+
+    class _DrainingChunksWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            nonlocal audio_index
+            await super().send(payload)
+            frame = self.sent_frames[-1]
+            if "realtimeInput" in frame or "realtime_input" in frame:
+                audio_index += 1
+                if audio_index == 1:
+                    chunk1_written.set()
+                    await asyncio.wait_for(release_chunks.wait(), timeout=5.0)
+
+    fake_ws = _DrainingChunksWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Chunk 1 of reply"}],
+                    },
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": " done"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    created_trackers: list[live_module._LiveSessionTracker] = []
+    orig_tracker_init = live_module._LiveSessionTracker.__init__
+
+    def _capture_tracker(self, *args, **kwargs):
+        orig_tracker_init(self, *args, **kwargs)
+        created_trackers.append(self)
+
+    with (
+        patch.object(live_module, "_MAX_BUFFERED_MEDIA_BYTES", 12),
+        patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)),
+        patch.object(
+            live_module._LiveSessionTracker, "__init__", _capture_tracker
+        ),
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                chunk1_task = asyncio.create_task(
+                    session.send_realtime_input(
+                        audio=genai_types.Blob(
+                            data=b"AAAA", mime_type="audio/pcm;rate=16000"
+                        )
+                    )
+                )
+                await asyncio.wait_for(chunk1_written.wait(), timeout=5.0)
+                for payload in (b"BBBB", b"CCCC", b"DDDD"):
+                    await session.send_realtime_input(
+                        audio=genai_types.Blob(
+                            data=payload, mime_type="audio/pcm;rate=16000"
+                        )
+                    )
+
+                # Start generation while chunk 1 is draining so the turn binds.
+                await session._receive()
+                release_chunks.set()
+                await chunk1_task
+
+                # Before finalization, audio remains in bounded chunks on the
+                # active generation rather than concatenated into input_messages.
+                active_gen = created_trackers[0]._active_gen
+                assert active_gen is not None
+                assert active_gen.input_messages == []
+                assert list(active_gen.input_audio_chunks) == [
+                    b"BBBB",
+                    b"CCCC",
+                    b"DDDD",
+                ]
+                assert active_gen.input_audio_bytes == 12
+
+                # Finalize generation -> single join produces trailing 12 bytes.
+                await session._receive()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"BBBBCCCCDDDD",
+                },
+            ),
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_manual_vad", [False, True])
+async def test_live_budget_eviction_preserves_sealed_turn_boundaries_for_buffered_replies(
+    use_manual_vad: bool,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply 1"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply 2"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with (
+        patch.object(live_module, "_MAX_BUFFERED_MEDIA_BYTES", 16),
+        patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)),
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                for payload in (b"1111111111111111", b"2222222222222222"):
+                    if use_manual_vad:
+                        await session.send_realtime_input(
+                            activity_start=genai_types.ActivityStart()
+                        )
+                    await session.send_realtime_input(
+                        audio=genai_types.Blob(
+                            data=payload, mime_type="audio/pcm;rate=16000"
+                        )
+                    )
+                    if use_manual_vad:
+                        await session.send_realtime_input(
+                            activity_end=genai_types.ActivityEnd()
+                        )
+                    else:
+                        await session.send_realtime_input(
+                            audio_stream_end=True
+                        )
+
+                # Consume both buffered replies after Turn 1's payload was
+                # fully evicted by Turn 2 under the 16-byte media cap.
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    span1, span2 = spans[0], spans[1]
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in span1.attributes
+    assert span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"2222222222222222",
+                },
+            ),
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via_legacy_send", [False, True])
+async def test_live_gemini_2_separate_tool_responses_grouped_in_single_turn(
+    via_legacy_send: bool,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            # Gen 1: Gemini 2.5 requests two tools in one batch.
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-batch-1",
+                            "name": "get_weather",
+                            "args": {"city": "Paris"},
+                        },
+                        {
+                            "id": "call-batch-2",
+                            "name": "get_time",
+                            "args": {"city": "Paris"},
+                        },
+                    ]
+                }
+            },
+            # Gen 2: Model replies after receiving BOTH separate tool responses.
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "It is 20C and 3pm in Paris."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            # Gen 3: Follow-up user turn queued before Gen 2 reply was read.
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Follow-up reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            # Gen 4: Second tool batch where one call is cancelled by server.
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-cancel-keep",
+                            "name": "lookup",
+                            "args": {"key": "a"},
+                        },
+                        {
+                            "id": "call-cancel-drop",
+                            "name": "lookup",
+                            "args": {"key": "b"},
+                        },
+                    ]
+                }
+            },
+            {"toolCallCancellation": {"ids": ["call-cancel-drop"]}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "After cancellation reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Final user reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[
+                            genai_types.Part(text="Weather and time in Paris?")
+                        ],
+                    ),
+                    turn_complete=True,
+                )
+                msg1 = await session._receive()
+                assert msg1.tool_call is not None
+
+                # Answer the two tool calls in two SEPARATE send calls, then
+                # queue a follow-up user turn before consuming either reply.
+                resp1 = genai_types.FunctionResponse(
+                    id="call-batch-1",
+                    name="get_weather",
+                    response={"temp_c": 20},
+                )
+                resp2 = genai_types.FunctionResponse(
+                    id="call-batch-2",
+                    name="get_time",
+                    response={"time": "15:00"},
+                )
+                for resp in (resp1, resp2):
+                    if via_legacy_send:
+                        await session.send(input=resp)
+                    else:
+                        await session.send_tool_response(
+                            function_responses=resp
+                        )
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Follow-up question")],
+                    ),
+                    turn_complete=True,
+                )
+
+                # Consume Gen 2 (tool answer) and Gen 3 (follow-up).
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+                # Second batch: answer one call, server cancels the second.
+                msg4 = await session._receive()
+                assert msg4.tool_call is not None
+                keep_resp = genai_types.FunctionResponse(
+                    id="call-cancel-keep",
+                    name="lookup",
+                    response={"val": 1},
+                )
+                if via_legacy_send:
+                    await session.send(input=keep_resp)
+                else:
+                    await session.send_tool_response(
+                        function_responses=keep_resp
+                    )
+                cancel_msg = await session._receive()
+                assert cancel_msg.tool_call_cancellation is not None
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="After cancel prompt")],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 6
+    gen1, gen2, gen3, gen4, gen5, gen6 = spans
+
+    assert gen1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    gen2_inputs = gen2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    assert [m["parts"][0]["id"] for m in gen2_inputs] == [
+        "call-batch-1",
+        "call-batch-2",
+    ]
+    assert gen3.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Follow-up question"},),
+        },
+    )
+
+    assert gen4.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    gen5_inputs = gen5.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    assert [m["parts"][0]["id"] for m in gen5_inputs] == ["call-cancel-keep"]
+    assert gen6.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "After cancel prompt"},),
+        },
     )
