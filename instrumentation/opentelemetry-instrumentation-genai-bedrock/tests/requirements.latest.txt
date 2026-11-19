@@ -8,6 +8,6 @@ boto3 ~=1.43
 # `instruments` extra (see pyproject.toml) because it pins botocore patch versions.
 aiobotocore ~=3.10
 
--e util/opentelemetry-util-genai
+-e util/opentelemetry-util-genai[wrapt]
 -e instrumentation/opentelemetry-instrumentation-genai-bedrock
 

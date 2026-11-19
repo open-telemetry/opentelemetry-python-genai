@@ -3,7 +3,6 @@
 
 # pylint: disable=too-many-locals,too-many-lines
 
-import json
 import logging
 import os
 
@@ -284,7 +283,7 @@ def test_chat_completion_with_named_input_message(
         )
 
     (span,) = span_exporter.get_finished_spans()
-    input_messages = json.loads(span.attributes["gen_ai.input.messages"])
+    input_messages = span.attributes["gen_ai.input.messages"]
     assert len(input_messages) == 1
     assert input_messages[0]["name"] == "Alice"
     assert input_messages[0]["role"] == "user"
@@ -624,7 +623,6 @@ def test_chat_completion_multiple_choices(
                     }
                 ],
                 "finish_reason": "stop",
-                "name": None,
             },
             {
                 "role": "assistant",
@@ -635,7 +633,6 @@ def test_chat_completion_multiple_choices(
                     }
                 ],
                 "finish_reason": "stop",
-                "name": None,
             },
         ]
 
@@ -1080,6 +1077,9 @@ def chat_completion_tool_call(
         response_0.usage.prompt_tokens,
         response_0.usage.completion_tokens,
     )
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
     assert_all_attributes(
         spans[1],
         DEFAULT_MODEL,
@@ -1124,7 +1124,6 @@ def chat_completion_tool_call(
                         },
                     ],
                     "finish_reason": "tool_call",
-                    "name": None,
                 }
             ]
 
@@ -1155,7 +1154,6 @@ def chat_completion_tool_call(
                             "response": tool_call_result_0["content"],
                         }
                     ],
-                    "name": None,
                 },
                 {
                     "role": "tool",
@@ -1168,7 +1166,6 @@ def chat_completion_tool_call(
                             "response": tool_call_result_1["content"],
                         }
                     ],
-                    "name": None,
                 },
             ]
 
@@ -1657,7 +1654,6 @@ def test_chat_completion_multiple_choices_streaming(
                     }
                 ],
                 "finish_reason": "stop",
-                "name": None,
             },
             {
                 "role": "assistant",
@@ -1668,7 +1664,6 @@ def test_chat_completion_multiple_choices_streaming(
                     }
                 ],
                 "finish_reason": "stop",
-                "name": None,
             },
         ]
         assert_messages_attribute(
@@ -1924,6 +1919,10 @@ def chat_completion_multiple_tools_streaming(
         response_stream_usage.completion_tokens,
     )
 
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
+
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
         if expect_content:
@@ -1951,7 +1950,6 @@ def chat_completion_multiple_tools_streaming(
                         },
                     ],
                     "finish_reason": "tool_call",
-                    "name": None,
                 }
             ]
             assert_messages_attribute(

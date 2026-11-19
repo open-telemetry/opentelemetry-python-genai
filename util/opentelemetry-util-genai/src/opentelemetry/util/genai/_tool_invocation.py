@@ -16,10 +16,12 @@ from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
-    _json_dumps_unless_str,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.utils import ContentCapturingMode
+from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
+    object_to_any_value,
+)
 from opentelemetry.util.types import AnyValue, AttributeValue
 
 
@@ -63,6 +65,8 @@ class ToolInvocation(GenAIInvocation):
     - gen_ai.tool.call.result: Result returned by tool (Opt-In, may contain sensitive data)
     - error.type: Error type if operation failed (Conditionally Required)
     """
+
+    _exception_event_name = "gen_ai.execute_tool.exception"
 
     def __init__(
         self,
@@ -192,13 +196,13 @@ class ToolInvocation(GenAIInvocation):
             (GenAI.GEN_AI_AGENT_NAME, self._data.agent_name),
             (
                 GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
-                _json_dumps_unless_str(self.arguments)
+                object_to_any_value(self.arguments)
                 if capture_content_on_span
                 else None,
             ),
             (
                 GenAI.GEN_AI_TOOL_CALL_RESULT,
-                _json_dumps_unless_str(self.tool_result)
+                object_to_any_value(self.tool_result)
                 if capture_content_on_span
                 else None,
             ),

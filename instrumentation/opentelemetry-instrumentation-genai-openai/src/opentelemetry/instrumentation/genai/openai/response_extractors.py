@@ -800,7 +800,7 @@ def extract_finish_reasons(response: Response | None) -> list[str]:
     finish_reasons: list[str] = []
     for item in response.output:
         if _is_tool_call_item(item) and _tool_call_is_terminal(item):
-            finish_reasons.append("tool_calls")
+            finish_reasons.append("tool_call")
             continue
 
         if not isinstance(item, ResponseOutputMessage):

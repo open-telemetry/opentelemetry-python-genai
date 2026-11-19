@@ -9,37 +9,37 @@ interactions:
             "content": "Say hello in one word."
           }
         ],
-        "model": "claude-sonnet-4-20250514"
+        "model": "claude-sonnet-5-5"
       }
     headers:
       accept:
       - application/json
       accept-encoding:
-      - gzip, deflate
+      - gzip, deflate, zstd
       anthropic-version:
       - '2023-06-01'
       connection:
       - keep-alive
       content-length:
-      - '117'
+      - '110'
       content-type:
       - application/json
       host:
       - api.anthropic.com
       user-agent:
-      - Anthropic/Python 0.75.0
+      - Anthropic/Python 1.17.0
       x-api-key:
       - test_anthropic_api_key
       x-stainless-arch:
-      - arm64
+      - x64
       x-stainless-async:
       - 'false'
       x-stainless-lang:
       - python
       x-stainless-os:
-      - MacOS
+      - Linux
       x-stainless-package-version:
-      - 0.75.0
+      - 1.17.0
       x-stainless-read-timeout:
       - '600'
       x-stainless-retry-count:
@@ -47,7 +47,7 @@ interactions:
       x-stainless-runtime:
       - CPython
       x-stainless-runtime-version:
-      - 3.9.6
+      - 3.14.3
       x-stainless-timeout:
       - '600'
     method: POST
@@ -56,8 +56,8 @@ interactions:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-20250514",
-          "id": "msg_01HZQzQu6SDuERFEAD5E2LLE",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011CgwjHKGjqd2cqy4nqV6Xz",
           "type": "message",
           "role": "assistant",
           "content": [
@@ -66,74 +66,83 @@ interactions:
               "text": "Hello!"
             }
           ],
+          "container": null,
           "stop_reason": "end_turn",
           "stop_sequence": null,
+          "stop_details": null,
           "usage": {
-            "input_tokens": 13,
+            "input_tokens": 16,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
               "ephemeral_5m_input_tokens": 0,
               "ephemeral_1h_input_tokens": 0
             },
-            "output_tokens": 5,
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
             "service_tier": "standard",
-            "inference_geo": "not_available"
-          }
+            "inference_geo": "global",
+            "speed": "standard"
+          },
+          "diagnostics": null
         }
     headers:
-      CF-RAY:
-      - 9d6567bfdaa9c882-EWR
-      Connection:
-      - keep-alive
-      Content-Security-Policy:
-      - default-src 'none'; frame-ancestors 'none'
-      Content-Type:
-      - application/json
-      Date:
-      - Tue, 03 Mar 2026 03:02:58 GMT
-      Server:
-      - cloudflare
-      Transfer-Encoding:
-      - chunked
-      X-Robots-Tag:
-      - none
       anthropic-ratelimit-input-tokens-limit:
-      - '450000'
+      - '10000000'
       anthropic-ratelimit-input-tokens-remaining:
-      - '450000'
+      - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-03-03T03:02:58Z'
+      - '2026-11-11T19:56:27Z'
       anthropic-ratelimit-output-tokens-limit:
-      - '90000'
+      - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
-      - '90000'
+      - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-03-03T03:02:58Z'
+      - '2026-11-11T19:56:27Z'
       anthropic-ratelimit-requests-limit:
-      - '1000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-03-03T03:02:57Z'
+      - '2026-11-11T19:56:25Z'
       anthropic-ratelimit-tokens-limit:
-      - '540000'
+      - '12000000'
       anthropic-ratelimit-tokens-remaining:
-      - '540000'
+      - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-03-03T03:02:58Z'
+      - '2026-11-11T19:56:27Z'
       cf-cache-status:
       - DYNAMIC
+      cf-ray:
+      - a58fdc352c6e0626-IAD
+      connection:
+      - keep-alive
       content-length:
-      - '441'
+      - '548'
+      content-security-policy:
+      - default-src 'none'; frame-ancestors 'none'
+      content-type:
+      - application/json
+      date:
+      - Wed, 11 Nov 2026 19:56:27 GMT
       request-id:
-      - req_011CYfQMBeAfBDq653smhx2t
+      - req_011CgwjHJys43hwWUWDkDkLY
+      server:
+      - cloudflare
+      server-timing:
+      - x-originResponse;dur=1455
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
+      traceresponse:
+      - 00-48734b5e650d299ea7b4f802888a297f-ab594f171ce44a6d-01
+      transfer-encoding:
+      - chunked
       vary:
       - Accept-Encoding
-      x-envoy-upstream-service-time:
-      - '977'
+      x-robots-tag:
+      - none
     status:
       code: 200
       message: OK

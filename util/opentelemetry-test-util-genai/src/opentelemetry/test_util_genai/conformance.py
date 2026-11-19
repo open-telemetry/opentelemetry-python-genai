@@ -40,16 +40,23 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.test.weaver_live_check import (
     LiveCheckError,
     LiveCheckReport,
@@ -122,7 +129,13 @@ class Scenario(ABC):
 
 def _build_providers(
     endpoint: str,
-) -> tuple[TracerProvider, MeterProvider, LoggerProvider]:
+) -> tuple[
+    TracerProvider,
+    MeterProvider,
+    LoggerProvider,
+    InMemorySpanExporter,
+    InMemoryLogRecordExporter,
+]:
     # OTLP/gRPC exporters are only installed in the *-conformance tox envs
     # (see dev-requirements-conformance.txt). Import lazily so this module
     # stays importable in regular test envs that exclude conformance tests.
@@ -140,6 +153,8 @@ def _build_providers(
     tracer_provider.add_span_processor(
         SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
     )
+    span_exporter = InMemorySpanExporter()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
 
     # Disable periodic export — metrics flush via the explicit force_flush()
     # at the end of the scenario, so the report is deterministic.
@@ -155,8 +170,18 @@ def _build_providers(
             OTLPLogExporter(endpoint=endpoint, insecure=True)
         )
     )
+    log_exporter = InMemoryLogRecordExporter()
+    logger_provider.add_log_record_processor(
+        SimpleLogRecordProcessor(log_exporter)
+    )
 
-    return tracer_provider, meter_provider, logger_provider
+    return (
+        tracer_provider,
+        meter_provider,
+        logger_provider,
+        span_exporter,
+        log_exporter,
+    )
 
 
 def _seen_metric_names(report: LiveCheckReport) -> set[str]:
@@ -178,10 +203,186 @@ def _seen_span_operations(report: LiveCheckReport) -> dict[str, int]:
     return counts
 
 
+def _normalize_sample_value(val: Any) -> Any:
+    if isinstance(val, (tuple, list)):
+        return [_normalize_sample_value(x) for x in val]
+    if isinstance(val, dict):
+        return {k: _normalize_sample_value(v) for k, v in val.items()}
+    return val
+
+
+def _enrich_attributes(
+    sample_attrs: list[dict[str, Any]], attrs: Mapping[str, Any]
+) -> None:
+    for attr_entry in sample_attrs:
+        name = attr_entry.get("name")
+        if name not in attrs:
+            continue
+        attr_entry["value"] = _normalize_sample_value(attrs[name])
+
+
+def _sample_scalar_attrs(
+    sample_attrs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        a["name"]: a.get("value")
+        for a in sample_attrs
+        if "name" in a and isinstance(a.get("value"), (str, int, float, bool))
+    }
+
+
+def _span_matches_sample(
+    span: ReadableSpan,
+    sample_span: dict[str, Any],
+    sample_scalars: dict[str, Any],
+) -> bool:
+    if span.name != sample_span.get("name"):
+        return False
+    sample_kind = sample_span.get("kind")
+    if sample_kind and span.kind.name.lower() != str(sample_kind).lower():
+        return False
+    sample_status = (sample_span.get("status") or {}).get("code")
+    if (
+        sample_status
+        and span.status.status_code.name.lower() != str(sample_status).lower()
+    ):
+        return False
+    span_attrs = span.attributes or {}
+    return all(
+        k in span_attrs and span_attrs[k] == v
+        for k, v in sample_scalars.items()
+    )
+
+
+def _match_span(
+    sample_span: dict[str, Any],
+    remaining_spans: list[ReadableSpan],
+) -> ReadableSpan:
+    sample_scalars = _sample_scalar_attrs(sample_span.get("attributes", []))
+    matches = [
+        idx
+        for idx, span in enumerate(remaining_spans)
+        if _span_matches_sample(span, sample_span, sample_scalars)
+    ]
+    assert matches, (
+        f"Could not correlate report span {sample_span.get('name')!r} "
+        f"(scalars={sample_scalars}) with any finished span"
+    )
+    if len(matches) > 1:
+        matched_attrs = [
+            dict(remaining_spans[i].attributes or {}) for i in matches
+        ]
+        assert all(a == matched_attrs[0] for a in matched_attrs[1:]), (
+            f"Ambiguous report span {sample_span.get('name')!r} "
+            f"(scalars={sample_scalars}) matched {len(matches)} distinct spans"
+        )
+    return remaining_spans.pop(matches[0])
+
+
+def _log_matches_sample(
+    log: Any,
+    sample_log: dict[str, Any],
+    sample_scalars: dict[str, Any],
+) -> bool:
+    log_record = getattr(log, "log_record", log)
+    sample_span_id = sample_log.get("span_id")
+    sample_trace_id = sample_log.get("trace_id")
+    sample_event_name = sample_log.get("event_name")
+    span_id = getattr(log_record, "span_id", None)
+    trace_id = getattr(log_record, "trace_id", None)
+    event_name = getattr(log_record, "event_name", None)
+    if sample_span_id and (
+        not isinstance(span_id, int) or f"{span_id:016x}" != sample_span_id
+    ):
+        return False
+    if sample_trace_id and (
+        not isinstance(trace_id, int) or f"{trace_id:032x}" != sample_trace_id
+    ):
+        return False
+    if sample_event_name and event_name != sample_event_name:
+        return False
+    log_attrs = getattr(log_record, "attributes", None) or {}
+    return all(
+        k in log_attrs and log_attrs[k] == v for k, v in sample_scalars.items()
+    )
+
+
+def _match_log(
+    sample_log: dict[str, Any],
+    remaining_logs: list[Any],
+) -> Any:
+    sample_scalars = _sample_scalar_attrs(sample_log.get("attributes", []))
+    matches = [
+        idx
+        for idx, log in enumerate(remaining_logs)
+        if _log_matches_sample(log, sample_log, sample_scalars)
+    ]
+    assert matches, (
+        f"Could not correlate report log {sample_log.get('event_name')!r} "
+        f"(span_id={sample_log.get('span_id')}, scalars={sample_scalars}) "
+        "with any finished log record"
+    )
+    if len(matches) > 1:
+        matched_attrs = [
+            dict(
+                getattr(
+                    getattr(
+                        remaining_logs[i], "log_record", remaining_logs[i]
+                    ),
+                    "attributes",
+                    None,
+                )
+                or {}
+            )
+            for i in matches
+        ]
+        assert all(a == matched_attrs[0] for a in matched_attrs[1:]), (
+            f"Ambiguous report log {sample_log.get('event_name')!r} "
+            f"(span_id={sample_log.get('span_id')}, scalars={sample_scalars}) "
+            f"matched {len(matches)} distinct log records"
+        )
+    return remaining_logs.pop(matches[0])
+
+
+def _enrich_report_samples(
+    report: LiveCheckReport,
+    finished_spans: Sequence[ReadableSpan],
+    finished_logs: Sequence[Any],
+) -> None:
+    # Weaver drops KvlistValue (maps) during OTLP-to-JSON conversion, resulting in
+    # empty lists [] or None for structured content attributes (messages, tool definitions).
+    # Re-hydrate them from the emitted spans/logs so scenario validate() checks succeed.
+    remaining_spans = list(finished_spans)
+    remaining_logs = list(finished_logs)
+    for entry in report.get("samples", []):
+        if "span" in entry:
+            span = _match_span(entry["span"], remaining_spans)
+            if span is not None and span.attributes:
+                _enrich_attributes(
+                    entry["span"].get("attributes", []), span.attributes
+                )
+        elif "log" in entry:
+            log = _match_log(entry["log"], remaining_logs)
+            if log is not None:
+                log_record = getattr(log, "log_record", log)
+                attrs = getattr(log_record, "attributes", None)
+                if attrs:
+                    _enrich_attributes(
+                        entry["log"].get("attributes", []), attrs
+                    )
+
+
 def _dump_report(scenario: Scenario, report: LiveCheckReport) -> None:
     out = Path("weaver_reports") / f"{type(scenario).__name__}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report._report, indent=2, sort_keys=True))
+    out.write_text(
+        json.dumps(
+            report._report,
+            indent=2,
+            sort_keys=True,
+            default=lambda o: repr(o) if isinstance(o, bytes) else str(o),
+        )
+    )
 
 
 def run_conformance(
@@ -196,9 +397,13 @@ def run_conformance(
     :class:`AssertionError` on declared violations weaver no longer
     reports.
     """
-    tracer_provider, meter_provider, logger_provider = _build_providers(
-        weaver.otlp_endpoint
-    )
+    (
+        tracer_provider,
+        meter_provider,
+        logger_provider,
+        span_exporter,
+        log_exporter,
+    ) = _build_providers(weaver.otlp_endpoint)
 
     try:
         scenario.run(
@@ -212,6 +417,11 @@ def run_conformance(
         logger_provider.force_flush()
 
         report = weaver.end(timeout=120)
+        _enrich_report_samples(
+            report,
+            span_exporter.get_finished_spans(),
+            log_exporter.get_finished_logs(),
+        )
         _dump_report(scenario, report)
 
         _check_violations(scenario, report)

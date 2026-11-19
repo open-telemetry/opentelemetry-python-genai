@@ -40,5 +40,5 @@
 portkey-ai==2.3.4
 wrapt>=2.5.2
 
--e util/opentelemetry-util-genai
+-e util/opentelemetry-util-genai[wrapt]
 -e instrumentation/opentelemetry-instrumentation-genai-portkey
