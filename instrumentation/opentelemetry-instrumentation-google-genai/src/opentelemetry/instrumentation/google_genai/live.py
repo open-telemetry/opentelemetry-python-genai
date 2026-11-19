@@ -8,10 +8,11 @@ import contextvars
 import functools
 import inspect
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Final, cast
 from urllib.parse import urlsplit
 
 from google.genai import _transformers as genai_transformers
@@ -37,15 +38,20 @@ from google.genai.types import (
     ToolUnionDict,
 )
 
-from opentelemetry.context import Context, get_current
+from opentelemetry.context import Context, get_current, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes.error_attributes import ErrorTypeValues
-from opentelemetry.util.genai.completion_hook import _NoOpCompletionHook
+from opentelemetry.util.genai.completion_hook import (
+    _NoOpCompletionHook,
+    _SafeCompletionHook,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    CLIENT_INFERENCE_CONTEXT_KEY,
     Error,
+    InferenceData,
     RealtimeInferenceInvocation,
     UserSpeechInvocation,
 )
@@ -76,6 +82,7 @@ from .generate_content import _to_tool_definition
 from .message import _to_part, to_input_messages, to_system_instructions
 
 _ORIGINAL_ASYNC_LIVE_CONNECT = AsyncLive.connect
+_MAX_BUFFERED_MEDIA_BYTES: Final = 4 * 1024 * 1024
 _ACTIVE_SEND_CALLBACK: contextvars.ContextVar[
     list[Callable[[], None]] | None
 ] = contextvars.ContextVar(
@@ -83,18 +90,42 @@ _ACTIVE_SEND_CALLBACK: contextvars.ContextVar[
 )
 
 
+def _has_active_completion_hook(telemetry_handler: TelemetryHandler) -> bool:
+    hook = telemetry_handler._completion_hook
+    if isinstance(hook, _NoOpCompletionHook):
+        return False
+    if isinstance(hook, _SafeCompletionHook) and isinstance(
+        hook._wrapped, _NoOpCompletionHook
+    ):
+        return False
+    return True
+
+
 def _should_capture_live_content(telemetry_handler: TelemetryHandler) -> bool:
     """Return True when message/audio content should be buffered for Live spans or hooks.
 
     Because ``realtime_inference`` does not emit a
     ``gen_ai.client.inference.operation.details`` event, ``EVENT_ONLY`` mode
-    captures content only when a completion hook is active.
+    captures content only when a completion hook is active or when running
+    inside an active outer inference context whose capture policy allows it.
     """
-    return telemetry_handler._content_capturing_mode in (
-        ContentCapturingMode.SPAN_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    ) or not isinstance(
-        telemetry_handler._completion_hook, _NoOpCompletionHook
+    mode = telemetry_handler._content_capturing_mode
+    has_active_hook = _has_active_completion_hook(telemetry_handler)
+    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+    if isinstance(ctx_data, InferenceData):
+        capture_to_context = (
+            ctx_data.capture_content
+            and mode != ContentCapturingMode.NO_CONTENT
+        )
+        upload_completion = ctx_data.upload_completion and has_active_hook
+        return capture_to_context or upload_completion
+    return (
+        mode
+        in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+        or has_active_hook
     )
 
 
@@ -107,11 +138,21 @@ def _strip_model_prefix(model: str | None) -> str | None:
     return model_str
 
 
+def _snake_to_camel(name: str) -> str:
+    head, *tail = name.split("_")
+    return head + "".join(part.capitalize() for part in tail)
+
+
 def _get_config_field(config: object, name: str) -> object:
     if config is None:
         return None
     if isinstance(config, Mapping):
         mapping = cast(Mapping[str, object], config)
+        if name in mapping and mapping[name] is not None:
+            return mapping[name]
+        camel = _snake_to_camel(name)
+        if camel in mapping:
+            return mapping[camel]
         return mapping.get(name)
     return getattr(config, name, None)
 
@@ -233,11 +274,7 @@ def _extract_blob_bytes_and_mime(
     except Exception:  # pylint: disable=broad-exception-caught
         pass
     raw_data = _get_config_field(blob_or_dict, "data")
-    mime_type = (
-        _get_config_field(blob_or_dict, "mime_type")
-        or _get_config_field(blob_or_dict, "mimeType")
-        or default_mime
-    )
+    mime_type = _get_config_field(blob_or_dict, "mime_type") or default_mime
     if isinstance(raw_data, (bytes, bytearray)):
         return bytes(raw_data), str(mime_type)
     if isinstance(raw_data, str):
@@ -324,6 +361,7 @@ class _ActiveGeneration:
     input_transcript_deltas: list[str] = field(default_factory=list)
     output_transcript_deltas: list[str] = field(default_factory=list)
     output_audio_chunks: list[bytes] = field(default_factory=list)
+    output_audio_bytes: int = 0
     output_audio_mime_type: str | None = None
     output_text_deltas: list[str] = field(default_factory=list)
     output_thought_deltas: list[str] = field(default_factory=list)
@@ -354,6 +392,7 @@ class _ActiveGeneration:
                 )
             )
             self.output_audio_chunks.clear()
+            self.output_audio_bytes = 0
             self.output_audio_mime_type = None
         if self.output_text_deltas:
             parts.append(TextPart(content="".join(self.output_text_deltas)))
@@ -431,41 +470,154 @@ class _LiveSessionTracker:
             (request_model or "").lower()
         )
 
-        self._pending_audio_chunks: list[bytes] = []
+        self._pending_audio_chunks: deque[bytes] = deque()
+        self._pending_audio_bytes: int = 0
         self._pending_audio_mime_type: str | None = None
         self._pending_input_messages: list[InputMessage] = []
+        self._pending_media_bytes: int = 0
         self._pending_input_transcript_deltas: list[str] = []
+        self._inflight_sends: list[
+            tuple[list[Callable[[], None]], contextvars.Context]
+        ] = []
         self._active_gen: _ActiveGeneration | None = None
         self._speech_invocation: UserSpeechInvocation | None = None
         self.terminal_error: BaseException | None = None
 
         self.system_instruction: list[SystemInstructionPart] = []
         self.tool_definitions: list[ToolDefinition] = []
+        self._config_content_extracted: bool = False
         if self._should_capture_content():
-            sys_inst = _get_live_config_field(config, "system_instruction")
-            if sys_inst is not None:
-                self.system_instruction = _extract_system_instruction(
-                    cast(ContentUnion | ContentUnionDict, sys_inst)
-                )
-            tools = _get_live_config_field(config, "tools")
-            if tools is not None:
-                self.tool_definitions = _extract_tool_definitions(
-                    cast(ToolListUnion | ToolListUnionDict, tools)
-                )
+            self._ensure_config_content_extracted()
+
+    def _ensure_config_content_extracted(self) -> None:
+        if self._config_content_extracted:
+            return
+        self._config_content_extracted = True
+        sys_inst = _get_live_config_field(self.config, "system_instruction")
+        if sys_inst is not None:
+            self.system_instruction = _extract_system_instruction(
+                cast(ContentUnion | ContentUnionDict, sys_inst)
+            )
+        tools = _get_live_config_field(self.config, "tools")
+        if tools is not None:
+            self.tool_definitions = _extract_tool_definitions(
+                cast(ToolListUnion | ToolListUnionDict, tools)
+            )
 
     def _should_capture_content(self) -> bool:
         if self._active_gen is not None:
             return self._active_gen.invocation.should_capture_content
         return _should_capture_live_content(self._telemetry_handler)
 
+    def register_inflight_send(self, slot: list[Callable[[], None]]) -> None:
+        if not slot:
+            return
+        for existing_slot, _ in self._inflight_sends:
+            if existing_slot is slot:
+                return
+        self._inflight_sends.append((slot, contextvars.copy_context()))
+
+    def unregister_inflight_send(self, slot: list[Callable[[], None]]) -> None:
+        self._inflight_sends = [
+            entry for entry in self._inflight_sends if entry[0] is not slot
+        ]
+
+    def flush_inflight_sends(self) -> None:
+        while self._inflight_sends:
+            slot, ctx = self._inflight_sends.pop(0)
+            if slot:
+                cb = slot.pop(0)
+                ctx.run(cb)
+
     def _mark_new_user_utterance(self) -> None:
         if self._active_gen is not None:
             self._active_gen.accepting_input_transcription = False
 
-    def _flush_pending_audio(self) -> None:
+    def _enforce_pending_media_budget(self) -> None:
+        max_bytes = _MAX_BUFFERED_MEDIA_BYTES
+        excess = (
+            self._pending_media_bytes + self._pending_audio_bytes - max_bytes
+        )
+        if excess <= 0:
+            return
+
+        # Evict oldest buffered media from pending input messages first so the
+        # most recent audio/media preceding the next generation is preserved.
+        idx = 0
+        while excess > 0 and idx < len(self._pending_input_messages):
+            msg = self._pending_input_messages[idx]
+            new_parts: list[MessagePart] = []
+            for part in msg.parts:
+                if (
+                    excess > 0
+                    and isinstance(part, BlobPart)
+                    and isinstance(part.content, bytes)
+                ):
+                    part_len = len(part.content)
+                    if part.modality == Modality.AUDIO and part_len > excess:
+                        part.content = part.content[excess:]
+                        self._pending_media_bytes -= excess
+                        excess = 0
+                        new_parts.append(part)
+                    else:
+                        self._pending_media_bytes -= part_len
+                        excess -= part_len
+                else:
+                    new_parts.append(part)
+            if new_parts:
+                msg.parts = new_parts
+                idx += 1
+            else:
+                self._pending_input_messages.pop(idx)
+
+        # If live streaming audio chunks alone still exceed the budget, evict
+        # oldest chunks from the front of the deque.
+        while excess > 0 and self._pending_audio_chunks:
+            oldest = self._pending_audio_chunks[0]
+            if len(oldest) <= excess:
+                self._pending_audio_chunks.popleft()
+                self._pending_audio_bytes -= len(oldest)
+                excess -= len(oldest)
+            else:
+                self._pending_audio_chunks[0] = oldest[excess:]
+                self._pending_audio_bytes -= excess
+                excess = 0
+
+        if not self._pending_audio_chunks:
+            self._pending_audio_mime_type = None
+
+    def _track_input_message_media(
+        self, messages: Sequence[InputMessage]
+    ) -> None:
+        max_bytes = _MAX_BUFFERED_MEDIA_BYTES
+        added_bytes = 0
+        for msg in messages:
+            for part in msg.parts:
+                if isinstance(part, BlobPart) and isinstance(
+                    part.content, bytes
+                ):
+                    if len(part.content) > max_bytes:
+                        part.content = (
+                            part.content[-max_bytes:]
+                            if part.modality == Modality.AUDIO
+                            else part.content[:max_bytes]
+                        )
+                    added_bytes += len(part.content)
+        if added_bytes:
+            self._pending_media_bytes += added_bytes
+            self._enforce_pending_media_budget()
+
+    def _flush_pending_audio(
+        self, *, capture_content: bool | None = None
+    ) -> None:
         if not self._pending_audio_chunks:
             return
-        if self._should_capture_content():
+        should_capture = (
+            self._should_capture_content()
+            if capture_content is None
+            else capture_content
+        )
+        if should_capture:
             combined = b"".join(self._pending_audio_chunks)
             mime_type = self._pending_audio_mime_type or "audio/pcm"
             if (
@@ -480,8 +632,15 @@ class _LiveSessionTracker:
                 and last_part.mime_type == mime_type
                 and isinstance(last_part.content, bytes)
             ):
-                last_part.content = last_part.content + combined
+                merged = last_part.content + combined
+                old_len = len(last_part.content)
+                if len(merged) > _MAX_BUFFERED_MEDIA_BYTES:
+                    merged = merged[-_MAX_BUFFERED_MEDIA_BYTES:]
+                last_part.content = merged
+                self._pending_media_bytes += len(merged) - old_len
             else:
+                if len(combined) > _MAX_BUFFERED_MEDIA_BYTES:
+                    combined = combined[-_MAX_BUFFERED_MEDIA_BYTES:]
                 self._pending_input_messages.append(
                     InputMessage(
                         role="user",
@@ -494,8 +653,11 @@ class _LiveSessionTracker:
                         ],
                     )
                 )
+                self._pending_media_bytes += len(combined)
         self._pending_audio_chunks.clear()
+        self._pending_audio_bytes = 0
         self._pending_audio_mime_type = None
+        self._enforce_pending_media_budget()
 
     def _start_user_speech(self) -> None:
         self._mark_new_user_utterance()
@@ -534,11 +696,29 @@ class _LiveSessionTracker:
         data_bytes, mime_type = extracted
         lower_mime = mime_type.lower()
         if not force_non_audio and "audio" in lower_mime:
-            self._pending_audio_chunks.append(data_bytes)
+            if not data_bytes:
+                return
+            if (
+                self._pending_audio_chunks
+                and self._pending_audio_mime_type
+                and mime_type != self._pending_audio_mime_type
+            ):
+                self._flush_pending_audio()
+            if len(data_bytes) >= _MAX_BUFFERED_MEDIA_BYTES:
+                trimmed = data_bytes[-_MAX_BUFFERED_MEDIA_BYTES:]
+                self._pending_audio_chunks.clear()
+                self._pending_audio_chunks.append(trimmed)
+                self._pending_audio_bytes = len(trimmed)
+            else:
+                self._pending_audio_chunks.append(data_bytes)
+                self._pending_audio_bytes += len(data_bytes)
             if not self._pending_audio_mime_type:
                 self._pending_audio_mime_type = mime_type
+            self._enforce_pending_media_budget()
             return
         self._flush_pending_audio()
+        if len(data_bytes) > _MAX_BUFFERED_MEDIA_BYTES:
+            data_bytes = data_bytes[:_MAX_BUFFERED_MEDIA_BYTES]
         modality = (
             Modality.VIDEO
             if force_non_audio or "video" in lower_mime
@@ -558,6 +738,8 @@ class _LiveSessionTracker:
                 ],
             )
         )
+        self._pending_media_bytes += len(data_bytes)
+        self._enforce_pending_media_budget()
 
     def on_send_realtime_input(self, kwargs: Mapping[str, object]) -> None:
         if kwargs.get("activity_start") is not None:
@@ -675,6 +857,7 @@ class _LiveSessionTracker:
                 try:
                     messages = to_input_messages(contents=normalized_turns)
                     self._pending_input_messages.extend(messages)
+                    self._track_input_message_media(messages)
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
@@ -703,6 +886,7 @@ class _LiveSessionTracker:
     ) -> None:
         if not self._should_capture_content():
             return
+        self._ensure_config_content_extracted()
         if system_instruction is not None:
             self.system_instruction = _extract_system_instruction(
                 system_instruction
@@ -720,7 +904,8 @@ class _LiveSessionTracker:
             return
 
         if isinstance(input_val, genai_types.LiveClientRealtimeInput) or (
-            isinstance(input_val, Mapping) and "media_chunks" in input_val
+            isinstance(input_val, Mapping)
+            and ("media_chunks" in input_val or "mediaChunks" in input_val)
         ):
             self._mark_new_user_utterance()
             if self._should_capture_content():
@@ -746,7 +931,10 @@ class _LiveSessionTracker:
 
         if isinstance(input_val, genai_types.LiveClientToolResponse) or (
             isinstance(input_val, Mapping)
-            and "function_responses" in input_val
+            and (
+                "function_responses" in input_val
+                or "functionResponses" in input_val
+            )
         ):
             fn_resps = cast(
                 FunctionResponseOrDict
@@ -817,7 +1005,6 @@ class _LiveSessionTracker:
 
     def ensure_active_generation(self) -> _ActiveGeneration:
         if self._active_gen is None:
-            self._flush_pending_audio()
             invocation = self._telemetry_handler.realtime_inference(
                 self.provider,
                 request_model=self.request_model,
@@ -828,6 +1015,10 @@ class _LiveSessionTracker:
                 context=get_current(),
                 _attach_to_context=False,
             )
+            capture_content = invocation.should_capture_content
+            self._flush_pending_audio(capture_content=capture_content)
+            if capture_content:
+                self._ensure_config_content_extracted()
             invocation.output_type = self.output_type
             if self.max_tokens is not None:
                 invocation.max_tokens = self.max_tokens
@@ -836,6 +1027,7 @@ class _LiveSessionTracker:
 
             input_msgs = list(self._pending_input_messages)
             self._pending_input_messages.clear()
+            self._pending_media_bytes = 0
             input_transcript_deltas = list(
                 self._pending_input_transcript_deltas
             )
@@ -843,8 +1035,12 @@ class _LiveSessionTracker:
             self._active_gen = _ActiveGeneration(
                 invocation=invocation,
                 input_messages=input_msgs,
-                system_instruction=list(self.system_instruction),
-                tool_definitions=list(self.tool_definitions),
+                system_instruction=(
+                    list(self.system_instruction) if capture_content else []
+                ),
+                tool_definitions=(
+                    list(self.tool_definitions) if capture_content else []
+                ),
                 input_transcript_deltas=input_transcript_deltas,
             )
         return self._active_gen
@@ -857,7 +1053,7 @@ class _LiveSessionTracker:
     ) -> None:
         invocation = active_gen.invocation
         invocation.realtime_session_id = self.realtime_session_id
-        capture_content = self._should_capture_content()
+        capture_content = invocation.should_capture_content
 
         # Attach any server-reported input audio transcription to the user message.
         if active_gen.input_transcript_deltas and capture_content:
@@ -960,6 +1156,22 @@ class _LiveSessionTracker:
         vad_signal: object = getattr(
             message, "voice_activity_detection_signal", None
         )
+        server_content = getattr(message, "server_content", None)
+        tool_call = getattr(message, "tool_call", None)
+        usage_metadata = getattr(message, "usage_metadata", None)
+
+        # Commit any in-flight send callbacks whose frames have already been
+        # handed to the WebSocket before processing server events triggered by
+        # them (e.g., when ws.send yields while draining after writing).
+        if (
+            voice_activity is not None
+            or vad_signal is not None
+            or server_content is not None
+            or tool_call is not None
+            or usage_metadata is not None
+        ):
+            self.flush_inflight_sends()
+
         raw_vad: object = (
             getattr(voice_activity, "voice_activity_type", None)
             if voice_activity is not None
@@ -975,9 +1187,6 @@ class _LiveSessionTracker:
                 self._flush_pending_audio()
                 self._stop_user_speech()
 
-        server_content = getattr(message, "server_content", None)
-        tool_call = getattr(message, "tool_call", None)
-        usage_metadata = getattr(message, "usage_metadata", None)
         capture_content = self._should_capture_content()
 
         # Accumulate input transcription deltas without starting the generation span.
@@ -1037,6 +1246,7 @@ class _LiveSessionTracker:
             return
 
         active_gen = self.ensure_active_generation()
+        capture_content = active_gen.invocation.should_capture_content
 
         if usage_metadata is not None:
             active_gen.usage_metadata = usage_metadata
@@ -1082,13 +1292,22 @@ class _LiveSessionTracker:
                                 raw_data = decode_base64(
                                     raw_data
                                 ) or raw_data.encode("utf-8")
-                            active_gen.output_audio_chunks.append(
-                                bytes(raw_data)
+                            raw_bytes = bytes(raw_data)
+                            remaining = (
+                                _MAX_BUFFERED_MEDIA_BYTES
+                                - active_gen.output_audio_bytes
                             )
-                            if not active_gen.output_audio_mime_type:
-                                active_gen.output_audio_mime_type = (
-                                    converted.mime_type or "audio/pcm"
+                            if remaining > 0:
+                                if len(raw_bytes) > remaining:
+                                    raw_bytes = raw_bytes[:remaining]
+                                active_gen.output_audio_chunks.append(
+                                    raw_bytes
                                 )
+                                active_gen.output_audio_bytes += len(raw_bytes)
+                                if not active_gen.output_audio_mime_type:
+                                    active_gen.output_audio_mime_type = (
+                                        converted.mime_type or "audio/pcm"
+                                    )
                         else:
                             active_gen.output_other_parts.append(converted)
 
@@ -1146,11 +1365,7 @@ class _LiveSessionTracker:
                 active_gen, finish_reason=finish_reason
             )
 
-    def on_send_error(self, exc: BaseException) -> None:
-        self.terminal_error = exc
-        self._stop_user_speech(error=exc)
-
-    def on_receive_error(self, exc: BaseException) -> None:
+    def _fail_active_operations(self, exc: BaseException) -> None:
         self.terminal_error = exc
         self._stop_user_speech(error=exc)
         if self._active_gen is not None:
@@ -1160,8 +1375,14 @@ class _LiveSessionTracker:
                 active_gen, finish_reason="error", error=exc
             )
 
+    def on_send_error(self, exc: BaseException) -> None:
+        self._fail_active_operations(exc)
+
+    def on_receive_error(self, exc: BaseException) -> None:
+        self._fail_active_operations(exc)
+
     def on_session_error(self, exc: BaseException) -> None:
-        self.on_receive_error(exc)
+        self._fail_active_operations(exc)
 
     def on_session_close(self) -> None:
         self._stop_user_speech()
@@ -1237,6 +1458,8 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
         @functools.wraps(orig_ws_send)
         async def wrapped_ws_send(*args: object, **kwargs: object) -> object:
             slot = _ACTIVE_SEND_CALLBACK.get()
+            if slot is not None:
+                tracker.register_inflight_send(slot)
             try:
                 res = orig_ws_send(*args, **kwargs)
                 if inspect.isawaitable(res):
@@ -1246,6 +1469,9 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                     slot.clear()
                 tracker.on_send_error(exc)
                 raise
+            finally:
+                if slot is not None:
+                    tracker.unregister_inflight_send(slot)
             if slot:
                 cb = slot.pop(0)
                 cb()
