@@ -3932,3 +3932,597 @@ async def test_live_gemini_3_tool_response_draining_after_turn_complete_omitted_
             "parts": ({"type": "text", "content": "Follow-up question"},),
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_live_deferred_sends_preserve_send_order_on_reverse_completion(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    # Part A: Two text sends in one turn where send 1 writes and pauses while
+    # draining, send 2 finishes FIRST, and the server responds before send 1
+    # finishes draining. Generation inputs must preserve send order [1, 2].
+    send1_written = asyncio.Event()
+    send2_written = asyncio.Event()
+    release_send1 = asyncio.Event()
+
+    class _ReverseOrderTextWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            await super().send(payload)
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if "First part" in raw:
+                send1_written.set()
+                await asyncio.wait_for(release_send1.wait(), timeout=5.0)
+            elif "Second part" in raw:
+                send2_written.set()
+
+        async def recv(self, decode: bool = True) -> bytes | str:
+            if len(self._frames) == 1:
+                await asyncio.wait_for(send2_written.wait(), timeout=5.0)
+            return await super().recv(decode=decode)
+
+    ws_text = _ReverseOrderTextWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Ordered text answer"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_text)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                send1_task = asyncio.create_task(
+                    session.send_client_content(
+                        turns=genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="First part")],
+                        ),
+                        turn_complete=False,
+                    )
+                )
+                await asyncio.wait_for(send1_written.wait(), timeout=5.0)
+
+                # Send 2 enters and finishes BEFORE send 1 finishes draining.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Second part")],
+                    ),
+                    turn_complete=True,
+                )
+
+                # Server completes Turn 1 while send 1 is still draining.
+                async for _ in session.receive():
+                    pass
+
+                release_send1.set()
+                await send1_task
+
+    (text_span,) = span_exporter.get_finished_spans()
+    assert text_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "First part"},),
+        },
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Second part"},),
+        },
+    )
+
+    # Part B: Two audio chunks in one turn completing in reverse order while
+    # generation starts and completes -> coalesced audio must be AAAA + BBBB.
+    span_exporter.clear()
+    audio1_written = asyncio.Event()
+    audio2_written = asyncio.Event()
+    release_audio1 = asyncio.Event()
+    audio_send_index = 0
+
+    class _ReverseOrderAudioWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            nonlocal audio_send_index
+            await super().send(payload)
+            frame = self.sent_frames[-1]
+            if "realtimeInput" in frame or "realtime_input" in frame:
+                audio_send_index += 1
+                if audio_send_index == 1:
+                    audio1_written.set()
+                    await asyncio.wait_for(release_audio1.wait(), timeout=5.0)
+                elif audio_send_index == 2:
+                    audio2_written.set()
+
+        async def recv(self, decode: bool = True) -> bytes | str:
+            if len(self._frames) == 1:
+                await asyncio.wait_for(audio2_written.wait(), timeout=5.0)
+            return await super().recv(decode=decode)
+
+    ws_audio = _ReverseOrderAudioWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Ordered audio answer"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch(
+        "google.genai.live.ws_connect", _make_fake_ws_connect(ws_audio)
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                audio1_task = asyncio.create_task(
+                    session.send_realtime_input(
+                        audio=genai_types.Blob(
+                            data=b"AAAA", mime_type="audio/pcm;rate=16000"
+                        )
+                    )
+                )
+                await asyncio.wait_for(audio1_written.wait(), timeout=5.0)
+
+                # Chunk 2 finishes BEFORE chunk 1 finishes draining.
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"BBBB", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+
+                async for _ in session.receive():
+                    pass
+
+                release_audio1.set()
+                await audio1_task
+
+    (audio_span,) = span_exporter.get_finished_spans()
+    assert audio_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"AAAABBBB",
+                },
+            ),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_prewrite_delayed_turn2_send_succeeds_for_turn2_not_turn1(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    has_context_update = hasattr(
+        genai_types, "LiveClientContextUpdate"
+    ) and hasattr(genai_live.AsyncSession, "send_context_update")
+
+    expected_delayed = 2 if has_context_update else 1
+    delayed_count = 0
+    all_delayed = asyncio.Event()
+    release_delayed = asyncio.Event()
+
+    class _PreWriteDelayedTurn2WebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            nonlocal delayed_count
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if "Turn 2 prompt" in raw or "Turn 2 system" in raw:
+                delayed_count += 1
+                if delayed_count >= expected_delayed:
+                    all_delayed.set()
+                # Pause BEFORE writing while Turn 1's response arrives, then
+                # allow the send to succeed cleanly for Turn 2.
+                await asyncio.wait_for(release_delayed.wait(), timeout=5.0)
+            await super().send(payload)
+
+    fake_ws = _PreWriteDelayedTurn2WebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 1 answer"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 2 answer"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            config = genai_types.LiveConnectConfig(
+                response_modalities=[genai_types.Modality.TEXT],
+                system_instruction="Initial system",
+            )
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Confirmed Turn 1")],
+                    ),
+                    turn_complete=True,
+                )
+
+                # Start Turn 2 sends that pause pre-write before Turn 1 responds.
+                delayed_tasks: list[asyncio.Task[Any]] = []
+                if has_context_update:
+                    delayed_tasks.append(
+                        asyncio.create_task(
+                            session.send_context_update(
+                                system_instruction="Turn 2 system"
+                            )
+                        )
+                    )
+                delayed_tasks.append(
+                    asyncio.create_task(
+                        session.send_client_content(
+                            turns=genai_types.Content(
+                                role="user",
+                                parts=[genai_types.Part(text="Turn 2 prompt")],
+                            ),
+                            turn_complete=True,
+                        )
+                    )
+                )
+                await asyncio.wait_for(all_delayed.wait(), timeout=5.0)
+
+                # Turn 1 arrives and completes while Turn 2 sends are delayed.
+                async for _ in session.receive():
+                    pass
+
+                # Now Turn 2's delayed sends succeed and Turn 2 completes.
+                release_delayed.set()
+                for task in delayed_tasks:
+                    await task
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    span1, span2 = spans[0], spans[1]
+
+    assert span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Confirmed Turn 1"},),
+        },
+    )
+    assert span1.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "Initial system"},
+    )
+
+    assert span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Turn 2 prompt"},),
+        },
+    )
+    expected_sys2 = (
+        ({"type": "text", "content": "Turn 2 system"},)
+        if has_context_update
+        else ({"type": "text", "content": "Initial system"},)
+    )
+    assert span2.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == expected_sys2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "send_mode",
+    ["modern_audio", "legacy_blob", "legacy_realtime_input"],
+)
+async def test_live_continuous_audio_streaming_preserves_current_turn_transcription_ownership(
+    send_mode: str,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    has_vad_signal = (
+        "voice_activity_detection_signal"
+        in genai_types.LiveServerMessage.model_fields
+    )
+
+    frames: list[dict[str, Any]] = [
+        {"setupComplete": {}},
+        # Turn 1 starts with first inputTranscription delta + model output.
+        {
+            "serverContent": {
+                "inputTranscription": {"text": "Hello "},
+                "modelTurn": {
+                    "role": "model",
+                    "parts": [{"text": "Hi there, "}],
+                },
+            }
+        },
+        # Late inputTranscription delta for Turn 1 arrives AFTER continued
+        # silent microphone chunks are streamed by the client.
+        {
+            "serverContent": {
+                "inputTranscription": {"text": "world!"},
+            }
+        },
+    ]
+    if has_vad_signal:
+        # Automatic VAD detects genuine new user speech (barge-in boundary).
+        frames.append(
+            {
+                "voiceActivityDetectionSignal": {
+                    "vadSignalType": "VAD_SIGNAL_TYPE_SOS"
+                }
+            }
+        )
+    frames.extend(
+        [
+            # Turn 2's transcription arrives after the genuine speech boundary
+            # while Turn 1 is still awaiting interrupted/turnComplete.
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Next question"},
+                }
+            },
+            {
+                "serverContent": {
+                    "interrupted": True,
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Sure, answering Turn 2."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    fake_ws = _FakeWebSocket(frames)
+
+    async def _stream_audio(session: Any, data: bytes) -> None:
+        blob = genai_types.Blob(data=data, mime_type="audio/pcm;rate=16000")
+        if send_mode == "modern_audio":
+            await session.send_realtime_input(audio=blob)
+        elif send_mode == "legacy_blob":
+            await session.send(input=blob)
+        else:
+            await session.send(
+                input=genai_types.LiveClientRealtimeInput(media_chunks=[blob])
+            )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # Turn 1 initial audio (no audio_stream_end: automatic VAD).
+                await _stream_audio(session, b"\x01\x02" * 8)
+
+                # Frame 1: Turn 1 begins ("Hello ").
+                await session._receive()
+
+                # Client continues streaming silent microphone audio while
+                # Turn 1 is active (no speech boundary).
+                await _stream_audio(session, b"\x00\x00" * 8)
+
+                # Frame 2: Late delta ("world!") must still belong to Turn 1.
+                await session._receive()
+
+                # Now a genuine speech boundary starts Turn 2: server VAD SOS
+                # on latest SDK, or client activity_start on oldest SDK.
+                if has_vad_signal:
+                    await session._receive()
+                else:
+                    await session.send_realtime_input(
+                        activity_start=genai_types.ActivityStart()
+                    )
+                await _stream_audio(session, b"\x03\x04" * 8)
+
+                # Receive Turn 2 inputTranscription, Turn 1 interrupted, Turn 2.
+                await session._receive()
+                await session._receive()
+                await session._receive()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    span1, span2 = spans[0], spans[1]
+
+    in1 = span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    assert len(in1) == 1
+    assert in1[0]["parts"][0] == {
+        "type": "blob",
+        "modality": "audio",
+        "mime_type": "audio/pcm;rate=16000",
+        "content": b"\x01\x02" * 8,
+    }
+    assert in1[0]["parts"][1] == {
+        "type": "transcription",
+        "content": "Hello world!",
+    }
+
+    in2 = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    assert len(in2) == 1
+    assert in2[0]["parts"][0]["type"] == "blob"
+    assert in2[0]["parts"][1] == {
+        "type": "transcription",
+        "content": "Next question",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("completion_field", "expected_finish_reason", "fail_on"),
+    [
+        ("generationComplete", "stop", "recv"),
+        ("generationComplete", "stop", "send"),
+        ("interrupted", "interrupted", "recv"),
+    ],
+)
+async def test_live_transport_error_after_generation_complete_or_interrupted_preserves_success(
+    completion_field: str,
+    expected_finish_reason: str,
+    fail_on: str,
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    frames: list[dict[str, Any] | BaseException] = [
+        {"setupComplete": {}},
+        {
+            "serverContent": {
+                "modelTurn": {
+                    "role": "model",
+                    "parts": [{"text": "Completed response"}],
+                },
+                completion_field: True,
+            }
+        },
+    ]
+    if fail_on == "recv":
+        frames.append(ConnectionError("transport dropped after completion"))
+
+    fake_ws = _FakeWebSocket(frames)
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # Receive completed frame (end timestamp frozen via mark_end).
+                await session._receive()
+                await asyncio.sleep(0.05)
+
+                if fail_on == "recv":
+                    with pytest.raises(
+                        ConnectionError,
+                        match="transport dropped after completion",
+                    ):
+                        await session._receive()
+                else:
+                    with patch.object(
+                        fake_ws,
+                        "send",
+                        side_effect=ConnectionError(
+                            "transport dropped on later send"
+                        ),
+                    ):
+                        with pytest.raises(
+                            ConnectionError,
+                            match="transport dropped on later send",
+                        ):
+                            await session.send_client_content(
+                                turns=genai_types.Content(
+                                    role="user",
+                                    parts=[genai_types.Part(text="Next turn")],
+                                ),
+                                turn_complete=True,
+                            )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.UNSET
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+    assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        expected_finish_reason,
+    )
+    span_duration_s = (span.end_time - span.start_time) / 1e9
+    assert span_duration_s < 0.04
+
+    ended_log = next(
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name == "gen_ai.client.realtime_session.ended"
+    )
+    assert ended_log.severity_number == SeverityNumber.WARN
+    assert (
+        ended_log.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    )

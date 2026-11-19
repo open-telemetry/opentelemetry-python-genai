@@ -307,8 +307,100 @@ class _StagedSend:
 
     commit_fn: Callable[[], None]
     context: contextvars.Context
+    completes_turn: bool = False
+    omit_tool_response: bool = False
+    starts_new_turn: bool = False
+    turn: _OutboundTurn | None = None
+    status: str = "pending"
+    applied: bool = False
+
+
+@dataclass(eq=False)
+class _OutboundTurn:
+    """Buffers outbound inputs and ordered in-flight sends for one logical turn."""
+
+    pending_audio_chunks: deque[bytes] = field(default_factory=deque)
+    pending_audio_bytes: int = 0
+    pending_audio_mime_type: str | None = None
+    input_messages: list[InputMessage] = field(default_factory=list)
+    media_bytes: int = 0
+    system_instruction: list[SystemInstructionPart] | None = None
+    tool_definitions: list[ToolDefinition] | None = None
+    staged_sends: deque[_StagedSend] = field(default_factory=deque)
+    sealed: bool = False
+    has_confirmed_turn_complete: bool = False
     bound_gen: _ActiveGeneration | None = None
-    settled: bool = False
+
+
+def _classify_legacy_send(
+    input_val: object,
+    end_of_turn: bool,
+    *,
+    omit_tool_response: bool,
+) -> tuple[bool, bool]:
+    """Return ``(completes_turn, omit_from_turn_queue)`` for legacy ``session.send``."""
+    if input_val is None:
+        return bool(end_of_turn), False
+    if isinstance(input_val, genai_types.LiveClientRealtimeInput) or (
+        isinstance(input_val, Mapping)
+        and ("media_chunks" in input_val or "mediaChunks" in input_val)
+    ):
+        return False, False
+    if isinstance(input_val, genai_types.Blob) or (
+        isinstance(input_val, Mapping) and "data" in input_val
+    ):
+        return False, False
+    if isinstance(input_val, genai_types.LiveClientToolResponse) or (
+        isinstance(input_val, Mapping)
+        and (
+            "function_responses" in input_val
+            or "functionResponses" in input_val
+        )
+    ):
+        return (not omit_tool_response), omit_tool_response
+    if isinstance(input_val, genai_types.FunctionResponse) or (
+        isinstance(input_val, Mapping)
+        and "name" in input_val
+        and "response" in input_val
+    ):
+        return (not omit_tool_response), omit_tool_response
+    if isinstance(input_val, genai_types.LiveClientContent) or (
+        isinstance(input_val, Mapping)
+        and ("turns" in input_val or "content" in input_val)
+    ):
+        tc = _get_config_field(input_val, "turn_complete")
+        return bool(end_of_turn if tc is None else tc), False
+    if isinstance(input_val, Sequence) and not isinstance(
+        input_val, (str, bytes, bytearray)
+    ):
+        seq_val = cast(Sequence[object], input_val)
+        if seq_val and any(
+            isinstance(item, genai_types.FunctionResponse)
+            or (
+                isinstance(item, Mapping)
+                and "name" in item
+                and "response" in item
+            )
+            for item in seq_val
+        ):
+            return (not omit_tool_response), omit_tool_response
+        if seq_val and any(
+            isinstance(item, genai_types.Blob)
+            or (isinstance(item, Mapping) and "data" in item)
+            for item in seq_val
+        ):
+            return False, False
+    return bool(end_of_turn), False
+
+
+def _completed_finish_reason(active_gen: _ActiveGeneration) -> str | None:
+    if active_gen.turn_complete_reason:
+        return active_gen.turn_complete_reason
+    if active_gen.interrupted:
+        return "interrupted"
+    if active_gen.generation_complete or active_gen.turn_complete:
+        return "stop"
+    return None
 
 
 def _merge_input_messages(
@@ -364,7 +456,7 @@ class _ActiveGeneration:
     turn_complete: bool = False
     awaiting_tool_response: bool = False
     accepting_input_transcription: bool = True
-    pending_sends: list[_StagedSend] = field(default_factory=list)
+    bound_turn: _OutboundTurn | None = None
     deferred_finish_reason: str | None = None
     deferred_error: Error | BaseException | None = None
 
@@ -464,13 +556,9 @@ class _LiveSessionTracker:
             (request_model or "").lower()
         )
 
-        self._pending_audio_chunks: deque[bytes] = deque()
-        self._pending_audio_bytes: int = 0
-        self._pending_audio_mime_type: str | None = None
-        self._pending_input_messages: list[InputMessage] = []
-        self._pending_media_bytes: int = 0
+        self._outbound_turns: deque[_OutboundTurn] = deque()
+        self._write_turn: _OutboundTurn | None = None
         self._pending_input_transcript_deltas: list[str] = []
-        self._inflight_sends: list[_StagedSend] = []
         self._deferred_generations: list[_ActiveGeneration] = []
         self._capture_content_override: bool | None = None
         self._active_gen: _ActiveGeneration | None = None
@@ -482,6 +570,32 @@ class _LiveSessionTracker:
         self._config_content_extracted: bool = False
         if self._should_capture_content():
             self._ensure_config_content_extracted()
+
+    @property
+    def _pending_audio_chunks(self) -> deque[bytes]:
+        chunks: deque[bytes] = deque()
+        for turn in self._outbound_turns:
+            chunks.extend(turn.pending_audio_chunks)
+        return chunks
+
+    @property
+    def _pending_input_messages(self) -> list[InputMessage]:
+        messages: list[InputMessage] = []
+        for turn in self._outbound_turns:
+            messages.extend(turn.input_messages)
+        return messages
+
+    def _current_open_turn(self) -> _OutboundTurn:
+        if not self._outbound_turns or self._outbound_turns[-1].sealed:
+            turn = _OutboundTurn()
+            self._outbound_turns.append(turn)
+            return turn
+        return self._outbound_turns[-1]
+
+    def _target_turn(self) -> _OutboundTurn:
+        if self._write_turn is not None:
+            return self._write_turn
+        return self._current_open_turn()
 
     def _ensure_config_content_extracted(self) -> None:
         if self._config_content_extracted:
@@ -506,69 +620,129 @@ class _LiveSessionTracker:
         return self._telemetry_handler.should_capture_realtime_content()
 
     def register_inflight_send(self, staged: _StagedSend) -> None:
-        if staged.settled or staged in self._inflight_sends:
+        if (
+            staged.status != "pending"
+            or staged.turn is not None
+            or staged.omit_tool_response
+        ):
             return
-        self._inflight_sends.append(staged)
+        if (
+            staged.starts_new_turn
+            and self._outbound_turns
+            and not self._outbound_turns[-1].sealed
+        ):
+            last = self._outbound_turns[-1]
+            if (
+                last.input_messages
+                or last.pending_audio_chunks
+                or last.staged_sends
+            ):
+                last.sealed = True
+        turn = self._current_open_turn()
+        staged.turn = turn
+        turn.staged_sends.append(staged)
+        if staged.completes_turn:
+            turn.sealed = True
 
     def _commit_to_bound_generation(
         self, staged: _StagedSend, target_gen: _ActiveGeneration
     ) -> None:
-        # Execute the confirmed send callback against isolated pending buffers
+        # Execute the confirmed send callback against an isolated scratch turn
         # so subsequent turns' pending state is unaffected, then attach any
         # resulting inputs/context updates to ``target_gen``.
-        saved_chunks = self._pending_audio_chunks
-        saved_audio_bytes = self._pending_audio_bytes
-        saved_audio_mime = self._pending_audio_mime_type
-        saved_messages = self._pending_input_messages
-        saved_media_bytes = self._pending_media_bytes
-        saved_sys = self.system_instruction
-        saved_tools = self.tool_definitions
+        scratch_turn = _OutboundTurn()
+        saved_write_turn = self._write_turn
         saved_active_gen = self._active_gen
         saved_override = self._capture_content_override
 
         target_capture = target_gen.invocation.should_capture_content
-        self._pending_audio_chunks = deque()
-        self._pending_audio_bytes = 0
-        self._pending_audio_mime_type = None
-        self._pending_input_messages = []
-        self._pending_media_bytes = 0
+        self._write_turn = scratch_turn
         self._active_gen = None
         self._capture_content_override = target_capture
         try:
             staged.context.run(staged.commit_fn)
-            self._flush_pending_audio(capture_content=target_capture)
-            committed_messages = self._pending_input_messages
+            self._flush_pending_audio(
+                turn=scratch_turn, capture_content=target_capture
+            )
         finally:
-            self._pending_audio_chunks = saved_chunks
-            self._pending_audio_bytes = saved_audio_bytes
-            self._pending_audio_mime_type = saved_audio_mime
-            self._pending_input_messages = saved_messages
-            self._pending_media_bytes = saved_media_bytes
+            self._write_turn = saved_write_turn
             self._active_gen = saved_active_gen
             self._capture_content_override = saved_override
 
-        if committed_messages:
+        if scratch_turn.input_messages:
             _merge_input_messages(
-                target_gen.input_messages, committed_messages
+                target_gen.input_messages, scratch_turn.input_messages
             )
         if target_capture:
-            if self.system_instruction is not saved_sys:
-                target_gen.system_instruction = list(self.system_instruction)
-            if self.tool_definitions is not saved_tools:
-                target_gen.tool_definitions = list(self.tool_definitions)
+            if scratch_turn.system_instruction is not None:
+                self.system_instruction = list(scratch_turn.system_instruction)
+                target_gen.system_instruction = list(
+                    scratch_turn.system_instruction
+                )
+            if scratch_turn.tool_definitions is not None:
+                self.tool_definitions = list(scratch_turn.tool_definitions)
+                target_gen.tool_definitions = list(
+                    scratch_turn.tool_definitions
+                )
 
-    def _detach_pending_sends(self, active_gen: _ActiveGeneration) -> None:
-        for staged in active_gen.pending_sends:
-            if staged.bound_gen is active_gen:
-                staged.bound_gen = None
-        active_gen.pending_sends.clear()
+    def _drain_turn(self, turn: _OutboundTurn) -> None:
+        while turn.staged_sends and turn.staged_sends[0].status != "pending":
+            staged = turn.staged_sends.popleft()
+            if staged.status != "confirmed" or staged.applied:
+                continue
+            staged.applied = True
+            if staged.completes_turn:
+                turn.has_confirmed_turn_complete = True
+            if turn.bound_gen is not None:
+                self._commit_to_bound_generation(staged, turn.bound_gen)
+            else:
+                saved_write_turn = self._write_turn
+                self._write_turn = turn
+                try:
+                    staged.context.run(staged.commit_fn)
+                finally:
+                    self._write_turn = saved_write_turn
+
+        if turn.bound_gen is not None:
+            if not turn.staged_sends:
+                target_gen = turn.bound_gen
+                turn.bound_gen = None
+                if target_gen.bound_turn is turn:
+                    target_gen.bound_turn = None
+                self._maybe_finish_deferred_generation(target_gen)
+        elif (
+            not turn.staged_sends
+            and not turn.sealed
+            and not turn.input_messages
+            and not turn.pending_audio_chunks
+            and turn.system_instruction is None
+            and turn.tool_definitions is None
+            and turn in self._outbound_turns
+        ):
+            self._outbound_turns.remove(turn)
+
+    def _detach_bound_turn(self, active_gen: _ActiveGeneration) -> None:
+        turn = active_gen.bound_turn
+        active_gen.bound_turn = None
+        if turn is None:
+            return
+        for staged in list(turn.staged_sends):
+            if staged.status == "confirmed" and not staged.applied:
+                staged.applied = True
+                self._commit_to_bound_generation(staged, active_gen)
+        turn.staged_sends.clear()
+        turn.bound_gen = None
 
     def _maybe_finish_deferred_generation(
         self, active_gen: _ActiveGeneration
     ) -> None:
+        has_pending = bool(
+            active_gen.bound_turn is not None
+            and active_gen.bound_turn.staged_sends
+        )
         if (
             active_gen.deferred_finish_reason is not None
-            and not active_gen.pending_sends
+            and not has_pending
             and active_gen in self._deferred_generations
         ):
             self._deferred_generations.remove(active_gen)
@@ -586,14 +760,18 @@ class _LiveSessionTracker:
         finish_reason: str,
         error: Error | BaseException | None = None,
     ) -> None:
-        if active_gen.pending_sends and error is None:
+        has_pending = bool(
+            active_gen.bound_turn is not None
+            and active_gen.bound_turn.staged_sends
+        )
+        if has_pending and error is None:
             active_gen.invocation.mark_end()
             active_gen.deferred_finish_reason = finish_reason
             active_gen.deferred_error = None
             if active_gen not in self._deferred_generations:
                 self._deferred_generations.append(active_gen)
             return
-        self._detach_pending_sends(active_gen)
+        self._detach_bound_turn(active_gen)
         self._populate_and_finish_generation(
             active_gen, finish_reason=finish_reason, error=error
         )
@@ -601,7 +779,7 @@ class _LiveSessionTracker:
     def _flush_deferred_generations(self) -> None:
         while self._deferred_generations:
             gen = self._deferred_generations.pop(0)
-            self._detach_pending_sends(gen)
+            self._detach_bound_turn(gen)
             finish_reason = gen.deferred_finish_reason or "stop"
             error = gen.deferred_error
             gen.deferred_finish_reason = None
@@ -611,93 +789,116 @@ class _LiveSessionTracker:
             )
 
     def confirm_inflight_send(self, staged: _StagedSend) -> None:
-        if staged.settled:
+        if staged.status != "pending":
             return
-        staged.settled = True
-        if staged in self._inflight_sends:
-            self._inflight_sends.remove(staged)
-        target_gen = staged.bound_gen
-        staged.bound_gen = None
-        if target_gen is None:
-            staged.context.run(staged.commit_fn)
+        if staged.omit_tool_response:
+            staged.status = "confirmed"
+            staged.applied = True
             return
-        if staged in target_gen.pending_sends:
-            target_gen.pending_sends.remove(staged)
-        self._commit_to_bound_generation(staged, target_gen)
-        self._maybe_finish_deferred_generation(target_gen)
+        if staged.turn is None:
+            self.register_inflight_send(staged)
+        staged.status = "confirmed"
+        turn = staged.turn
+        if turn is not None:
+            self._drain_turn(turn)
 
     def abort_inflight_send(self, staged: _StagedSend) -> None:
-        if staged.settled:
+        if staged.status != "pending":
             return
-        staged.settled = True
-        if staged in self._inflight_sends:
-            self._inflight_sends.remove(staged)
-        target_gen = staged.bound_gen
-        staged.bound_gen = None
-        if target_gen is not None:
-            if staged in target_gen.pending_sends:
-                target_gen.pending_sends.remove(staged)
-            self._maybe_finish_deferred_generation(target_gen)
+        staged.status = "aborted"
+        turn = staged.turn
+        if turn is None:
+            return
+        if staged.completes_turn:
+            turn.sealed = turn.has_confirmed_turn_complete or any(
+                other.completes_turn and other.status != "aborted"
+                for other in turn.staged_sends
+            )
+        self._drain_turn(turn)
 
     def _mark_new_user_utterance(self) -> None:
         if self._active_gen is not None:
             self._active_gen.accepting_input_transcription = False
 
     def _enforce_pending_media_budget(self) -> None:
+        if (
+            self._write_turn is not None
+            and self._write_turn not in self._outbound_turns
+        ):
+            return
         max_bytes = _MAX_BUFFERED_MEDIA_BYTES
         excess = (
-            self._pending_media_bytes + self._pending_audio_bytes - max_bytes
+            sum(
+                turn.media_bytes + turn.pending_audio_bytes
+                for turn in self._outbound_turns
+            )
+            - max_bytes
         )
         if excess <= 0:
             return
 
-        # Evict oldest buffered media from pending input messages first so the
-        # most recent audio/media preceding the next generation is preserved.
-        idx = 0
-        while excess > 0 and idx < len(self._pending_input_messages):
-            msg = self._pending_input_messages[idx]
-            new_parts: list[MessagePart] = []
-            for part in msg.parts:
-                if (
-                    excess > 0
-                    and isinstance(part, BlobPart)
-                    and isinstance(part.content, bytes)
-                ):
-                    part_len = len(part.content)
-                    if part.modality == Modality.AUDIO and part_len > excess:
-                        part.content = part.content[excess:]
-                        self._pending_media_bytes -= excess
-                        excess = 0
-                        new_parts.append(part)
+        # Evict oldest buffered media across queued turns from oldest to newest
+        # so the most recent audio/media preceding the next generation is kept.
+        turn_idx = 0
+        while excess > 0 and turn_idx < len(self._outbound_turns):
+            turn = self._outbound_turns[turn_idx]
+            msg_idx = 0
+            while excess > 0 and msg_idx < len(turn.input_messages):
+                msg = turn.input_messages[msg_idx]
+                new_parts: list[MessagePart] = []
+                for part in msg.parts:
+                    if (
+                        excess > 0
+                        and isinstance(part, BlobPart)
+                        and isinstance(part.content, bytes)
+                    ):
+                        part_len = len(part.content)
+                        if (
+                            part.modality == Modality.AUDIO
+                            and part_len > excess
+                        ):
+                            part.content = part.content[excess:]
+                            turn.media_bytes -= excess
+                            excess = 0
+                            new_parts.append(part)
+                        else:
+                            turn.media_bytes -= part_len
+                            excess -= part_len
                     else:
-                        self._pending_media_bytes -= part_len
-                        excess -= part_len
+                        new_parts.append(part)
+                if new_parts:
+                    msg.parts = new_parts
+                    msg_idx += 1
                 else:
-                    new_parts.append(part)
-            if new_parts:
-                msg.parts = new_parts
-                idx += 1
-            else:
-                self._pending_input_messages.pop(idx)
+                    turn.input_messages.pop(msg_idx)
 
-        # If live streaming audio chunks alone still exceed the budget, evict
-        # oldest chunks from the front of the deque.
-        while excess > 0 and self._pending_audio_chunks:
-            oldest = self._pending_audio_chunks[0]
-            if len(oldest) <= excess:
-                self._pending_audio_chunks.popleft()
-                self._pending_audio_bytes -= len(oldest)
-                excess -= len(oldest)
-            else:
-                self._pending_audio_chunks[0] = oldest[excess:]
-                self._pending_audio_bytes -= excess
-                excess = 0
+            while excess > 0 and turn.pending_audio_chunks:
+                oldest = turn.pending_audio_chunks[0]
+                if len(oldest) <= excess:
+                    turn.pending_audio_chunks.popleft()
+                    turn.pending_audio_bytes -= len(oldest)
+                    excess -= len(oldest)
+                else:
+                    turn.pending_audio_chunks[0] = oldest[excess:]
+                    turn.pending_audio_bytes -= excess
+                    excess = 0
 
-        if not self._pending_audio_chunks:
-            self._pending_audio_mime_type = None
+            if not turn.pending_audio_chunks:
+                turn.pending_audio_mime_type = None
+
+            if (
+                not turn.input_messages
+                and not turn.pending_audio_chunks
+                and not turn.staged_sends
+                and turn.system_instruction is None
+                and turn.tool_definitions is None
+            ):
+                del self._outbound_turns[turn_idx]
+            else:
+                turn_idx += 1
 
     def _track_input_message_media(
-        self, messages: Sequence[InputMessage]
+        self, turn: _OutboundTurn, messages: Sequence[InputMessage]
     ) -> None:
         max_bytes = _MAX_BUFFERED_MEDIA_BYTES
         added_bytes = 0
@@ -714,13 +915,23 @@ class _LiveSessionTracker:
                         )
                     added_bytes += len(part.content)
         if added_bytes:
-            self._pending_media_bytes += added_bytes
+            turn.media_bytes += added_bytes
             self._enforce_pending_media_budget()
 
     def _flush_pending_audio(
-        self, *, capture_content: bool | None = None
+        self,
+        *,
+        turn: _OutboundTurn | None = None,
+        capture_content: bool | None = None,
     ) -> None:
-        if not self._pending_audio_chunks:
+        if turn is None:
+            if self._write_turn is not None:
+                turn = self._write_turn
+            elif self._outbound_turns and not self._outbound_turns[-1].sealed:
+                turn = self._outbound_turns[-1]
+            else:
+                return
+        if not turn.pending_audio_chunks:
             return
         should_capture = (
             self._should_capture_content()
@@ -728,14 +939,14 @@ class _LiveSessionTracker:
             else capture_content
         )
         if should_capture:
-            combined = b"".join(self._pending_audio_chunks)
-            mime_type = self._pending_audio_mime_type or "audio/pcm"
+            combined = b"".join(turn.pending_audio_chunks)
+            mime_type = turn.pending_audio_mime_type or "audio/pcm"
             if (
-                self._pending_input_messages
-                and self._pending_input_messages[-1].role == "user"
-                and len(self._pending_input_messages[-1].parts) == 1
+                turn.input_messages
+                and turn.input_messages[-1].role == "user"
+                and len(turn.input_messages[-1].parts) == 1
                 and isinstance(
-                    last_part := self._pending_input_messages[-1].parts[0],
+                    last_part := turn.input_messages[-1].parts[0],
                     BlobPart,
                 )
                 and last_part.modality == Modality.AUDIO
@@ -747,11 +958,11 @@ class _LiveSessionTracker:
                 if len(merged) > _MAX_BUFFERED_MEDIA_BYTES:
                     merged = merged[-_MAX_BUFFERED_MEDIA_BYTES:]
                 last_part.content = merged
-                self._pending_media_bytes += len(merged) - old_len
+                turn.media_bytes += len(merged) - old_len
             else:
                 if len(combined) > _MAX_BUFFERED_MEDIA_BYTES:
                     combined = combined[-_MAX_BUFFERED_MEDIA_BYTES:]
-                self._pending_input_messages.append(
+                turn.input_messages.append(
                     InputMessage(
                         role="user",
                         parts=[
@@ -763,10 +974,10 @@ class _LiveSessionTracker:
                         ],
                     )
                 )
-                self._pending_media_bytes += len(combined)
-        self._pending_audio_chunks.clear()
-        self._pending_audio_bytes = 0
-        self._pending_audio_mime_type = None
+                turn.media_bytes += len(combined)
+        turn.pending_audio_chunks.clear()
+        turn.pending_audio_bytes = 0
+        turn.pending_audio_mime_type = None
         self._enforce_pending_media_budget()
 
     def _start_user_speech(self) -> None:
@@ -806,30 +1017,31 @@ class _LiveSessionTracker:
         )
         if extracted is None:
             return
+        turn = self._target_turn()
         data_bytes, mime_type = extracted
         lower_mime = mime_type.lower()
         if not force_non_audio and "audio" in lower_mime:
             if not data_bytes:
                 return
             if (
-                self._pending_audio_chunks
-                and self._pending_audio_mime_type
-                and mime_type != self._pending_audio_mime_type
+                turn.pending_audio_chunks
+                and turn.pending_audio_mime_type
+                and mime_type != turn.pending_audio_mime_type
             ):
-                self._flush_pending_audio()
+                self._flush_pending_audio(turn=turn)
             if len(data_bytes) >= _MAX_BUFFERED_MEDIA_BYTES:
                 trimmed = data_bytes[-_MAX_BUFFERED_MEDIA_BYTES:]
-                self._pending_audio_chunks.clear()
-                self._pending_audio_chunks.append(trimmed)
-                self._pending_audio_bytes = len(trimmed)
+                turn.pending_audio_chunks.clear()
+                turn.pending_audio_chunks.append(trimmed)
+                turn.pending_audio_bytes = len(trimmed)
             else:
-                self._pending_audio_chunks.append(data_bytes)
-                self._pending_audio_bytes += len(data_bytes)
-            if not self._pending_audio_mime_type:
-                self._pending_audio_mime_type = mime_type
+                turn.pending_audio_chunks.append(data_bytes)
+                turn.pending_audio_bytes += len(data_bytes)
+            if not turn.pending_audio_mime_type:
+                turn.pending_audio_mime_type = mime_type
             self._enforce_pending_media_budget()
             return
-        self._flush_pending_audio()
+        self._flush_pending_audio(turn=turn)
         if len(data_bytes) > _MAX_BUFFERED_MEDIA_BYTES:
             data_bytes = data_bytes[:_MAX_BUFFERED_MEDIA_BYTES]
         modality = (
@@ -839,7 +1051,7 @@ class _LiveSessionTracker:
             if "image" in lower_mime
             else Modality.DOCUMENT
         )
-        self._pending_input_messages.append(
+        turn.input_messages.append(
             InputMessage(
                 role="user",
                 parts=[
@@ -851,7 +1063,7 @@ class _LiveSessionTracker:
                 ],
             )
         )
-        self._pending_media_bytes += len(data_bytes)
+        turn.media_bytes += len(data_bytes)
         self._enforce_pending_media_budget()
 
     def on_send_realtime_input(self, kwargs: Mapping[str, object]) -> None:
@@ -862,12 +1074,7 @@ class _LiveSessionTracker:
         media = kwargs.get("media")
         video = kwargs.get("video")
         text = kwargs.get("text")
-        if (
-            audio is not None
-            or media is not None
-            or video is not None
-            or text is not None
-        ):
+        if text is not None:
             self._mark_new_user_utterance()
 
         capture_content = self._should_capture_content()
@@ -895,7 +1102,7 @@ class _LiveSessionTracker:
         elif text is not None:
             self._flush_pending_audio()
             if capture_content:
-                self._pending_input_messages.append(
+                self._target_turn().input_messages.append(
                     InputMessage(
                         role="user",
                         parts=[TextPart(content=str(text))],
@@ -903,8 +1110,10 @@ class _LiveSessionTracker:
                 )
 
         if kwargs.get("audio_stream_end"):
+            self._mark_new_user_utterance()
             self._flush_pending_audio()
         if kwargs.get("activity_end") is not None:
+            self._mark_new_user_utterance()
             self._flush_pending_audio()
             self._stop_user_speech()
 
@@ -969,8 +1178,9 @@ class _LiveSessionTracker:
             if normalized_turns is not None:
                 try:
                     messages = to_input_messages(contents=normalized_turns)
-                    self._pending_input_messages.extend(messages)
-                    self._track_input_message_media(messages)
+                    turn = self._target_turn()
+                    turn.input_messages.extend(messages)
+                    self._track_input_message_media(turn, messages)
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
@@ -982,17 +1192,17 @@ class _LiveSessionTracker:
         *,
         omit_tool_response: bool = False,
     ) -> None:
-        self._flush_pending_audio()
         if omit_tool_response or (
             self._active_gen is not None
             and self._active_gen.awaiting_tool_response
         ):
             return
+        self._flush_pending_audio()
         if not self._should_capture_content():
             return
         tool_msg = _build_tool_response_input_message(function_responses)
         if tool_msg is not None:
-            self._pending_input_messages.append(tool_msg)
+            self._target_turn().input_messages.append(tool_msg)
 
     def on_send_context_update(
         self,
@@ -1002,12 +1212,13 @@ class _LiveSessionTracker:
         if not self._should_capture_content():
             return
         self._ensure_config_content_extracted()
+        turn = self._target_turn()
         if system_instruction is not None:
-            self.system_instruction = _extract_system_instruction(
+            turn.system_instruction = _extract_system_instruction(
                 system_instruction
             )
         if tools is not None:
-            self.tool_definitions = _extract_tool_definitions(tools)
+            turn.tool_definitions = _extract_tool_definitions(tools)
 
     def on_send(
         self,
@@ -1017,6 +1228,8 @@ class _LiveSessionTracker:
         omit_tool_response: bool = False,
     ) -> None:
         if input_val is None:
+            if end_of_turn:
+                self._mark_new_user_utterance()
             self._flush_pending_audio()
             return
 
@@ -1024,7 +1237,6 @@ class _LiveSessionTracker:
             isinstance(input_val, Mapping)
             and ("media_chunks" in input_val or "mediaChunks" in input_val)
         ):
-            self._mark_new_user_utterance()
             if self._should_capture_content():
                 chunks = _get_config_field(input_val, "media_chunks")
                 if isinstance(chunks, Sequence):
@@ -1038,7 +1250,6 @@ class _LiveSessionTracker:
         if isinstance(input_val, genai_types.Blob) or (
             isinstance(input_val, Mapping) and "data" in input_val
         ):
-            self._mark_new_user_utterance()
             if self._should_capture_content():
                 self._record_blob_input(
                     cast(BlobOrDict | Mapping[str, object], input_val),
@@ -1112,7 +1323,6 @@ class _LiveSessionTracker:
                 or (isinstance(item, Mapping) and "data" in item)
                 for item in seq_val
             ):
-                self._mark_new_user_utterance()
                 if self._should_capture_content():
                     for item in seq_val:
                         self._record_blob_input(
@@ -1125,6 +1335,51 @@ class _LiveSessionTracker:
             cast(ContentListUnion | ContentListUnionDict | None, input_val),
             turn_complete=bool(end_of_turn),
         )
+
+    def _claim_outbound_inputs(
+        self, capture_content: bool
+    ) -> tuple[list[InputMessage], _OutboundTurn | None]:
+        input_msgs: list[InputMessage] = []
+        bound_turn: _OutboundTurn | None = None
+
+        if self._outbound_turns and self._outbound_turns[0].staged_sends:
+            # The earliest queued turn still has in-flight sends draining;
+            # claim ONLY this turn so subsequent turns' pre-write sends stay
+            # associated with their own outbound turns.
+            turn = self._outbound_turns.popleft()
+            self._flush_pending_audio(
+                turn=turn, capture_content=capture_content
+            )
+            if capture_content:
+                if turn.system_instruction is not None:
+                    self.system_instruction = list(turn.system_instruction)
+                if turn.tool_definitions is not None:
+                    self.tool_definitions = list(turn.tool_definitions)
+                _merge_input_messages(input_msgs, turn.input_messages)
+            turn.input_messages.clear()
+            turn.media_bytes = 0
+            bound_turn = turn
+        else:
+            # Consume leading fully-confirmed turns, stopping before any turn
+            # that still has unconfirmed in-flight sends.
+            while (
+                self._outbound_turns
+                and not self._outbound_turns[0].staged_sends
+            ):
+                turn = self._outbound_turns.popleft()
+                self._flush_pending_audio(
+                    turn=turn, capture_content=capture_content
+                )
+                if capture_content:
+                    if turn.system_instruction is not None:
+                        self.system_instruction = list(turn.system_instruction)
+                    if turn.tool_definitions is not None:
+                        self.tool_definitions = list(turn.tool_definitions)
+                    _merge_input_messages(input_msgs, turn.input_messages)
+                turn.input_messages.clear()
+                turn.media_bytes = 0
+
+        return input_msgs, bound_turn
 
     def ensure_active_generation(self) -> _ActiveGeneration:
         if self._active_gen is None:
@@ -1139,7 +1394,6 @@ class _LiveSessionTracker:
                 _attach_to_context=False,
             )
             capture_content = invocation.should_capture_content
-            self._flush_pending_audio(capture_content=capture_content)
             if capture_content:
                 self._ensure_config_content_extracted()
             invocation.output_type = self.output_type
@@ -1148,9 +1402,9 @@ class _LiveSessionTracker:
             if self.reasoning_level is not None:
                 invocation.reasoning_level = self.reasoning_level
 
-            input_msgs = list(self._pending_input_messages)
-            self._pending_input_messages.clear()
-            self._pending_media_bytes = 0
+            input_msgs, bound_turn = self._claim_outbound_inputs(
+                capture_content
+            )
             input_transcript_deltas = list(
                 self._pending_input_transcript_deltas
             )
@@ -1165,13 +1419,10 @@ class _LiveSessionTracker:
                     list(self.tool_definitions) if capture_content else []
                 ),
                 input_transcript_deltas=input_transcript_deltas,
+                bound_turn=bound_turn,
             )
-            if self._inflight_sends:
-                pending = list(self._inflight_sends)
-                self._inflight_sends.clear()
-                for staged in pending:
-                    staged.bound_gen = active_gen
-                    active_gen.pending_sends.append(staged)
+            if bound_turn is not None:
+                bound_turn.bound_gen = active_gen
             self._active_gen = active_gen
         return self._active_gen
 
@@ -1309,8 +1560,24 @@ class _LiveSessionTracker:
             if "START" in vad_str or "BOS" in vad_str or "SOS" in vad_str:
                 self._start_user_speech()
             elif "END" in vad_str or "EOS" in vad_str:
-                self._flush_pending_audio()
+                if (
+                    self._outbound_turns
+                    and not self._outbound_turns[-1].sealed
+                ):
+                    open_turn = self._outbound_turns[-1]
+                    self._flush_pending_audio(turn=open_turn)
+                    if (
+                        open_turn.input_messages
+                        or open_turn.pending_audio_chunks
+                        or open_turn.staged_sends
+                    ):
+                        open_turn.sealed = True
                 self._stop_user_speech()
+
+        if server_content is not None and getattr(
+            server_content, "interrupted", False
+        ):
+            self._mark_new_user_utterance()
 
         capture_content = self._should_capture_content()
 
@@ -1321,8 +1588,6 @@ class _LiveSessionTracker:
                 if (
                     self._active_gen is not None
                     and self._active_gen.accepting_input_transcription
-                    and not self._pending_audio_chunks
-                    and not self._pending_input_messages
                 ):
                     self._active_gen.input_transcript_deltas.append(
                         str(input_tx.text)
@@ -1496,10 +1761,16 @@ class _LiveSessionTracker:
         if self._active_gen is not None:
             active_gen = self._active_gen
             self._active_gen = None
-            self._detach_pending_sends(active_gen)
-            self._populate_and_finish_generation(
-                active_gen, finish_reason="error", error=exc
-            )
+            self._detach_bound_turn(active_gen)
+            completed_reason = _completed_finish_reason(active_gen)
+            if completed_reason is not None:
+                self._populate_and_finish_generation(
+                    active_gen, finish_reason=completed_reason, error=None
+                )
+            else:
+                self._populate_and_finish_generation(
+                    active_gen, finish_reason="error", error=exc
+                )
 
     def on_send_error(self, exc: BaseException) -> None:
         self._fail_active_operations(exc)
@@ -1517,35 +1788,38 @@ class _LiveSessionTracker:
         if self._active_gen is not None:
             active_gen = self._active_gen
             self._active_gen = None
-            self._detach_pending_sends(active_gen)
-            finish_reason = active_gen.turn_complete_reason or (
-                "interrupted"
-                if active_gen.interrupted
-                else "stop"
-                if active_gen.generation_complete or active_gen.turn_complete
-                else "error"
-            )
-            error = (
-                Error(
-                    message="Session closed before generation completed",
-                    type=ErrorTypeValues.OTHER.value,
+            self._detach_bound_turn(active_gen)
+            completed_reason = _completed_finish_reason(active_gen)
+            if completed_reason is not None:
+                self._populate_and_finish_generation(
+                    active_gen, finish_reason=completed_reason, error=None
                 )
-                if finish_reason == "error"
-                else None
-            )
-            self._populate_and_finish_generation(
-                active_gen, finish_reason=finish_reason, error=error
-            )
+            else:
+                self._populate_and_finish_generation(
+                    active_gen,
+                    finish_reason="error",
+                    error=Error(
+                        message="Session closed before generation completed",
+                        type=ErrorTypeValues.OTHER.value,
+                    ),
+                )
 
 
 async def _run_transactional_send(
     tracker: _LiveSessionTracker,
     commit_fn: Callable[[], None],
     call_fn: Callable[[], object],
+    *,
+    completes_turn: bool = False,
+    omit_tool_response: bool = False,
+    starts_new_turn: bool = False,
 ) -> object:
     existing_staged = _ACTIVE_SEND_CALLBACK.get()
     if existing_staged is not None:
         existing_staged.commit_fn = commit_fn
+        existing_staged.completes_turn = completes_turn
+        existing_staged.omit_tool_response = omit_tool_response
+        existing_staged.starts_new_turn = starts_new_turn
         res = call_fn()
         if inspect.isawaitable(res):
             return await res
@@ -1554,6 +1828,9 @@ async def _run_transactional_send(
     staged = _StagedSend(
         commit_fn=commit_fn,
         context=contextvars.copy_context(),
+        completes_turn=completes_turn,
+        omit_tool_response=omit_tool_response,
+        starts_new_turn=starts_new_turn,
     )
     token = _ACTIVE_SEND_CALLBACK.set(staged)
     try:
@@ -1610,10 +1887,18 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
     async def wrapped_send_realtime_input(
         *args: object, **kwargs: object
     ) -> None:
+        completes_turn = bool(
+            kwargs.get("activity_end") is not None
+            or kwargs.get("audio_stream_end")
+            or kwargs.get("text") is not None
+        )
+        starts_new_turn = kwargs.get("activity_start") is not None
         await _run_transactional_send(
             tracker,
             lambda: tracker.on_send_realtime_input(kwargs),
             lambda: orig_send_realtime_input(*args, **kwargs),  # pyright: ignore[reportArgumentType]
+            completes_turn=completes_turn,
+            starts_new_turn=starts_new_turn,
         )
 
     @functools.wraps(orig_send_client_content)
@@ -1641,6 +1926,7 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 turns, turn_complete=effective_turn_complete
             ),
             lambda: orig_send_client_content(*args, **kwargs),  # pyright: ignore[reportArgumentType]
+            completes_turn=effective_turn_complete,
         )
 
     @functools.wraps(orig_send_tool_response)
@@ -1663,6 +1949,8 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 function_responses, omit_tool_response=omit_tool_response
             ),
             lambda: orig_send_tool_response(*args, **kwargs),  # pyright: ignore[reportArgumentType]
+            completes_turn=not omit_tool_response,
+            omit_tool_response=omit_tool_response,
         )
 
     @functools.wraps(orig_receive)
@@ -1701,6 +1989,11 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 tracker._active_gen is not None
                 and tracker._active_gen.awaiting_tool_response
             )
+            completes_turn, omit_from_queue = _classify_legacy_send(
+                input_val,
+                bool(end_of_turn),
+                omit_tool_response=omit_tool_response,
+            )
             return await _run_transactional_send(
                 tracker,
                 lambda: tracker.on_send(
@@ -1709,6 +2002,8 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                     omit_tool_response=omit_tool_response,
                 ),
                 lambda: orig_send(*args, **kwargs),
+                completes_turn=completes_turn,
+                omit_tool_response=omit_from_queue,
             )
 
         setattr(session, "send", wrapped_send)
