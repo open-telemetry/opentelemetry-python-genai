@@ -16,6 +16,11 @@ interactions:
                 "type": "document",
                 "mime_type": "application/pdf",
                 "uri": "https://example.com/doc.pdf"
+              },
+              {
+                "type": "document",
+                "mime_type": "application/pdf",
+                "data": "JVBERi0xLjQKaW5saW5lIGRvY3VtZW50"
               }
             ]
           },
@@ -30,6 +35,11 @@ interactions:
                 "type": "document",
                 "mime_type": "application/pdf",
                 "uri": "https://example.com/london.pdf"
+              },
+              {
+                "type": "document",
+                "mime_type": "application/pdf",
+                "data": "JVBERi0xLjQKaW5saW5lIGRvY3VtZW50"
               }
             ]
           },
@@ -43,6 +53,15 @@ interactions:
                 "text": "22C and Sunny"
               }
             ]
+          },
+          {
+            "type": "function_result",
+            "call_id": "call-456",
+            "name": "get_alert",
+            "result": {
+              "answer": null,
+              "ok": true
+            }
           }
         ],
         "tools": [
