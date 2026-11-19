@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import time
 from collections.abc import AsyncIterator
@@ -6419,6 +6420,11 @@ async def test_live_multimodal_tool_response_preserves_inline_and_file_parts(
 
     if not hasattr(genai_types, "FunctionResponsePart"):
         return
+    # google-genai < 3.0 raises TypeError in json.dumps for raw bytes inside
+    # FunctionResponseBlob.data until encode_unserializable_types was added.
+    supports_inline_bytes = "encode_unserializable_types" in inspect.getsource(
+        genai_live.AsyncSession.send_tool_response
+    )
 
     fake_ws = _FakeWebSocket(
         [
@@ -6475,26 +6481,32 @@ async def test_live_multimodal_tool_response_preserves_inline_and_file_parts(
                 msg1 = await session._receive()
                 assert msg1.tool_call is not None
 
+                call1_parts: list[genai_types.FunctionResponsePart] = []
+                if supports_inline_bytes:
+                    call1_parts.append(
+                        genai_types.FunctionResponsePart(
+                            inline_data=genai_types.FunctionResponseBlob(
+                                mime_type="image/png",
+                                data=b"\x89PNG\r\n",
+                            )
+                        )
+                    )
+                call1_parts.append(
+                    genai_types.FunctionResponsePart(
+                        file_data=genai_types.FunctionResponseFileData(
+                            mime_type="image/jpeg",
+                            file_uri="gs://bucket/frame.jpg",
+                        )
+                    )
+                )
+
                 await session.send_tool_response(
                     function_responses=[
                         genai_types.FunctionResponse(
                             id="call-mm-1",
                             name="capture_screen",
                             response={"status": "ok"},
-                            parts=[
-                                genai_types.FunctionResponsePart(
-                                    inline_data=genai_types.FunctionResponseBlob(
-                                        mime_type="image/png",
-                                        data=b"\x89PNG\r\n",
-                                    )
-                                ),
-                                genai_types.FunctionResponsePart(
-                                    file_data=genai_types.FunctionResponseFileData(
-                                        mime_type="image/jpeg",
-                                        file_uri="gs://bucket/frame.jpg",
-                                    )
-                                ),
-                            ],
+                            parts=call1_parts,
                         ),
                         genai_types.FunctionResponse(
                             id="call-mm-2",
@@ -6516,41 +6528,44 @@ async def test_live_multimodal_tool_response_preserves_inline_and_file_parts(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 2
     gen2_inputs = spans[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES]
-    assert gen2_inputs == (
+    expected_parts: list[dict[str, Any]] = [
         {
-            "role": "tool",
-            "parts": (
-                {
-                    "type": "tool_call_response",
-                    "id": "call-mm-1",
-                    "response": {"status": "ok"},
-                },
-                {
-                    "type": "blob",
-                    "modality": "image",
-                    "mime_type": "image/png",
-                    "content": b"\x89PNG\r\n",
-                },
-                {
-                    "type": "uri",
-                    "modality": "image",
-                    "mime_type": "image/jpeg",
-                    "uri": "gs://bucket/frame.jpg",
-                },
-                {
-                    "type": "tool_call_response",
-                    "id": "call-mm-2",
-                    "response": None,
-                },
-                {
-                    "type": "uri",
-                    "modality": "document",
-                    "mime_type": "application/pdf",
-                    "uri": "https://example.com/report.pdf",
-                },
-            ),
+            "type": "tool_call_response",
+            "id": "call-mm-1",
+            "response": {"status": "ok"},
         },
+    ]
+    if supports_inline_bytes:
+        expected_parts.append(
+            {
+                "type": "blob",
+                "modality": "image",
+                "mime_type": "image/png",
+                "content": b"\x89PNG\r\n",
+            }
+        )
+    expected_parts.extend(
+        [
+            {
+                "type": "uri",
+                "modality": "image",
+                "mime_type": "image/jpeg",
+                "uri": "gs://bucket/frame.jpg",
+            },
+            {
+                "type": "tool_call_response",
+                "id": "call-mm-2",
+                "response": None,
+            },
+            {
+                "type": "uri",
+                "modality": "document",
+                "mime_type": "application/pdf",
+                "uri": "https://example.com/report.pdf",
+            },
+        ]
     )
+    assert gen2_inputs == ({"role": "tool", "parts": tuple(expected_parts)},)
 
 
 @pytest.mark.asyncio
@@ -7071,5 +7086,453 @@ async def test_live_interrupted_before_first_output_retires_queued_input_without
             "role": "assistant",
             "parts": ({"type": "text", "content": "Answer to audio 2"},),
             "finish_reason": "stop",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_gemini_2_overlapping_tool_batches_match_by_id_out_of_order_and_rollback(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    b2a_entered = asyncio.Event()
+    fail_b2a = asyncio.Event()
+    b2a_attempts = 0
+
+    class _FailFirstB2AWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            nonlocal b2a_attempts
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if "call-b2a" in raw and b2a_attempts == 0:
+                b2a_attempts += 1
+                b2a_entered.set()
+                await asyncio.wait_for(fail_b2a.wait(), timeout=5.0)
+                raise ConnectionError("transient b2a send error")
+            await super().send(payload)
+
+    fake_ws = _FailFirstB2AWebSocket(
+        [
+            {"setupComplete": {}},
+            # Batch 1: slow non-blocking tool call.
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-b1",
+                            "name": "slow_task",
+                            "args": {"job": "1"},
+                        }
+                    ]
+                }
+            },
+            # Batch 2: overlapping two-call batch before Batch 1 finishes.
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-b2a",
+                            "name": "fast_a",
+                            "args": {"x": 1},
+                        },
+                        {
+                            "id": "call-b2b",
+                            "name": "fast_b",
+                            "args": {"x": 2},
+                        },
+                    ]
+                }
+            },
+            # Reply to Batch 1 (completed first after Batch 2 rolled back).
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Batch 1 reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            # Reply to Batch 2 (completed after retrying call-b2a).
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Batch 2 reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            # Follow-up user prompt reply.
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Follow-up reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Start slow task")],
+                    ),
+                    turn_complete=True,
+                )
+                msg1 = await session._receive()
+                assert msg1.tool_call is not None
+
+                # User sends another prompt before slow_task finishes,
+                # producing an overlapping second tool-call batch.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Run fast tasks")],
+                    ),
+                    turn_complete=True,
+                )
+                msg2 = await session._receive()
+                assert msg2.tool_call is not None
+
+                resp_b1 = genai_types.FunctionResponse(
+                    id="call-b1",
+                    name="slow_task",
+                    response={"status": "b1_done"},
+                )
+                resp_b2a = genai_types.FunctionResponse(
+                    id="call-b2a",
+                    name="fast_a",
+                    response={"status": "b2a_done"},
+                )
+                resp_b2b = genai_types.FunctionResponse(
+                    id="call-b2b",
+                    name="fast_b",
+                    response={"status": "b2b_done"},
+                )
+
+                # Respond to later Batch 2 out-of-order: b2a suspends, b2b
+                # confirms and completes Batch 2 while Batch 1 stays pending.
+                task_b2a = asyncio.create_task(
+                    session.send_tool_response(function_responses=resp_b2a)
+                )
+                await asyncio.wait_for(b2a_entered.wait(), timeout=5.0)
+                await session.send_tool_response(function_responses=resp_b2b)
+
+                # Roll back b2a -> Batch 2 reopens and its turn unseals.
+                fail_b2a.set()
+                with pytest.raises(
+                    ConnectionError, match="transient b2a send error"
+                ):
+                    await task_b2a
+
+                # Complete Batch 1 while Batch 2 is still incomplete; Batch 1's
+                # sealed turn must stay separate from Batch 2's partial turn.
+                await session.send_tool_response(function_responses=resp_b1)
+
+                # Retry b2a -> joins Batch 2's turn [b2b, b2a] and seals it.
+                await session.send_tool_response(function_responses=resp_b2a)
+
+                # Queue a follow-up user turn before reading buffered replies.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="After both batches")],
+                    ),
+                    turn_complete=True,
+                )
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 5
+    gen1, gen2, gen3, gen4, gen5 = spans
+
+    assert gen1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    assert gen2.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    assert [
+        m["parts"][0]["id"]
+        for m in gen3.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    ] == ["call-b1"]
+    assert [
+        m["parts"][0]["id"]
+        for m in gen4.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    ] == ["call-b2b", "call-b2a"]
+    assert gen5.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "After both batches"},),
+        },
+    )
+
+    ended = next(
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name == "gen_ai.client.realtime_session.ended"
+    )
+    assert ended.severity_number == SeverityNumber.INFO
+    assert ErrorAttributes.ERROR_TYPE not in ended.attributes
+
+
+@pytest.mark.asyncio
+async def test_live_two_queued_audio_turns_preserve_distinct_transcripts_in_order(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    has_vad_signal = (
+        "voice_activity_detection_signal"
+        in genai_types.LiveServerMessage.model_fields
+    )
+
+    # Part A: Two audio turns queued before reading buffered transcripts/replies.
+    ws_a = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "First audio question"},
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "First answer"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Second audio question"},
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Second answer"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_a)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"1111", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"2222", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans_a = span_exporter.get_finished_spans()
+    assert len(spans_a) == 2
+    assert spans_a[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"1111",
+                },
+                {"type": "transcription", "content": "First audio question"},
+            ),
+        },
+    )
+    assert spans_a[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"2222",
+                },
+                {"type": "transcription", "content": "Second audio question"},
+            ),
+        },
+    )
+
+    if not has_vad_signal:
+        return
+
+    # Part B: Both transcripts (separated by server VAD SOS/EOS) arrive before
+    # either modelTurn reply.
+    span_exporter.clear()
+    ws_b = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "voiceActivityDetectionSignal": {
+                    "vadSignalType": "VAD_SIGNAL_TYPE_SOS"
+                }
+            },
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "VAD turn 1"},
+                }
+            },
+            {
+                "voiceActivityDetectionSignal": {
+                    "vadSignalType": "VAD_SIGNAL_TYPE_EOS"
+                }
+            },
+            {
+                "voiceActivityDetectionSignal": {
+                    "vadSignalType": "VAD_SIGNAL_TYPE_SOS"
+                }
+            },
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "VAD turn 2"},
+                }
+            },
+            {
+                "voiceActivityDetectionSignal": {
+                    "vadSignalType": "VAD_SIGNAL_TYPE_EOS"
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "VAD reply 1"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "VAD reply 2"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_b)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"3333", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"4444", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans_b = span_exporter.get_finished_spans()
+    assert len(spans_b) == 2
+    assert spans_b[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"3333",
+                },
+                {"type": "transcription", "content": "VAD turn 1"},
+            ),
+        },
+    )
+    assert spans_b[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"4444",
+                },
+                {"type": "transcription", "content": "VAD turn 2"},
+            ),
         },
     )

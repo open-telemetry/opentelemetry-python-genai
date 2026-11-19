@@ -415,6 +415,20 @@ class LiveMultimodalAndToolsScenario(Scenario):
                             id="call-1",
                             name="_get_weather",
                             response={"temp_c": 20},
+                            parts=[
+                                genai_types.FunctionResponsePart(
+                                    inline_data=genai_types.FunctionResponseBlob(
+                                        mime_type="image/png",
+                                        data=b"\x89PNG\r\n",
+                                    )
+                                ),
+                                genai_types.FunctionResponsePart(
+                                    file_data=genai_types.FunctionResponseFileData(
+                                        mime_type="image/jpeg",
+                                        file_uri="https://example.com/radar.jpg",
+                                    )
+                                ),
+                            ],
                         )
                     ]
                 )
@@ -481,9 +495,21 @@ class LiveMultimodalAndToolsScenario(Scenario):
         assert tools_defs[0]["name"] == "_get_weather"
 
         assert _attr(gen25_2, "gen_ai.response.finish_reasons") == ["stop"]
-        assert _part_types(_attr(gen25_2, "gen_ai.input.messages")) == [
-            "tool_call_response"
+        gen25_2_inputs = _attr(gen25_2, "gen_ai.input.messages")
+        assert _part_types(gen25_2_inputs) == [
+            "tool_call_response",
+            "blob",
+            "uri",
         ]
+        tool_parts = gen25_2_inputs[0]["parts"]
+        assert tool_parts[0]["id"] == "call-1"
+        assert tool_parts[0]["response"] == {"temp_c": 20}
+        assert tool_parts[1]["modality"] == "image"
+        assert tool_parts[1]["mime_type"] == "image/png"
+        assert tool_parts[1]["content"] == b"\x89PNG\r\n"
+        assert tool_parts[2]["modality"] == "image"
+        assert tool_parts[2]["mime_type"] == "image/jpeg"
+        assert tool_parts[2]["uri"] == "https://example.com/radar.jpg"
         assert _part_types(_attr(gen25_2, "gen_ai.output.messages")) == [
             "text"
         ]
