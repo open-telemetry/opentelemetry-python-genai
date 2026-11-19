@@ -337,94 +337,6 @@ class ChatGeminiScenario(Scenario):
 
 
 class ChatStreamingScenario(Scenario):
-    expected_spans = {"chat": 1}
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
-        "gen_ai.client.operation.time_to_first_chunk",
-        "gen_ai.client.operation.time_per_output_chunk",
-    )
-    expected_violations = _OPENAI_CHAT_GAPS
-
-    def run(
-        self,
-        *,
-        tracer_provider: TracerProvider,
-        meter_provider: MeterProvider,
-        logger_provider: LoggerProvider,
-        vcr: Any,
-    ) -> None:
-        sse_lines = [
-            'data: {"id":"chatcmpl-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"role":"assistant","content":"Conformance "},"finish_reason":null}]}',
-            'data: {"id":"chatcmpl-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"content":"stream response"},"finish_reason":"stop"}]}',
-            'data: {"id":"chatcmpl-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[],"usage":{"prompt_tokens":14,"completion_tokens":8,"total_tokens":22,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":2,"audio_tokens":1},"completion_tokens_details":{"reasoning_tokens":3,"audio_tokens":2}}}',
-            "data: [DONE]",
-        ]
-        sse_body = ("\n\n".join(sse_lines) + "\n\n").encode("utf-8")
-        client = _mock_openai_client(
-            lambda _request: httpx.Response(
-                200,
-                headers={"content-type": "text/event-stream"},
-                content=sse_body,
-            )
-        )
-        with instrument(
-            AgnoInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="SPAN_ONLY",
-        ):
-            model = OpenAIChat(
-                id="gpt-4o",
-                client=client,
-                temperature=0.5,
-                top_p=0.8,
-                max_tokens=128,
-                frequency_penalty=0.1,
-                presence_penalty=0.2,
-                seed=7,
-                stop=["STOP"],
-            )
-            list(
-                model.response_stream(
-                    messages=[
-                        Message(
-                            role="user",
-                            content="hello streaming chat conformance",
-                        )
-                    ]
-                )
-            )
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        spans = _chat_spans(report)
-        assert len(spans) == 1, f"expected 1 chat span, saw {len(spans)}"
-        _assert_attrs_exact(
-            spans[0],
-            {
-                "gen_ai.request.stream": (True, bool),
-                "gen_ai.response.id": ("chatcmpl-stream-conformance", str),
-                "gen_ai.request.temperature": (0.5, float),
-                "gen_ai.request.top_p": (0.8, float),
-                "gen_ai.request.max_tokens": (128, int),
-                "gen_ai.request.frequency_penalty": (0.1, float),
-                "gen_ai.request.presence_penalty": (0.2, float),
-                "gen_ai.request.seed": (7, int),
-                "gen_ai.usage.input_tokens": (14, int),
-                "gen_ai.usage.output_tokens": (8, int),
-                "gen_ai.usage.cache_read.input_tokens": (4, int),
-                "gen_ai.usage.cache_write.input_tokens": (2, int),
-                "gen_ai.usage.reasoning.output_tokens": (3, int),
-                "gen_ai.usage.audio.input_tokens": (1, int),
-                "gen_ai.usage.audio.output_tokens": (2, int),
-            },
-            stop_sequences=["STOP"],
-        )
-
-
-class ChatRecordedStreamingScenario(Scenario):
     expected_spans = {"chat": 2}
     expected_metrics = (
         "gen_ai.client.operation.duration",
@@ -453,6 +365,13 @@ class ChatRecordedStreamingScenario(Scenario):
                 chat_model = OpenAIChat(
                     id="gpt-5.1",
                     client=openai.OpenAI(api_key="test_openai_api_key"),
+                    temperature=0.5,
+                    top_p=0.8,
+                    max_tokens=128,
+                    frequency_penalty=0.1,
+                    presence_penalty=0.2,
+                    seed=7,
+                    stop=["STOP"],
                 )
                 list(
                     chat_model.response_stream(
@@ -490,11 +409,18 @@ class ChatRecordedStreamingScenario(Scenario):
                     "chatcmpl-EMxk4dQaiUamioadk6bK1Y462yRui",
                     str,
                 ),
+                "gen_ai.request.temperature": (0.5, float),
+                "gen_ai.request.top_p": (0.8, float),
+                "gen_ai.request.max_tokens": (128, int),
+                "gen_ai.request.frequency_penalty": (0.1, float),
+                "gen_ai.request.presence_penalty": (0.2, float),
+                "gen_ai.request.seed": (7, int),
                 "gen_ai.usage.input_tokens": (29, int),
                 "gen_ai.usage.output_tokens": (92, int),
                 "gen_ai.usage.reasoning.output_tokens": (10, int),
                 "server.address": ("api.openai.com", str),
             },
+            stop_sequences=["STOP"],
         )
         _assert_attrs_exact(
             by_model["gpt-4o-mini"],

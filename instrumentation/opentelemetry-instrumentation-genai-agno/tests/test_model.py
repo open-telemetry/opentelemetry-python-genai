@@ -4585,6 +4585,7 @@ def test_model_endpoint_omits_default_scheme_ports(
 def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
     instrument_agno,
     span_exporter,
+    metric_reader,
 ) -> None:
     """Abandoning a partially read public response_stream/aresponse_stream after a bare-iteration caller error ends the span with ERROR and error.type."""
     import gc
@@ -4609,12 +4610,18 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
     model = _MultiChunkModel(id="abandon-stream-model", provider="OpenAI")
 
     def _run_sync_bare_error() -> None:
+        stream = model.response_stream(
+            messages=[Message(role="user", content="hi")]
+        )
         with pytest.raises(RuntimeError, match="caller sync failure"):
-            for chunk in model.response_stream(
-                messages=[Message(role="user", content="hi")]
-            ):
+            for chunk in stream:
                 if getattr(chunk, "content", None):
                     raise RuntimeError("caller sync failure")
+        # Bare iteration does not run context-manager exit; span finalizes only on abandonment.
+        assert not span_exporter.get_finished_spans()
+        del stream
+        gc.collect()
+        gc.collect()
 
     _run_sync_bare_error()
     gc.collect()
@@ -4623,6 +4630,7 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
     sync_spans = span_exporter.get_finished_spans()
     assert len(sync_spans) == 1
     assert sync_spans[0].status.status_code == StatusCode.ERROR
+    assert sync_spans[0].status.description == "abandoned stream"
     assert sync_spans[0].attributes.get(ERROR_TYPE) == (
         ErrorTypeValues.OTHER.value
     )
@@ -4634,12 +4642,18 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
     span_exporter.clear()
 
     async def _run_async_bare_error() -> None:
+        stream = model.aresponse_stream(
+            messages=[Message(role="user", content="hi async")]
+        )
         with pytest.raises(RuntimeError, match="caller async failure"):
-            async for chunk in model.aresponse_stream(
-                messages=[Message(role="user", content="hi async")]
-            ):
+            async for chunk in stream:
                 if getattr(chunk, "content", None):
                     raise RuntimeError("caller async failure")
+        # Bare async iteration does not run __aexit__; span finalizes only on abandonment.
+        assert not span_exporter.get_finished_spans()
+        del stream
+        gc.collect()
+        gc.collect()
 
     asyncio.run(_run_async_bare_error())
     gc.collect()
@@ -4648,6 +4662,7 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
     async_spans = span_exporter.get_finished_spans()
     assert len(async_spans) == 1
     assert async_spans[0].status.status_code == StatusCode.ERROR
+    assert async_spans[0].status.description == "abandoned stream"
     assert async_spans[0].attributes.get(ERROR_TYPE) == (
         ErrorTypeValues.OTHER.value
     )
@@ -4655,6 +4670,20 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
         async_spans[0].attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM)
         is True
     )
+
+    metrics_data = metric_reader.get_metrics_data()
+    duration_counts_by_error_type: dict[Any, int] = {}
+    for rm in metrics_data.resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                if metric.name == "gen_ai.client.operation.duration":
+                    for dp in metric.data.data_points:
+                        err = dp.attributes.get(ERROR_TYPE)
+                        duration_counts_by_error_type[err] = (
+                            duration_counts_by_error_type.get(err, 0)
+                            + dp.count
+                        )
+    assert duration_counts_by_error_type == {ErrorTypeValues.OTHER.value: 2}
 
 
 def test_model_async_stream_context_manager_preserves_body_error_when_delegate_cleanup_cancelled(
@@ -4831,7 +4860,7 @@ def test_recorded_openai_chat_streaming_and_cached_tokens(
             and "9 sheep remain" in output_msgs[0]["parts"][0]["content"]
         )
 
-    # 2. Recorded non-streaming + streaming cached prompt tokens
+    # 2. Recorded sync + async non-streaming and streaming cached prompt tokens
     span_exporter.clear()
     with vcr.use_cassette("openai_chat_cached_tokens.yaml"):
         cached_model = OpenAIChat(
@@ -4850,9 +4879,34 @@ def test_recorded_openai_chat_streaming_and_cached_tokens(
     assert non_stream_resp.content == "OK"
     assert any(getattr(c, "content", None) for c in stream_chunks)
 
+    async def _run_async_cached() -> tuple[Any, list[Any]]:
+        async_cached_model = OpenAIChat(
+            id="gpt-4o-mini",
+            max_tokens=8,
+            async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
+        )
+        async_non_stream = await async_cached_model.aresponse(
+            messages=[Message(role="user", content="Reply with OK only.")]
+        )
+        async_stream: list[Any] = []
+        async for chunk in async_cached_model.aresponse_stream(
+            messages=[Message(role="user", content="Reply with OK only.")]
+        ):
+            async_stream.append(chunk)
+        return async_non_stream, async_stream
+
+    with vcr.use_cassette("openai_chat_cached_tokens.yaml"):
+        async_non_stream_resp, async_stream_chunks = asyncio.run(
+            _run_async_cached()
+        )
+    assert async_non_stream_resp.content == "OK"
+    assert any(getattr(c, "content", None) for c in async_stream_chunks)
+
     cached_spans = span_exporter.get_finished_spans()
-    assert len(cached_spans) == 2
-    for span, expected_stream in zip(cached_spans, (None, True), strict=True):
+    assert len(cached_spans) == 4
+    for span, expected_stream in zip(
+        cached_spans, (None, True, None, True), strict=True
+    ):
         attrs = span.attributes
         assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1457
         assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 2
@@ -4920,15 +4974,77 @@ def test_recorded_openai_responses_streaming_and_tool_calling(
         output_msgs: Any = attrs.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
         assert output_msgs[0]["parts"][0]["content"] == "This is a test."
 
-    # 2. Recorded two-turn Responses tool loop with distinct fc_* and call_* IDs
-    span_exporter.clear()
-
+    # 2. Recorded sync + async two-turn Responses tool loop with distinct fc_* and call_* IDs
     def get_current_weather(location: str) -> str:
         """Get the current weather in a given location."""
         if "Seattle" in location:
             return '{"location":"Seattle, WA","temperature":58,"unit":"F","conditions":"rain"}'
         return '{"location":"San Francisco, CA","temperature":65,"unit":"F","conditions":"fog"}'
 
+    expected_call_ids = [
+        "call_krAHY11uDHrSPJIjNZLF7RHU",
+        "call_fr3gmaw1ffbKMC3N64V6Iux4",
+    ]
+
+    def _assert_two_turn_tool_spans(finished_spans: Any) -> None:
+        chat_spans = [
+            s
+            for s in finished_spans
+            if s.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+            == "chat"
+        ]
+        tool_spans = [
+            s
+            for s in finished_spans
+            if s.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+            == "execute_tool"
+        ]
+        assert len(chat_spans) == 2
+        assert len(tool_spans) == 2
+        turn1, turn2 = chat_spans
+        assert (
+            turn1.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "resp_06846aae2b482d8e006a9b1773c4ec87d08182937f685f261f"
+        )
+        assert (
+            turn2.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "resp_06846aae2b482d8e006a9b1775645c87d08005ec0fb2110764"
+        )
+        for span in (turn1, turn2):
+            assert span.attributes.get("server.address") == "api.openai.com"
+            assert "server.port" not in span.attributes
+        turn1_call_ids = [
+            part["id"]
+            for msg in (
+                turn1.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+                or ()
+            )
+            for part in msg["parts"]
+            if part.get("type") == "tool_call"
+        ]
+        turn2_call_ids = [
+            part["id"]
+            for msg in (
+                turn2.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+                or ()
+            )
+            for part in msg["parts"]
+            if part.get("type") == "tool_call"
+        ]
+        turn2_result_ids = [
+            part["id"]
+            for msg in (
+                turn2.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+                or ()
+            )
+            for part in msg["parts"]
+            if part.get("type") == "tool_call_response"
+        ]
+        assert turn1_call_ids == expected_call_ids
+        assert turn2_call_ids == expected_call_ids
+        assert turn2_result_ids == expected_call_ids
+
+    span_exporter.clear()
     with vcr.use_cassette("openai_responses_tool_calling.yaml"):
         tool_model = OpenAIResponses(
             id="gpt-4o-mini",
@@ -4944,53 +5060,29 @@ def test_recorded_openai_responses_streaming_and_tool_calling(
             tools=[Function.from_callable(get_current_weather)],
         )
     assert "Seattle, WA" in str(resp.content)
+    _assert_two_turn_tool_spans(span_exporter.get_finished_spans())
 
-    chat_spans = [
-        s
-        for s in span_exporter.get_finished_spans()
-        if s.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
-    ]
-    assert len(chat_spans) == 2
-    turn1, turn2 = chat_spans
-    assert (
-        turn1.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
-        == "resp_06846aae2b482d8e006a9b1773c4ec87d08182937f685f261f"
-    )
-    assert (
-        turn2.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
-        == "resp_06846aae2b482d8e006a9b1775645c87d08005ec0fb2110764"
-    )
-    expected_call_ids = [
-        "call_krAHY11uDHrSPJIjNZLF7RHU",
-        "call_fr3gmaw1ffbKMC3N64V6Iux4",
-    ]
-    turn1_call_ids = [
-        part["id"]
-        for msg in (
-            turn1.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES) or ()
+    span_exporter.clear()
+
+    async def _run_async_responses_tools() -> Any:
+        async_tool_model = OpenAIResponses(
+            id="gpt-4o-mini",
+            async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
         )
-        for part in msg["parts"]
-        if part.get("type") == "tool_call"
-    ]
-    turn2_call_ids = [
-        part["id"]
-        for msg in (
-            turn2.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES) or ()
+        return await async_tool_model.aresponse(
+            messages=[
+                Message(
+                    role="user",
+                    content="What's the weather in Seattle and San Francisco today?",
+                )
+            ],
+            tools=[Function.from_callable(get_current_weather)],
         )
-        for part in msg["parts"]
-        if part.get("type") == "tool_call"
-    ]
-    turn2_result_ids = [
-        part["id"]
-        for msg in (
-            turn2.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES) or ()
-        )
-        for part in msg["parts"]
-        if part.get("type") == "tool_call_response"
-    ]
-    assert turn1_call_ids == expected_call_ids
-    assert turn2_call_ids == expected_call_ids
-    assert turn2_result_ids == expected_call_ids
+
+    with vcr.use_cassette("openai_responses_tool_calling.yaml"):
+        async_resp = asyncio.run(_run_async_responses_tools())
+    assert "Seattle, WA" in str(async_resp.content)
+    _assert_two_turn_tool_spans(span_exporter.get_finished_spans())
 
 
 def test_recorded_gemini_generate_content(
@@ -4999,7 +5091,7 @@ def test_recorded_gemini_generate_content(
     vcr,
     monkeypatch,
 ) -> None:
-    """Replay a recorded Google Gemini generateContent response through the real Gemini adapter."""
+    """Replay a recorded Google Gemini generateContent response through real sync and async Gemini paths."""
     from agno.models.google import Gemini
     from google import genai
     from google.genai.types import HttpOptions
@@ -5024,21 +5116,408 @@ def test_recorded_gemini_generate_content(
         )
     assert resp.content == "This is a test."
 
-    (span,) = span_exporter.get_finished_spans()
-    attrs = span.attributes
-    assert attrs.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
-    assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "gcp.gemini"
-    assert (
-        attrs.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == "gemini-2.5-flash"
-    )
-    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 6
-    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 25
-    if getattr(resp.response_usage, "reasoning_tokens", 0):
-        assert (
-            attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)
-            == 20
+    async def _run_async_gemini() -> Any:
+        async_model = Gemini(
+            id="gemini-2.5-flash",
+            client=genai.Client(
+                api_key="test_google_genai_api_key",
+                http_options=HttpOptions(api_version="v1beta"),
+            ),
         )
-    assert attrs.get("server.address") == "generativelanguage.googleapis.com"
-    assert "server.port" not in attrs
-    output_msgs: Any = attrs.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
-    assert output_msgs[0]["parts"][0]["content"] == "This is a test."
+        return await async_model.aresponse(
+            messages=[Message(role="user", content="Say this is a test")]
+        )
+
+    with vcr.use_cassette("gemini_generate_content.yaml"):
+        async_resp = asyncio.run(_run_async_gemini())
+    assert async_resp.content == "This is a test."
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    for span, call_resp in zip(spans, (resp, async_resp), strict=True):
+        attrs = span.attributes
+        assert attrs.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
+        assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "gcp.gemini"
+        assert (
+            attrs.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+            == "gemini-2.5-flash"
+        )
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 6
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 25
+        if getattr(call_resp.response_usage, "reasoning_tokens", 0):
+            assert (
+                attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)
+                == 20
+            )
+        assert (
+            attrs.get("server.address") == "generativelanguage.googleapis.com"
+        )
+        assert "server.port" not in attrs
+        output_msgs: Any = attrs.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        assert output_msgs[0]["parts"][0]["content"] == "This is a test."
+
+
+def test_model_endpoint_honors_client_params_base_url_during_lazy_init(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+) -> None:
+    """client_params base_url overrides adapter base_url before lazy sync/async client init without eager construction."""
+    import httpx
+    from agno.models.google import Gemini
+    from agno.models.openai import OpenAIChat
+
+    payload = {
+        "id": "chatcmpl-client-params",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 3,
+            "total_tokens": 8,
+        },
+    }
+
+    requested_hosts: list[tuple[str, int | None]] = []
+
+    def _sync_handler(req: httpx.Request) -> httpx.Response:
+        requested_hosts.append((req.url.host, req.url.port))
+        return httpx.Response(200, json=payload)
+
+    async def _async_handler(req: httpx.Request) -> httpx.Response:
+        requested_hosts.append((req.url.host, req.url.port))
+        return httpx.Response(200, json=payload)
+
+    # 1. Lazy sync initialization: client is None before call 1, cached on call 2
+    sync_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        base_url="https://adapter.example.com/v1",
+        client_params={"base_url": "https://override.example.com:8443/v1"},
+        http_client=httpx.Client(transport=httpx.MockTransport(_sync_handler)),
+    )
+    assert sync_model.client is None
+    sync_model.response(messages=[Message(role="user", content="first sync")])
+    assert sync_model.client is not None
+    sync_model.response(messages=[Message(role="user", content="second sync")])
+
+    # 2. Lazy async initialization: async_client is None before call 1, cached on call 2
+    async_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        base_url="https://adapter.example.com/v1",
+        client_params={
+            "base_url": "https://async-override.example.com:9443/v1"
+        },
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(_async_handler)
+        ),
+    )
+
+    async def _run_lazy_async() -> None:
+        assert async_model.async_client is None
+        await async_model.aresponse(
+            messages=[Message(role="user", content="first async")]
+        )
+        assert async_model.async_client is not None
+        await async_model.aresponse(
+            messages=[Message(role="user", content="second async")]
+        )
+
+    asyncio.run(_run_lazy_async())
+
+    # 3. Default port in client_params base_url is normalized out; explicit None suppresses adapter base_url
+    default_port_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        base_url="https://adapter.example.com:8080/v1",
+        client_params={"base_url": "https://default-port.example.com:443/v1"},
+        http_client=httpx.Client(transport=httpx.MockTransport(_sync_handler)),
+    )
+    default_port_model.response(
+        messages=[Message(role="user", content="default port")]
+    )
+
+    cleared_base_url_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        base_url="https://adapter.example.com/v1",
+        client_params={"base_url": None},
+        http_client=httpx.Client(transport=httpx.MockTransport(_sync_handler)),
+    )
+    cleared_base_url_model.response(
+        messages=[Message(role="user", content="cleared base url")]
+    )
+
+    # 4. Gemini client_params.http_options.base_url before lazy client construction
+    gemini_payload = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "ok"}]},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 3,
+            "candidatesTokenCount": 2,
+            "totalTokenCount": 5,
+        },
+    }
+    gemini_model = Gemini(
+        id="gemini-2.5-flash",
+        api_key="test-key",
+        client_params={
+            "http_options": {
+                "base_url": "https://gemini-proxy.example.com:8443",
+                "httpx_client": httpx.Client(
+                    transport=httpx.MockTransport(
+                        lambda _req: httpx.Response(200, json=gemini_payload)
+                    )
+                ),
+            }
+        },
+    )
+    assert gemini_model.client is None
+    gemini_model.response(messages=[Message(role="user", content="hi")])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 7
+    sync1, sync2, async1, async2, default_port_span, cleared_span, gem_span = (
+        spans
+    )
+
+    for span in (sync1, sync2):
+        assert span.attributes.get("server.address") == "override.example.com"
+        assert span.attributes.get("server.port") == 8443
+    for span in (async1, async2):
+        assert (
+            span.attributes.get("server.address")
+            == "async-override.example.com"
+        )
+        assert span.attributes.get("server.port") == 9443
+    assert (
+        default_port_span.attributes.get("server.address")
+        == "default-port.example.com"
+    )
+    assert "server.port" not in default_port_span.attributes
+    assert cleared_span.attributes.get("server.address") != (
+        "adapter.example.com"
+    )
+    assert (
+        gem_span.attributes.get("server.address") == "gemini-proxy.example.com"
+    )
+    assert gem_span.attributes.get("server.port") == 8443
+
+    assert requested_hosts[:4] == [
+        ("override.example.com", 8443),
+        ("override.example.com", 8443),
+        ("async-override.example.com", 9443),
+        ("async-override.example.com", 9443),
+    ]
+
+    metrics_data = metric_reader.get_metrics_data()
+    counts_by_endpoint: dict[tuple[Any, Any], int] = {}
+    for rm in metrics_data.resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                if metric.name == "gen_ai.client.operation.duration":
+                    for dp in metric.data.data_points:
+                        key = (
+                            dp.attributes.get("server.address"),
+                            dp.attributes.get("server.port"),
+                        )
+                        counts_by_endpoint[key] = (
+                            counts_by_endpoint.get(key, 0) + dp.count
+                        )
+    assert counts_by_endpoint[("override.example.com", 8443)] == 2
+    assert counts_by_endpoint[("async-override.example.com", 9443)] == 2
+    assert counts_by_endpoint[("default-port.example.com", None)] == 1
+    assert counts_by_endpoint[("gemini-proxy.example.com", 8443)] == 1
+    assert all(addr != "adapter.example.com" for addr, _ in counts_by_endpoint)
+
+
+def test_model_bedrock_tagged_content_blocks(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Bedrock Converse tagged content blocks (image, video, document, reasoningContent, toolUse, toolResult) are captured via public Model API."""
+    model = _SyncModel(
+        id="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        provider="AwsBedrock",
+    )
+    png_bytes = b"\x89PNG\r\n\x1a\nfake-png"
+    pdf_bytes = b"%PDF-1.4\nfake-pdf"
+    mp4_bytes = b"\x00\x00\x00\x18ftypmp42"
+
+    # 1. Image-only Bedrock input must produce a BlobPart, not an empty TextPart
+    model.response(
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    {
+                        "image": {
+                            "format": "png",
+                            "source": {"bytes": png_bytes},
+                        }
+                    }
+                ],
+            )
+        ]
+    )
+    (img_only_span,) = span_exporter.get_finished_spans()
+    img_only_msgs: Any = img_only_span.attributes.get(
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert len(img_only_msgs) == 1
+    assert list(img_only_msgs[0]["parts"]) == [
+        {
+            "type": "blob",
+            "modality": "image",
+            "mime_type": "image/png",
+            "content": png_bytes,
+        }
+    ]
+
+    # 2. Mixed Bedrock blocks across multi-turn conversation: text, image, video,
+    #    document (bytes, text, s3Location), reasoningContent, toolUse, toolResult
+    span_exporter.clear()
+    model.response(
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    {"text": "Review these attachments"},
+                    {
+                        "image": {
+                            "format": "png",
+                            "source": {"bytes": png_bytes},
+                        }
+                    },
+                    {
+                        "video": {
+                            "format": "mp4",
+                            "source": {"bytes": mp4_bytes},
+                        }
+                    },
+                    {
+                        "document": {
+                            "format": "pdf",
+                            "name": "spec",
+                            "source": {"bytes": pdf_bytes},
+                        }
+                    },
+                    {
+                        "document": {
+                            "format": "txt",
+                            "name": "inline",
+                            "source": {"text": "inline doc text"},
+                        }
+                    },
+                    {
+                        "document": {
+                            "format": "csv",
+                            "name": "metrics",
+                            "source": {
+                                "s3Location": {
+                                    "uri": "s3://bucket/metrics.csv"
+                                }
+                            },
+                        }
+                    },
+                ],
+            ),
+            Message(
+                role="assistant",
+                content=[
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {"text": "Checking weather first"}
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_abc",
+                            "name": "get_weather",
+                            "input": {"city": "Seattle"},
+                        }
+                    },
+                ],
+            ),
+            Message(
+                role="user",
+                content=[
+                    {
+                        "toolResult": {
+                            "toolUseId": "tooluse_abc",
+                            "content": [{"json": {"temp_f": 58}}],
+                        }
+                    }
+                ],
+            ),
+        ]
+    )
+
+    (mixed_span,) = span_exporter.get_finished_spans()
+    input_msgs: Any = mixed_span.attributes.get(
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert len(input_msgs) == 3
+
+    assert list(input_msgs[0]["parts"]) == [
+        {"type": "text", "content": "Review these attachments"},
+        {
+            "type": "blob",
+            "modality": "image",
+            "mime_type": "image/png",
+            "content": png_bytes,
+        },
+        {
+            "type": "blob",
+            "modality": "video",
+            "mime_type": "video/mp4",
+            "content": mp4_bytes,
+        },
+        {
+            "type": "blob",
+            "modality": "document",
+            "mime_type": "application/pdf",
+            "content": pdf_bytes,
+        },
+        {
+            "type": "blob",
+            "modality": "document",
+            "mime_type": "text/plain",
+            "content": b"inline doc text",
+        },
+        {
+            "type": "uri",
+            "modality": "document",
+            "mime_type": "text/csv",
+            "uri": "s3://bucket/metrics.csv",
+        },
+    ]
+    assert list(input_msgs[1]["parts"]) == [
+        {"type": "reasoning", "content": "Checking weather first"},
+        {
+            "type": "tool_call",
+            "id": "tooluse_abc",
+            "name": "get_weather",
+            "arguments": {"city": "Seattle"},
+        },
+    ]
+    assert list(input_msgs[2]["parts"]) == [
+        {
+            "type": "tool_call_response",
+            "id": "tooluse_abc",
+            "response": ({"json": {"temp_f": 58}},),
+        }
+    ]

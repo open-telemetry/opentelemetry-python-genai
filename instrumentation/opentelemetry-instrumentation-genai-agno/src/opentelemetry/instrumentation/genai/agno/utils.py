@@ -688,19 +688,25 @@ _FORMAT_MIME_TYPES: dict[str, str] = {
 }
 
 
+def _mime_type_from_format(fmt: str, modality: Modality) -> str | None:
+    normalized = fmt.lower().lstrip(".")
+    if not normalized:
+        return None
+    if normalized in _FORMAT_MIME_TYPES:
+        return _FORMAT_MIME_TYPES[normalized]
+    guessed, _ = mimetypes.guess_type(f"file.{normalized}")
+    if guessed:
+        return guessed
+    if modality in (Modality.IMAGE, Modality.AUDIO, Modality.VIDEO):
+        return f"{modality.value}/{normalized}"
+    return f"application/{normalized}"
+
+
 def _infer_mime_type(media: MediaItem, modality: Modality) -> str | None:
     if media.mime_type:
         return str(media.mime_type)
     if media.format:
-        fmt = str(media.format).lower().lstrip(".")
-        if fmt in _FORMAT_MIME_TYPES:
-            return _FORMAT_MIME_TYPES[fmt]
-        guessed, _ = mimetypes.guess_type(f"file.{fmt}")
-        if guessed:
-            return guessed
-        if modality in (Modality.IMAGE, Modality.AUDIO, Modality.VIDEO):
-            return f"{modality.value}/{fmt}"
-        return f"application/{fmt}"
+        return _mime_type_from_format(str(media.format), modality)
     for path_attr in ("filepath", "filename", "url"):
         path_val = getattr(media, path_attr, None)
         if path_val and not str(path_val).startswith("data:"):
@@ -1004,6 +1010,111 @@ def _extract_tool_call_parts(
     return parts
 
 
+def _bedrock_media_block_to_part(
+    block: Mapping[str, Any],
+    modality: Modality,
+) -> MessagePart | None:
+    fmt = block.get("format")
+    mime_type = (
+        _mime_type_from_format(fmt, modality) if isinstance(fmt, str) else None
+    )
+    if mime_type is None and modality == Modality.DOCUMENT:
+        name = block.get("name")
+        if isinstance(name, str) and name:
+            mime_type = mimetypes.guess_type(name)[0]
+    source = block.get("source")
+    if not isinstance(source, Mapping):
+        return None
+    typed_source = cast(Mapping[str, Any], source)
+    raw_bytes = typed_source.get("bytes")
+    if isinstance(raw_bytes, (bytes, bytearray)):
+        return BlobPart(
+            mime_type=mime_type,
+            modality=modality,
+            content=bytes(raw_bytes),
+        )
+    if (
+        isinstance(raw_bytes, str)
+        and (decoded := decode_base64(raw_bytes)) is not None
+    ):
+        return BlobPart(
+            mime_type=mime_type,
+            modality=modality,
+            content=decoded,
+        )
+    if modality == Modality.DOCUMENT:
+        src_text = typed_source.get("text")
+        if isinstance(src_text, str):
+            return BlobPart(
+                mime_type=mime_type or "text/plain",
+                modality=Modality.DOCUMENT,
+                content=src_text.encode("utf-8"),
+            )
+    s3_location = typed_source.get("s3Location")
+    if isinstance(s3_location, Mapping):
+        s3_uri = cast(Mapping[str, Any], s3_location).get("uri")
+        if isinstance(s3_uri, str) and s3_uri:
+            return UriPart(
+                mime_type=mime_type,
+                modality=modality,
+                uri=s3_uri,
+            )
+    return None
+
+
+def _bedrock_content_block_to_part(
+    item: Mapping[str, Any],
+) -> MessagePart | None:
+    for key, modality in (
+        ("image", Modality.IMAGE),
+        ("video", Modality.VIDEO),
+        ("audio", Modality.AUDIO),
+        ("document", Modality.DOCUMENT),
+    ):
+        media_block = item.get(key)
+        if isinstance(media_block, Mapping):
+            return _bedrock_media_block_to_part(
+                cast(Mapping[str, Any], media_block), modality
+            )
+
+    reasoning_block = item.get("reasoningContent")
+    if isinstance(reasoning_block, Mapping):
+        typed_reasoning = cast(Mapping[str, Any], reasoning_block)
+        reasoning_text = typed_reasoning.get("reasoningText")
+        if isinstance(reasoning_text, Mapping):
+            r_text = cast(Mapping[str, Any], reasoning_text).get("text")
+            if isinstance(r_text, str) and r_text:
+                return ReasoningPart(content=r_text)
+        direct_text = typed_reasoning.get("text")
+        if isinstance(direct_text, str) and direct_text:
+            return ReasoningPart(content=direct_text)
+        return None
+
+    tool_use = item.get("toolUse")
+    if isinstance(tool_use, Mapping):
+        typed_tu = cast(Mapping[str, Any], tool_use)
+        tc_id = typed_tu.get("toolUseId")
+        tc_name = typed_tu.get("name")
+        tc_input = typed_tu.get("input")
+        return ToolCallRequestPart(
+            id=str(tc_id) if tc_id is not None else None,
+            name=str(tc_name) if tc_name else "",
+            arguments=tool_arguments_to_any_value(tc_input),
+        )
+
+    tool_result = item.get("toolResult")
+    if isinstance(tool_result, Mapping):
+        typed_tr = cast(Mapping[str, Any], tool_result)
+        tr_id = typed_tr.get("toolUseId")
+        tr_content = typed_tr.get("content")
+        return ToolCallResponsePart(
+            id=str(tr_id) if tr_id is not None else None,
+            response=object_to_any_value(tr_content),
+        )
+
+    return None
+
+
 def _content_block_to_part(item: Any) -> MessagePart | None:
     if isinstance(item, str):
         return TextPart(content=item) if item else None
@@ -1015,6 +1126,13 @@ def _content_block_to_part(item: Any) -> MessagePart | None:
     ):
         if isinstance(text, str) and text:
             return TextPart(content=text)
+        return None
+
+    if part_type is None:
+        if isinstance(item, Mapping):
+            return _bedrock_content_block_to_part(
+                cast(Mapping[str, Any], item)
+            )
         return None
 
     if part_type in ("thinking", "reasoning"):
