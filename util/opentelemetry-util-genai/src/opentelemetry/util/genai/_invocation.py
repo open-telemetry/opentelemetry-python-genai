@@ -69,6 +69,7 @@ __all__ = [
     "ContextData",
     "ContextToken",
     "GenAIInvocation",
+    "_is_active_completion_hook",
     "_resolve_suppressed_content_and_hook",
     "get_content_attributes",
 ]

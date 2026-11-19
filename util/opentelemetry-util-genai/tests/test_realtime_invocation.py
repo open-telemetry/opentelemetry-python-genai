@@ -641,3 +641,69 @@ def test_realtime_inference_failure_default_and_custom_resolver():
         dp.attributes[error_attributes.ERROR_TYPE] for dp in duration_dps
     }
     assert recorded_error_types == {"ValueError", "custom.ValueError"}
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["NO_CONTENT", "SPAN_ONLY", "EVENT_ONLY", "SPAN_AND_EVENT"],
+)
+@pytest.mark.parametrize("hook_kind", ["none", "active", "safe_noop"])
+def test_should_capture_realtime_content_matches_invocation_policy(
+    mode: str, hook_kind: str
+):
+    from opentelemetry.context import get_current
+    from opentelemetry.util.genai.completion_hook import (
+        CompletionHook,
+        _NoOpCompletionHook,
+        _SafeCompletionHook,
+    )
+
+    class _RecordingHook(CompletionHook):
+        def on_completion(self, **kwargs):
+            return None
+
+    hook: CompletionHook | None = (
+        None
+        if hook_kind == "none"
+        else _RecordingHook()
+        if hook_kind == "active"
+        else _SafeCompletionHook(_NoOpCompletionHook())
+    )
+    with patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: mode},
+    ):
+        tracer_provider = TracerProvider()
+        logger_provider = LoggerProvider()
+        meter_provider = MeterProvider()
+        handler = TelemetryHandler(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            completion_hook=hook,
+        )
+
+        # Unsuppressed realtime inference: pre-invocation query matches invocation.
+        pre_unsuppressed = handler.should_capture_realtime_content()
+        with handler.realtime_inference("gcp.gemini") as inv:
+            assert pre_unsuppressed is inv.should_capture_content
+
+        # Suppressed realtime inference across all (capture_content, upload_completion) flags.
+        for outer_capture in (False, True):
+            for outer_upload in (False, True):
+                with handler.inference("gcp.gemini", request_model="outer"):
+                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+                    assert isinstance(ctx_data, InferenceData)
+                    ctx_data.capture_content = outer_capture
+                    ctx_data.upload_completion = outer_upload
+                    ctx = get_current()
+                    pre_suppressed = handler.should_capture_realtime_content()
+                    pre_suppressed_explicit = (
+                        handler.should_capture_realtime_content(context=ctx)
+                    )
+                    with handler.realtime_inference("gcp.gemini") as inner:
+                        assert pre_suppressed is inner.should_capture_content
+                        assert (
+                            pre_suppressed_explicit
+                            is inner.should_capture_content
+                        )
