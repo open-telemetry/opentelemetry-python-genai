@@ -108,7 +108,10 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
 )
-from opentelemetry.util.genai.utils import get_content_capturing_mode
+from opentelemetry.util.genai.utils import (
+    get_content_capturing_mode,
+    get_emit_user_speech,
+)
 from opentelemetry.util.genai.version import __version__
 
 
@@ -166,6 +169,7 @@ class TelemetryHandler:
             schema_url=schema_url,
         )
         self._content_capturing_mode = get_content_capturing_mode()
+        self._emit_user_speech = get_emit_user_speech()
         if completion_hook is None or isinstance(
             completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
         ):
@@ -220,6 +224,14 @@ class TelemetryHandler:
             self._completion_hook,
             context=context,
         )
+
+    def should_emit_user_speech(self) -> bool:
+        """Returns True when opt-in ``user_speech`` spans are enabled.
+
+        Controlled by the ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH``
+        environment variable (defaults to ``False``).
+        """
+        return self._emit_user_speech
 
     def retrieval(
         self,
@@ -366,7 +378,13 @@ class TelemetryHandler:
         context: Context | None = None,
         _attach_to_context: bool = True,
     ) -> UserSpeechInvocation:
-        """Returns a ``user_speech`` invocation (INTERNAL span kind). Starts span when called."""
+        """Returns a ``user_speech`` invocation (INTERNAL span kind).
+
+        ``user_speech`` is an opt-in semantic convention signal disabled by
+        default. When ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH`` is not
+        enabled, the returned invocation is a no-op that does not start or end
+        a span.
+        """
         return UserSpeechInvocation(
             self._tracer,
             self._instruments,
@@ -376,6 +394,7 @@ class TelemetryHandler:
             realtime_session_id=realtime_session_id,
             error_type_resolver=error_type_resolver,
             content_capturing_mode=self._content_capturing_mode,
+            start_span=self._emit_user_speech,
             context=context,
             _attach_to_context=_attach_to_context,
         )

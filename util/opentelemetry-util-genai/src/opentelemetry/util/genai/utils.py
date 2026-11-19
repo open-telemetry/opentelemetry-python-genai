@@ -20,6 +20,7 @@ from uuid import UUID
 
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH,
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
@@ -51,6 +52,26 @@ def get_content_capturing_mode() -> ContentCapturingMode:
             ", ".join(e.name for e in ContentCapturingMode),
         )
         return ContentCapturingMode.NO_CONTENT
+
+
+def get_emit_user_speech() -> bool:
+    """Return True when opt-in ``user_speech`` spans are enabled via environment variable."""
+    envvar = os.environ.get(
+        OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, ""
+    ).strip()
+    if not envvar:
+        return False
+    lowered = envvar.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    logger.warning(
+        "%s is not a valid option for `%s` environment variable. Must be one of true, false. Defaulting to `false`.",
+        envvar,
+        OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH,
+    )
+    return False
 
 
 def decode_base64(data: str) -> bytes | None:

@@ -269,6 +269,7 @@ class UserSpeechInvocation(GenAIInvocation):
         realtime_session_id: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        start_span: bool = True,
         context: Context | None = None,
         _attach_to_context: bool = True,
     ) -> None:
@@ -292,6 +293,7 @@ class UserSpeechInvocation(GenAIInvocation):
             context=context,
             _attach_to_context=_attach_to_context,
             content_capturing_mode=content_capturing_mode,
+            start_span=start_span,
         )
 
     @property
@@ -306,7 +308,15 @@ class UserSpeechInvocation(GenAIInvocation):
     def realtime_session_id(self, value: str | None) -> None:
         self._data.realtime_session_id = value
 
+    def _finish(self, error: Error | None = None) -> None:
+        if not self._start_span:
+            self._finished = True
+            return
+        super()._finish(error)
+
     def _apply_finish(self, error: Error | None = None) -> None:
+        if not self._start_span:
+            return
         if error is not None:
             self._apply_error_attributes(error)
         if not self.span.is_recording():
