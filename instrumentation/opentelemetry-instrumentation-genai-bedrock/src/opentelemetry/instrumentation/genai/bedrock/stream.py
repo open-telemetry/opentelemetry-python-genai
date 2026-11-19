@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from logging import getLogger
 from typing import TYPE_CHECKING, Any
 
@@ -589,7 +589,18 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         invocation.suspend()
 
     def _execution_context(self) -> AbstractContextManager[None]:
-        return self._self_invocation.activate()
+        """Scope transport reads and cleanup around a suspended invocation only.
+
+        A suppressed invocation never attached itself to the context, so
+        activating it here would reinstate the span it captured at creation --
+        possibly an already ended outer span -- instead of leaving the caller's
+        current context alone. Matches ``_StreamTelemetry._execution_context``
+        in util-genai.
+        """
+        invocation = self._self_invocation
+        if not getattr(invocation, "_suspended", False):
+            return nullcontext()
+        return invocation.activate()
 
     @property
     def __class__(self) -> type:
