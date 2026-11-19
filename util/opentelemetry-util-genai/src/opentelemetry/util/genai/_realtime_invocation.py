@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Final
+from typing import ClassVar, Final
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import Context, get_current, get_value
@@ -52,6 +52,13 @@ _REALTIME_SESSION_ENDED_EVENT_NAME: Final = (
 _GEN_AI_REALTIME_SESSION_ID: Final = "gen_ai.realtime_session.id"
 
 
+@dataclass
+class _RealtimeInferenceData(InferenceData):
+    """Typed context data container for realtime inference invocations."""
+
+    realtime_session_id: str | None = None
+
+
 class RealtimeInferenceInvocation(InferenceInvocation):
     """Represents a single realtime inference generation turn.
 
@@ -64,6 +71,8 @@ class RealtimeInferenceInvocation(InferenceInvocation):
     inference attributes, sets ``gen_ai.realtime_session.id`` when
     ``realtime_session_id`` is provided.
     """
+
+    _data_cls: ClassVar[type[InferenceData]] = _RealtimeInferenceData
 
     def __init__(
         self,
@@ -102,16 +111,20 @@ class RealtimeInferenceInvocation(InferenceInvocation):
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
         )
-        self._realtime_session_id: str | None = realtime_session_id
+        if isinstance(self.data, _RealtimeInferenceData):
+            self._realtime_data: _RealtimeInferenceData = self.data
+        else:
+            self._realtime_data = _RealtimeInferenceData()
+        self._realtime_data.realtime_session_id = realtime_session_id
         self._emit_event = False
 
     @property
     def realtime_session_id(self) -> str | None:
-        return self._realtime_session_id
+        return self._realtime_data.realtime_session_id
 
     @realtime_session_id.setter
     def realtime_session_id(self, value: str | None) -> None:
-        self._realtime_session_id = value
+        self._realtime_data.realtime_session_id = value
 
     @property
     def should_capture_content(self) -> bool:
@@ -119,24 +132,24 @@ class RealtimeInferenceInvocation(InferenceInvocation):
 
         Because ``realtime_inference`` does not emit a
         ``gen_ai.client.inference.operation.details`` event, ``EVENT_ONLY`` mode
-        captures content only when a completion hook is active.
+        captures content only when a completion hook is active. When suppressed
+        inside an outer inference context, defers to the effective capture policy
+        resolved from that context so an outer invocation can still receive
+        content for its event.
         """
+        if not self._start_span:
+            return super().should_capture_content
         return self._should_capture_content_on_span or not isinstance(
             self._completion_hook, _NoOpCompletionHook
         )
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs = super()._get_attributes()
-        if self._realtime_session_id is not None:
-            attrs[_GEN_AI_REALTIME_SESSION_ID] = self._realtime_session_id
+        if self._realtime_data.realtime_session_id is not None:
+            attrs[_GEN_AI_REALTIME_SESSION_ID] = (
+                self._realtime_data.realtime_session_id
+            )
         return attrs
-
-    def _enrich_from_context(self, data: InferenceData) -> None:
-        super()._enrich_from_context(data)
-        if self._realtime_session_id is None:
-            inner_session_id = getattr(data, "_realtime_session_id", None)
-            if isinstance(inner_session_id, str):
-                self._realtime_session_id = inner_session_id
 
     def _maybe_create_event(self) -> LogRecord | None:
         return None
@@ -193,11 +206,6 @@ class SuppressedRealtimeInferenceInvocation(
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
         )
-
-    def publish_to_context(self, data: InferenceData) -> None:
-        super().publish_to_context(data)
-        if self._realtime_session_id is not None:
-            setattr(data, "_realtime_session_id", self._realtime_session_id)
 
 
 @dataclass

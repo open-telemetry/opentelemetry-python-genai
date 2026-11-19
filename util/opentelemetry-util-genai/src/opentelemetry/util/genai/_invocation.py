@@ -105,7 +105,7 @@ class ContextData:
                 "upload_completion",
             ):
                 continue
-            val = getattr(other, f.name)
+            val = getattr(other, f.name, None)
             if val is not None and (
                 overwrite or getattr(self, f.name) is None
             ):

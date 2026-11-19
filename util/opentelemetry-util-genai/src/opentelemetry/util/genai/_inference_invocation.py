@@ -6,7 +6,7 @@ from __future__ import annotations
 import timeit
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Final
+from typing import ClassVar, Final
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import Context, get_value
@@ -147,6 +147,7 @@ class InferenceInvocation(GenAIInvocation):
     """
 
     _exception_event_name = "gen_ai.client.inference.exception"
+    _data_cls: ClassVar[type[InferenceData]] = InferenceData
 
     # Set once the invocation is handed to a stream wrapper.
     _request_stream: bool | None = None
@@ -185,7 +186,7 @@ class InferenceInvocation(GenAIInvocation):
             )
             if v is not None
         }
-        self.data: InferenceData = InferenceData(
+        self.data: InferenceData = self._data_cls(
             provider_name=provider,
             request_model=request_model,
             server_address=server_address,
@@ -216,7 +217,7 @@ class InferenceInvocation(GenAIInvocation):
             attributes=self.data.attributes,
             metric_attributes=self.data.metric_attributes,
             context_key=CLIENT_INFERENCE_CONTEXT_KEY,
-            dataclass_class_object=InferenceData,
+            dataclass_class_object=self._data_cls,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model

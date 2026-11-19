@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from opentelemetry._logs import SeverityNumber
+from opentelemetry.context import get_value
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -34,6 +35,7 @@ from opentelemetry.util.genai.environment_variables import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    CLIENT_INFERENCE_CONTEXT_KEY,
     InferenceData,
     RealtimeInferenceInvocation,
 )
@@ -43,6 +45,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     Modality,
     OutputMessage,
+    TextPart,
     TranscriptionPart,
 )
 
@@ -374,9 +377,65 @@ def test_realtime_inference_should_capture_content_event_only():
             assert inv.should_capture_content is False
 
 
+def test_suppressed_realtime_inference_preserves_event_only_capture_policy():
+    with patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+    ):
+        handler, _, log_exporter, _ = _make_handler()
+
+        # Default outer capture_content=False keeps suppressed realtime capture off.
+        with handler.inference("openai", request_model="gpt-4o"):
+            with handler.realtime_inference(
+                "openai", request_model="gpt-4o-realtime"
+            ) as inner:
+                assert inner.should_capture_content is False
+
+        # When outer permits content capture, suppressed realtime honors EVENT_ONLY
+        # so messages reach the outer inference's operation-details event.
+        with handler.inference("openai", request_model="gpt-4o"):
+            ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+            assert isinstance(ctx_data, InferenceData)
+            ctx_data.capture_content = True
+            with handler.realtime_inference(
+                "openai", request_model="gpt-4o-realtime"
+            ) as inner:
+                assert inner.should_capture_content is True
+                inner.input_messages = [
+                    InputMessage(role="user", parts=[TextPart(content="hi")])
+                ]
+                inner.output_messages = [
+                    OutputMessage(
+                        role="assistant",
+                        parts=[TextPart(content="hello")],
+                        finish_reason="stop",
+                    )
+                ]
+
+    detail_events = [
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    ]
+    assert len(detail_events) == 2
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in detail_events[0].attributes
+    assert detail_events[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {"role": "user", "parts": ({"type": "text", "content": "hi"},)},
+    )
+    assert detail_events[1].attributes[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "hello"},),
+            "finish_reason": "stop",
+        },
+    )
+
+
 def test_no_realtime_session_id_reverse_leakage_on_inference():
     handler, span_exporter, _, _ = _make_handler()
     assert not hasattr(InferenceData(), "realtime_session_id")
+    assert not hasattr(InferenceData(), "_realtime_session_id")
     with handler.inference("openai", request_model="gpt-4o") as inv:
         assert not hasattr(inv, "realtime_session_id")
         with handler.realtime_inference(
@@ -414,6 +473,47 @@ def test_nested_realtime_inference_suppression_and_session_id_propagation():
     )
     assert spans[0].attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 7
     assert spans[0].attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 19
+    assert log_exporter.get_finished_logs() == ()
+
+
+def test_nested_realtime_inference_preserves_outer_session_id_and_inner_inference():
+    handler, span_exporter, log_exporter, _ = _make_handler()
+
+    # Outer realtime session ID takes precedence over inner realtime session ID.
+    with handler.realtime_inference(
+        "gcp.gemini",
+        request_model="gemini-2.5-flash-native-audio-preview-12-2025",
+        realtime_session_id="sess-outer",
+    ) as outer:
+        with handler.realtime_inference(
+            "gcp.gemini",
+            request_model="gemini-2.5-flash-native-audio-preview-12-2025",
+            realtime_session_id="sess-inner",
+        ) as inner_rt:
+            inner_rt.input_tokens = 5
+
+    assert outer.realtime_session_id == "sess-outer"
+
+    # Regular InferenceInvocation nested inside RealtimeInferenceInvocation
+    # merges cleanly into _RealtimeInferenceData without AttributeError.
+    with handler.realtime_inference(
+        "gcp.gemini",
+        request_model="gemini-2.5-flash-native-audio-preview-12-2025",
+        realtime_session_id="sess-outer-2",
+    ) as outer2:
+        with handler.inference(
+            "gcp.gemini",
+            request_model="gemini-2.5-flash-native-audio-preview-12-2025",
+        ) as inner_inf:
+            inner_inf.output_tokens = 23
+
+    assert outer2.realtime_session_id == "sess-outer-2"
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].attributes["gen_ai.realtime_session.id"] == "sess-outer"
+    assert spans[0].attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 5
+    assert spans[1].attributes["gen_ai.realtime_session.id"] == "sess-outer-2"
+    assert spans[1].attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 23
     assert log_exporter.get_finished_logs() == ()
 
 
