@@ -269,8 +269,24 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertEqual(log_record.span_id, span.context.span_id)
 
     def test_programmatic_content_mode_overrides_environment(self) -> None:
+        modes = [
+            (value, mode)
+            for mode in ContentCapturingMode
+            for value in (
+                mode,
+                mode.name,
+                mode.name.lower(),
+                f" {mode.name.title()} ",
+            )
+        ]
         for env_mode in ContentCapturingMode:
-            for mode in [None, *ContentCapturingMode]:
+            for mode, expected_mode in [
+                (None, env_mode),
+                *modes,
+                ("", ContentCapturingMode.NO_CONTENT),
+                (" \t ", ContentCapturingMode.NO_CONTENT),
+                ("INVALID_VALUE", ContentCapturingMode.NO_CONTENT),
+            ]:
                 with (
                     self.subTest(env_mode=env_mode, mode=mode),
                     patch.dict(
@@ -298,7 +314,10 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                     ]
                     invocation.stop()
 
-                    expected_mode = env_mode if mode is None else mode
+                    self.assertEqual(
+                        handler.should_capture_content(),
+                        expected_mode != ContentCapturingMode.NO_CONTENT,
+                    )
                     span_attrs = _get_span_attributes(
                         _get_single_span(self.span_exporter)
                     )

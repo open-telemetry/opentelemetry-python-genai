@@ -1,0 +1,1 @@
+Parse programmatic content capture mode strings case-insensitively and warn on invalid values.
