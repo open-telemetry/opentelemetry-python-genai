@@ -4026,13 +4026,18 @@ async def test_live_deferred_sends_preserve_send_order_on_reverse_completion(
                 await asyncio.wait_for(send1_written.wait(), timeout=5.0)
 
                 # Send 2 enters and finishes BEFORE send 1 finishes draining.
+                second_content = genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part(text="Second part")],
+                )
                 await session.send_client_content(
-                    turns=genai_types.Content(
-                        role="user",
-                        parts=[genai_types.Part(text="Second part")],
-                    ),
+                    turns=second_content,
                     turn_complete=True,
                 )
+                # Mutate send 2's Content after its await returns while send 1
+                # is still draining; captured telemetry must preserve original.
+                assert second_content.parts is not None
+                second_content.parts[0].text = "Mutated second part"
 
                 # Server completes Turn 1 while send 1 is still draining.
                 async for _ in session.receive():
@@ -4140,6 +4145,128 @@ async def test_live_deferred_sends_preserve_send_order_on_reverse_completion(
                     "modality": "audio",
                     "mime_type": "audio/pcm;rate=16000",
                     "content": b"AAAABBBB",
+                },
+            ),
+        },
+    )
+
+    # Part C: Reverse-order tool response sends where send 2 (dict payload)
+    # completes first and caller mutates its dict while send 1 is still draining.
+    span_exporter.clear()
+    tool1_written = asyncio.Event()
+    tool2_written = asyncio.Event()
+    release_tool1 = asyncio.Event()
+
+    class _ReverseOrderToolWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            await super().send(payload)
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if '"call-1"' in raw:
+                tool1_written.set()
+                await asyncio.wait_for(release_tool1.wait(), timeout=5.0)
+            elif '"call-2"' in raw:
+                tool2_written.set()
+
+        async def recv(self, decode: bool = True) -> bytes | str:
+            if len(self._frames) == 1:
+                await asyncio.wait_for(tool2_written.wait(), timeout=5.0)
+            return await super().recv(decode=decode)
+
+    ws_tool = _ReverseOrderToolWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {"id": "call-1", "name": "fn_1", "args": {}},
+                        {"id": "call-2", "name": "fn_2", "args": {}},
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Ordered tool answer"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_tool)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Call two tools")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                tool1_task = asyncio.create_task(
+                    session.send_tool_response(
+                        function_responses={
+                            "id": "call-1",
+                            "name": "fn_1",
+                            "response": {"status": "first"},
+                        }
+                    )
+                )
+                await asyncio.wait_for(tool1_written.wait(), timeout=5.0)
+
+                resp2_payload: dict[str, Any] = {
+                    "id": "call-2",
+                    "name": "fn_2",
+                    "response": {"status": "original"},
+                }
+                await session.send_tool_response(
+                    function_responses=resp2_payload
+                )
+                resp2_payload["response"]["status"] = "mutated"
+
+                async for _ in session.receive():
+                    pass
+
+                release_tool1.set()
+                await tool1_task
+
+    tool_spans = span_exporter.get_finished_spans()
+    assert len(tool_spans) == 2
+    assert tool_spans[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "tool",
+            "parts": (
+                {
+                    "type": "tool_call_response",
+                    "id": "call-1",
+                    "response": {"status": "first"},
+                },
+            ),
+        },
+        {
+            "role": "tool",
+            "parts": (
+                {
+                    "type": "tool_call_response",
+                    "id": "call-2",
+                    "response": {"status": "original"},
                 },
             ),
         },
@@ -8097,3 +8224,704 @@ async def test_live_overlapping_turns_preserve_per_context_capture_policy_and_tr
     disabled_attrs_b = dict(detail_events_b[1].attributes)
     assert GenAI.GEN_AI_INPUT_MESSAGES not in disabled_attrs_b
     assert GenAI.GEN_AI_OUTPUT_MESSAGES not in disabled_attrs_b
+
+
+@pytest.mark.asyncio
+async def test_live_gemini_2_interleaved_tool_batch_merge_preserves_transport_order(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {"id": "call-a1", "name": "fn_a1", "args": {}},
+                        {"id": "call-a2", "name": "fn_a2", "args": {}},
+                        {"id": "call-a3", "name": "fn_a3", "args": {}},
+                    ]
+                }
+            },
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {"id": "call-b1", "name": "fn_b1", "args": {}},
+                        {"id": "call-b2", "name": "fn_b2", "args": {}},
+                        {"id": "call-b3", "name": "fn_b3", "args": {}},
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Chronological merge reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Start A")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Start B")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                # Interleave confirmed partials: a1, b1, a2, b2, then [a3, b3].
+                for call_id, name in (
+                    ("call-a1", "fn_a1"),
+                    ("call-b1", "fn_b1"),
+                    ("call-a2", "fn_a2"),
+                    ("call-b2", "fn_b2"),
+                ):
+                    await session.send_tool_response(
+                        function_responses=genai_types.FunctionResponse(
+                            id=call_id,
+                            name=name,
+                            response={"ok": call_id},
+                        )
+                    )
+                await session.send_tool_response(
+                    function_responses=[
+                        genai_types.FunctionResponse(
+                            id="call-a3",
+                            name="fn_a3",
+                            response={"ok": "call-a3"},
+                        ),
+                        genai_types.FunctionResponse(
+                            id="call-b3",
+                            name="fn_b3",
+                            response={"ok": "call-b3"},
+                        ),
+                    ]
+                )
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    captured_ids = [
+        part["id"]
+        for msg in spans[2].attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+        for part in msg["parts"]
+    ]
+    assert captured_ids == [
+        "call-a1",
+        "call-b1",
+        "call-a2",
+        "call-b2",
+        "call-a3",
+        "call-b3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_gemini_2_failed_combined_tool_send_preserves_batch_ownership_for_separate_retries(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    class _FailCombinedSendWebSocket(_FakeWebSocket):
+        async def send(self, payload: Any) -> None:
+            raw = (
+                payload.decode("utf-8", errors="ignore")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if '"call-a2"' in raw and '"call-b2"' in raw:
+                raise ConnectionError("combined send failed")
+            await super().send(payload)
+
+    fake_ws = _FailCombinedSendWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {"id": "call-a1", "name": "fn_a1", "args": {}},
+                        {"id": "call-a2", "name": "fn_a2", "args": {}},
+                    ]
+                }
+            },
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {"id": "call-b1", "name": "fn_b1", "args": {}},
+                        {"id": "call-b2", "name": "fn_b2", "args": {}},
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Batch A reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Batch B reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Trigger A")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Trigger B")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-a1", name="fn_a1", response={"val": "a1"}
+                    )
+                )
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-b1", name="fn_b1", response={"val": "b1"}
+                    )
+                )
+
+                with pytest.raises(
+                    ConnectionError, match="combined send failed"
+                ):
+                    await session.send_tool_response(
+                        function_responses=[
+                            genai_types.FunctionResponse(
+                                id="call-a2",
+                                name="fn_a2",
+                                response={"val": "a2"},
+                            ),
+                            genai_types.FunctionResponse(
+                                id="call-b2",
+                                name="fn_b2",
+                                response={"val": "b2"},
+                            ),
+                        ]
+                    )
+
+                # Separate retries must preserve each batch's original ownership.
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-a2", name="fn_a2", response={"val": "a2"}
+                    )
+                )
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-b2", name="fn_b2", response={"val": "b2"}
+                    )
+                )
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 4
+    batch_a_ids = [
+        part["id"]
+        for msg in spans[2].attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+        for part in msg["parts"]
+    ]
+    batch_b_ids = [
+        part["id"]
+        for msg in spans[3].attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+        for part in msg["parts"]
+    ]
+    assert batch_a_ids == ["call-a1", "call-a2"]
+    assert batch_b_ids == ["call-b1", "call-b2"]
+
+
+@pytest.mark.asyncio
+async def test_live_gemini_2_reopened_tool_turn_yields_to_queued_user_turn(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    a2_entered = asyncio.Event()
+    fail_a2 = asyncio.Event()
+    a2_attempts = 0
+
+    class _FailFirstA2WebSocket(_FakeWebSocket):
+        async def send(self, payload: Any) -> None:
+            nonlocal a2_attempts
+            raw = (
+                payload.decode("utf-8", errors="ignore")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if '"call-a2"' in raw:
+                a2_attempts += 1
+                if a2_attempts == 1:
+                    a2_entered.set()
+                    await asyncio.wait_for(fail_a2.wait(), timeout=5.0)
+                    raise ConnectionError("transient a2 failure")
+            await super().send(payload)
+
+    fake_ws = _FailFirstA2WebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {"id": "call-a1", "name": "fn_a1", "args": {}},
+                        {"id": "call-a2", "name": "fn_a2", "args": {}},
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply to prompt B."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply to retried batch A."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Start tool batch")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-a1", name="fn_a1", response={"val": "a1"}
+                    )
+                )
+                task_a2 = asyncio.create_task(
+                    session.send_tool_response(
+                        function_responses=genai_types.FunctionResponse(
+                            id="call-a2", name="fn_a2", response={"val": "a2"}
+                        )
+                    )
+                )
+                await asyncio.wait_for(a2_entered.wait(), timeout=5.0)
+
+                # Prompt B confirms behind the temporarily sealed tool turn.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Prompt B")],
+                    ),
+                    turn_complete=True,
+                )
+
+                # Failing a2 reopens the tool turn; Prompt B must move ahead.
+                fail_a2.set()
+                with pytest.raises(
+                    ConnectionError, match="transient a2 failure"
+                ):
+                    await task_a2
+
+                async for _ in session.receive():
+                    pass
+
+                # Retry a2 -> completes batch A with [a1, a2] intact.
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-a2", name="fn_a2", response={"val": "a2"}
+                    )
+                )
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    assert spans[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Prompt B"},),
+        },
+    )
+    retried_ids = [
+        part["id"]
+        for msg in spans[2].attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+        for part in msg["parts"]
+    ]
+    assert retried_ids == ["call-a1", "call-a2"]
+
+
+@pytest.mark.asyncio
+async def test_live_capture_disabled_context_update_invalidates_cached_config(
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    has_context_update = hasattr(
+        genai_types, "LiveClientContextUpdate"
+    ) and hasattr(genai_live.AsyncSession, "send_context_update")
+    if not has_context_update:
+        pytest.skip("google-genai SDK does not expose send_context_update")
+
+    def initial_tool(topic: str) -> str:
+        """Initial setup tool."""
+        return topic
+
+    def secret_tool(topic: str) -> str:
+        """Secret tool sent while capture is disabled."""
+        return topic
+
+    def public_tool(topic: str) -> str:
+        """Public replacement tool."""
+        return topic
+
+    config = genai_types.LiveConnectConfig(
+        response_modalities=[genai_types.Modality.TEXT],
+        system_instruction="Initial setup instruction",
+        tools=[initial_tool],
+    )
+
+    # Part A: Capture-disabled system_instruction update before any
+    # capture-enabled generation runs must invalidate setup system_instruction
+    # without buffering disabled content or clobbering unchanged setup tools.
+    ws_a = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Disabled turn reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Enabled turn reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_a)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="EVENT_ONLY",
+        ):
+            outer_handler = TelemetryHandler(
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+            )
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                with outer_handler.inference(
+                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                    request_model="outer-disabled",
+                ):
+                    await session.send_context_update(
+                        system_instruction="Secret updated instruction"
+                    )
+                    await session.send_client_content(
+                        turns=genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="Turn 1")],
+                        ),
+                        turn_complete=True,
+                    )
+                    async for _ in session.receive():
+                        pass
+
+                with outer_handler.inference(
+                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                    request_model="outer-enabled",
+                ):
+                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+                    assert isinstance(ctx_data, InferenceData)
+                    ctx_data.capture_content = True
+                    await session.send_client_content(
+                        turns=genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="Turn 2")],
+                        ),
+                        turn_complete=True,
+                    )
+                    async for _ in session.receive():
+                        pass
+
+    events_a = [
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    ]
+    assert len(events_a) == 2
+    attrs_a2 = dict(events_a[1].attributes)
+    assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in attrs_a2
+    assert [t["name"] for t in attrs_a2[GenAI.GEN_AI_TOOL_DEFINITIONS]] == [
+        "initial_tool"
+    ]
+
+    # Part B: After an earlier capture-enabled generation caches setup config,
+    # a capture-disabled tools update invalidates only cached tools, and a
+    # later capture-enabled update restores fresh instructions and tools.
+    log_exporter.clear()
+    ws_b = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 1 reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 2 reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 3 reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 4 reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_b)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="EVENT_ONLY",
+        ):
+            outer_handler = TelemetryHandler(
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+            )
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                with outer_handler.inference(
+                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                    request_model="outer-enabled-1",
+                ):
+                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+                    assert isinstance(ctx_data, InferenceData)
+                    ctx_data.capture_content = True
+                    await session.send_client_content(
+                        turns=genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="Turn 1")],
+                        ),
+                        turn_complete=True,
+                    )
+                    async for _ in session.receive():
+                        pass
+
+                with outer_handler.inference(
+                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                    request_model="outer-disabled-2",
+                ):
+                    await session.send_context_update(tools=[secret_tool])
+                    await session.send_client_content(
+                        turns=genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="Turn 2")],
+                        ),
+                        turn_complete=True,
+                    )
+                    async for _ in session.receive():
+                        pass
+
+                with outer_handler.inference(
+                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                    request_model="outer-enabled-3",
+                ):
+                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+                    assert isinstance(ctx_data, InferenceData)
+                    ctx_data.capture_content = True
+                    await session.send_client_content(
+                        turns=genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="Turn 3")],
+                        ),
+                        turn_complete=True,
+                    )
+                    async for _ in session.receive():
+                        pass
+
+                with outer_handler.inference(
+                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                    request_model="outer-enabled-4",
+                ):
+                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+                    assert isinstance(ctx_data, InferenceData)
+                    ctx_data.capture_content = True
+                    await session.send_context_update(
+                        system_instruction="Public instruction v4",
+                        tools=[public_tool],
+                    )
+                    await session.send_client_content(
+                        turns=genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="Turn 4")],
+                        ),
+                        turn_complete=True,
+                    )
+                    async for _ in session.receive():
+                        pass
+
+    events_b = [
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    ]
+    assert len(events_b) == 4
+    attrs_b1 = dict(events_b[0].attributes)
+    assert attrs_b1[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "Initial setup instruction"},
+    )
+    assert [t["name"] for t in attrs_b1[GenAI.GEN_AI_TOOL_DEFINITIONS]] == [
+        "initial_tool"
+    ]
+
+    attrs_b3 = dict(events_b[2].attributes)
+    assert attrs_b3[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "Initial setup instruction"},
+    )
+    assert GenAI.GEN_AI_TOOL_DEFINITIONS not in attrs_b3
+
+    attrs_b4 = dict(events_b[3].attributes)
+    assert attrs_b4[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "Public instruction v4"},
+    )
+    assert [t["name"] for t in attrs_b4[GenAI.GEN_AI_TOOL_DEFINITIONS]] == [
+        "public_tool"
+    ]
