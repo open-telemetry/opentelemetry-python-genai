@@ -1,0 +1,1 @@
+Preserve caller body exceptions in ``AsyncStreamWrapper.__aexit__`` when stream cleanup raises a ``BaseException`` (such as ``asyncio.CancelledError``).

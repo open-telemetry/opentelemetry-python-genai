@@ -360,7 +360,7 @@ class AsyncStreamWrapper(
                 self._finalize_failure(exc_val)
                 try:
                     await self._close_stream()
-                except Exception:  # pylint: disable=broad-exception-caught
+                except BaseException:  # pylint: disable=broad-exception-caught
                     _logger.debug(
                         "GenAI stream close error after user exception",
                         exc_info=True,

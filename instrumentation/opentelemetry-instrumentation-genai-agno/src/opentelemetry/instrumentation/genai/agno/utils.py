@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import mimetypes
 import os
+import urllib.parse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
@@ -1323,10 +1324,24 @@ def _content_block_to_part(item: Any) -> MessagePart | None:
                     modality=Modality.DOCUMENT,
                     content=decoded,
                 )
-        file_url = _get_property_value(file_obj, "url") or _get_property_value(
-            file_obj, "uri"
+        file_url = (
+            _get_property_value(file_obj, "url")
+            or _get_property_value(file_obj, "uri")
+            or _get_property_value(file_obj, "file_url")
         )
         if isinstance(file_url, str) and file_url:
+            if file_url.startswith("data:"):
+                part = image_from_url(file_url, modality=Modality.DOCUMENT)
+                if isinstance(part, BlobPart) and part.mime_type is None:
+                    part.mime_type = mime_type
+                return part
+            if mime_type is None:
+                mime_type = (
+                    mimetypes.guess_type(urllib.parse.urlparse(file_url).path)[
+                        0
+                    ]
+                    or mimetypes.guess_type(file_url)[0]
+                )
             return UriPart(
                 mime_type=mime_type,
                 modality=Modality.DOCUMENT,

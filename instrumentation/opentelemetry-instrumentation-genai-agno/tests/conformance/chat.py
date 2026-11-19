@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -337,7 +338,7 @@ class ChatGeminiScenario(Scenario):
 
 
 class ChatStreamingScenario(Scenario):
-    expected_spans = {"chat": 2}
+    expected_spans = {"chat": 4}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -354,6 +355,39 @@ class ChatStreamingScenario(Scenario):
         logger_provider: LoggerProvider,
         vcr: Any,
     ) -> None:
+        chat_prompt = [
+            Message(
+                role="user",
+                content="A farmer has 17 sheep and all but 9 run away. How many sheep remain? Explain your reasoning.",
+            )
+        ]
+        responses_prompt = [Message(role="user", content="Say this is a test")]
+
+        async def _run_async_chat() -> None:
+            async_chat = OpenAIChat(
+                id="gpt-5.1",
+                async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
+                temperature=0.5,
+                top_p=0.8,
+                max_tokens=128,
+                frequency_penalty=0.1,
+                presence_penalty=0.2,
+                seed=7,
+                stop=["STOP"],
+            )
+            async for _ in async_chat.aresponse_stream(messages=chat_prompt):
+                pass
+
+        async def _run_async_responses() -> None:
+            async_responses = OpenAIResponses(
+                id="gpt-4o-mini",
+                async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
+            )
+            async for _ in async_responses.aresponse_stream(
+                messages=responses_prompt
+            ):
+                pass
+
         with instrument(
             AgnoInstrumentor(),
             tracer_provider=tracer_provider,
@@ -373,68 +407,148 @@ class ChatStreamingScenario(Scenario):
                     seed=7,
                     stop=["STOP"],
                 )
-                list(
-                    chat_model.response_stream(
-                        messages=[
-                            Message(
-                                role="user",
-                                content="A farmer has 17 sheep and all but 9 run away. How many sheep remain? Explain your reasoning.",
-                            )
-                        ]
-                    )
-                )
+                list(chat_model.response_stream(messages=chat_prompt))
+            with vcr.use_cassette("openai_chat_streaming_reasoning.yaml"):
+                asyncio.run(_run_async_chat())
             with vcr.use_cassette("openai_responses_streaming.yaml"):
                 responses_model = OpenAIResponses(
                     id="gpt-4o-mini",
                     client=openai.OpenAI(api_key="test_openai_api_key"),
                 )
                 list(
-                    responses_model.response_stream(
-                        messages=[
-                            Message(role="user", content="Say this is a test")
-                        ]
-                    )
+                    responses_model.response_stream(messages=responses_prompt)
                 )
+            with vcr.use_cassette("openai_responses_streaming.yaml"):
+                asyncio.run(_run_async_responses())
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        spans = _chat_spans(report)
+        assert len(spans) == 4, f"expected 4 chat spans, saw {len(spans)}"
+        by_model: dict[str, list[dict[str, Any]]] = {}
+        for span in spans:
+            model_name = str(_attr(span, "gen_ai.request.model"))
+            by_model.setdefault(model_name, []).append(span)
+        assert len(by_model["gpt-5.1"]) == 2
+        assert len(by_model["gpt-4o-mini"]) == 2
+        for span in by_model["gpt-5.1"]:
+            _assert_attrs_exact(
+                span,
+                {
+                    "gen_ai.request.stream": (True, bool),
+                    "gen_ai.response.id": (
+                        "chatcmpl-EMxk4dQaiUamioadk6bK1Y462yRui",
+                        str,
+                    ),
+                    "gen_ai.request.temperature": (0.5, float),
+                    "gen_ai.request.top_p": (0.8, float),
+                    "gen_ai.request.max_tokens": (128, int),
+                    "gen_ai.request.frequency_penalty": (0.1, float),
+                    "gen_ai.request.presence_penalty": (0.2, float),
+                    "gen_ai.request.seed": (7, int),
+                    "gen_ai.usage.input_tokens": (29, int),
+                    "gen_ai.usage.output_tokens": (92, int),
+                    "gen_ai.usage.reasoning.output_tokens": (10, int),
+                    "server.address": ("api.openai.com", str),
+                },
+                stop_sequences=["STOP"],
+            )
+        for span in by_model["gpt-4o-mini"]:
+            _assert_attrs_exact(
+                span,
+                {
+                    "gen_ai.request.stream": (True, bool),
+                    "gen_ai.response.id": (
+                        "resp_048385de343c399f006a2e1ac3c6e881a0b3e7d86be0a3aa51",
+                        str,
+                    ),
+                    "gen_ai.usage.input_tokens": (22, int),
+                    "gen_ai.usage.output_tokens": (6, int),
+                    "server.address": ("api.openai.com", str),
+                },
+            )
+
+
+class ChatGeminiStreamingScenario(Scenario):
+    expected_spans = {"chat": 2}
+    expected_metrics = (
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.token.usage",
+        "gen_ai.client.operation.time_to_first_chunk",
+        "gen_ai.client.operation.time_per_output_chunk",
+    )
+    expected_violations = _GEMINI_CHAT_GAPS
+
+    def run(
+        self,
+        *,
+        tracer_provider: TracerProvider,
+        meter_provider: MeterProvider,
+        logger_provider: LoggerProvider,
+        vcr: Any,
+    ) -> None:
+        prompt = [
+            Message(
+                role="user",
+                content="Write a short 3-sentence summary of why OpenTelemetry is useful.",
+            )
+        ]
+
+        async def _run_async_gemini_stream() -> None:
+            async_model = Gemini(
+                id="gemini-2.5-flash",
+                client=genai.Client(
+                    api_key="test_google_genai_api_key",
+                    http_options=HttpOptions(api_version="v1beta"),
+                ),
+                temperature=0.2,
+                max_output_tokens=1024,
+            )
+            async for _ in async_model.aresponse_stream(messages=prompt):
+                pass
+
+        with instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            with vcr.use_cassette("gemini_stream_generate_content.yaml"):
+                sync_model = Gemini(
+                    id="gemini-2.5-flash",
+                    client=genai.Client(
+                        api_key="test_google_genai_api_key",
+                        http_options=HttpOptions(api_version="v1beta"),
+                    ),
+                    temperature=0.2,
+                    max_output_tokens=1024,
+                )
+                list(sync_model.response_stream(messages=prompt))
+            with vcr.use_cassette("gemini_stream_generate_content.yaml"):
+                asyncio.run(_run_async_gemini_stream())
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
         spans = _chat_spans(report)
         assert len(spans) == 2, f"expected 2 chat spans, saw {len(spans)}"
-        by_model = {_attr(s, "gen_ai.request.model"): s for s in spans}
-        _assert_attrs_exact(
-            by_model["gpt-5.1"],
-            {
-                "gen_ai.request.stream": (True, bool),
-                "gen_ai.response.id": (
-                    "chatcmpl-EMxk4dQaiUamioadk6bK1Y462yRui",
-                    str,
-                ),
-                "gen_ai.request.temperature": (0.5, float),
-                "gen_ai.request.top_p": (0.8, float),
-                "gen_ai.request.max_tokens": (128, int),
-                "gen_ai.request.frequency_penalty": (0.1, float),
-                "gen_ai.request.presence_penalty": (0.2, float),
-                "gen_ai.request.seed": (7, int),
-                "gen_ai.usage.input_tokens": (29, int),
-                "gen_ai.usage.output_tokens": (92, int),
-                "gen_ai.usage.reasoning.output_tokens": (10, int),
-                "server.address": ("api.openai.com", str),
-            },
-            stop_sequences=["STOP"],
-        )
-        _assert_attrs_exact(
-            by_model["gpt-4o-mini"],
-            {
-                "gen_ai.request.stream": (True, bool),
-                "gen_ai.response.id": (
-                    "resp_048385de343c399f006a2e1ac3c6e881a0b3e7d86be0a3aa51",
-                    str,
-                ),
-                "gen_ai.usage.input_tokens": (22, int),
-                "gen_ai.usage.output_tokens": (6, int),
-                "server.address": ("api.openai.com", str),
-            },
-        )
+        for span in spans:
+            _assert_attrs_exact(
+                span,
+                {
+                    "gen_ai.provider.name": ("gcp.gemini", str),
+                    "gen_ai.request.stream": (True, bool),
+                    "gen_ai.request.temperature": (0.2, float),
+                    "gen_ai.request.max_tokens": (1024, int),
+                    "gen_ai.usage.input_tokens": (16, int),
+                    "gen_ai.usage.output_tokens": (870, int),
+                    "gen_ai.usage.reasoning.output_tokens": (800, int),
+                    "server.address": (
+                        "generativelanguage.googleapis.com",
+                        str,
+                    ),
+                },
+            )
 
 
 class ChatToolCallingScenario(Scenario):
@@ -692,3 +806,135 @@ class ChatMultimodalScenario(Scenario):
         assert ("blob", "image") in output_parts, (
             f"expected ('blob', 'image') on output messages, saw {output_parts}"
         )
+
+
+# Agno's OpenAIChat._parse_provider_response_delta only populates provider_data["id"]
+# when choice_delta.content is not None, so audio-only streams omit response_id.
+_OPENAI_AUDIO_STREAM_GAPS = _OPENAI_CHAT_GAPS + (
+    ExpectedViolation(
+        advice_id="genai_expected_attribute_missing",
+        message_substring="gen_ai.response.id",
+    ),
+)
+
+
+class ChatAudioOutputScenario(Scenario):
+    expected_spans = {"chat": 2}
+    expected_metrics = (
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.token.usage",
+        "gen_ai.client.operation.time_to_first_chunk",
+        "gen_ai.client.operation.time_per_output_chunk",
+    )
+    expected_violations = _OPENAI_AUDIO_STREAM_GAPS
+
+    def run(
+        self,
+        *,
+        tracer_provider: TracerProvider,
+        meter_provider: MeterProvider,
+        logger_provider: LoggerProvider,
+        vcr: Any,
+    ) -> None:
+        non_stream_payload = {
+            "id": "chatcmpl-audio-conformance",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o-audio-preview",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "audio": {
+                            "id": "audio_conf_1",
+                            "data": "AAE=",
+                            "expires_at": 1700003600,
+                            "transcript": "Hello audio",
+                        },
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 18,
+                "total_tokens": 30,
+                "completion_tokens_details": {"audio_tokens": 14},
+            },
+        }
+        sse_lines = [
+            'data: {"id":"chatcmpl-audio-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-audio-preview","choices":[{"index":0,"delta":{"role":"assistant","audio":{"id":"audio_conf_s1","data":"AA","transcript":"Hello "}},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-audio-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-audio-preview","choices":[{"index":0,"delta":{"audio":{"data":"E=","transcript":"audio"}},"finish_reason":"stop"}]}',
+            'data: {"id":"chatcmpl-audio-stream-conformance","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-audio-preview","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":16,"total_tokens":26,"completion_tokens_details":{"audio_tokens":12}}}',
+            "data: [DONE]",
+        ]
+        sse_body = ("\n\n".join(sse_lines) + "\n\n").encode("utf-8")
+
+        sync_client = _mock_openai_client(
+            lambda _request: httpx.Response(200, json=non_stream_payload)
+        )
+        stream_client = _mock_openai_client(
+            lambda _request: httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=sse_body,
+            )
+        )
+
+        with instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            model = OpenAIChat(id="gpt-4o-audio-preview", client=sync_client)
+            model.response(
+                messages=[Message(role="user", content="Speak conformance")]
+            )
+            stream_model = OpenAIChat(
+                id="gpt-4o-audio-preview", client=stream_client
+            )
+            list(
+                stream_model.response_stream(
+                    messages=[
+                        Message(
+                            role="user", content="Speak stream conformance"
+                        )
+                    ]
+                )
+            )
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        spans = _chat_spans(report)
+        assert len(spans) == 2, f"expected 2 chat spans, saw {len(spans)}"
+        non_stream_spans = [
+            s for s in spans if _attr(s, "gen_ai.request.stream") is None
+        ]
+        stream_spans = [
+            s for s in spans if _attr(s, "gen_ai.request.stream") is True
+        ]
+        assert len(non_stream_spans) == 1
+        assert len(stream_spans) == 1
+        assert (
+            _attr(non_stream_spans[0], "gen_ai.response.id")
+            == "chatcmpl-audio-conformance"
+        )
+        for span in (non_stream_spans[0], stream_spans[0]):
+            output_messages = _attr(span, "gen_ai.output.messages")
+            output_parts = _message_part_type_and_modality(output_messages)
+            assert ("blob", "audio") in output_parts, (
+                f"expected ('blob', 'audio') on output messages, saw {output_parts}"
+            )
+            audio_blobs = [
+                part
+                for message in output_messages
+                for part in message.get("parts", [])
+                if part.get("type") == "blob"
+                and part.get("modality") == "audio"
+            ]
+            assert len(audio_blobs) == 1
+            assert audio_blobs[0]["content"] == b"\x00\x01"

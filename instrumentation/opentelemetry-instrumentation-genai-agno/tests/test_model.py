@@ -4586,25 +4586,38 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
     instrument_agno,
     span_exporter,
     metric_reader,
+    vcr,
 ) -> None:
     """Abandoning a partially read public response_stream/aresponse_stream after a bare-iteration caller error ends the span with ERROR and error.type."""
     import gc
 
-    from opentelemetry.semconv._incubating.attributes.error_attributes import (
+    import openai
+    from agno.models.openai import OpenAIChat
+
+    from opentelemetry.semconv.attributes.error_attributes import (
         ErrorTypeValues,
     )
+
+    sync_yielded = 0
+    async_yielded = 0
 
     class _MultiChunkModel(MockModel):
         def invoke_stream(
             self, *args: Any, **kwargs: Any
         ) -> Iterator[ModelResponse]:
+            nonlocal sync_yielded
+            sync_yielded += 1
             yield ModelResponse(content="chunk 1")
+            sync_yielded += 1
             yield ModelResponse(content="chunk 2")
 
         async def ainvoke_stream(
             self, *args: Any, **kwargs: Any
         ) -> AsyncIterator[ModelResponse]:
+            nonlocal async_yielded
+            async_yielded += 1
             yield ModelResponse(content="async chunk 1")
+            async_yielded += 1
             yield ModelResponse(content="async chunk 2")
 
     model = _MultiChunkModel(id="abandon-stream-model", provider="OpenAI")
@@ -4618,6 +4631,7 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
                 if getattr(chunk, "content", None):
                     raise RuntimeError("caller sync failure")
         # Bare iteration does not run context-manager exit; span finalizes only on abandonment.
+        assert sync_yielded == 1
         assert not span_exporter.get_finished_spans()
         del stream
         gc.collect()
@@ -4650,6 +4664,7 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
                 if getattr(chunk, "content", None):
                     raise RuntimeError("caller async failure")
         # Bare async iteration does not run __aexit__; span finalizes only on abandonment.
+        assert async_yielded == 1
         assert not span_exporter.get_finished_spans()
         del stream
         gc.collect()
@@ -4671,6 +4686,82 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
         is True
     )
 
+    # Also verify abandoning partially read recorded public OpenAIChat sync/async streams
+    prompt = [
+        Message(
+            role="user",
+            content="A farmer has 17 sheep and all but 9 run away. How many sheep remain? Explain your reasoning.",
+        )
+    ]
+
+    span_exporter.clear()
+
+    def _run_recorded_sync_abandon() -> None:
+        chat_model = OpenAIChat(
+            id="gpt-5.1",
+            client=openai.OpenAI(api_key="test_openai_api_key"),
+        )
+        with vcr.use_cassette("openai_chat_streaming_reasoning.yaml"):
+            stream = chat_model.response_stream(messages=prompt)
+            with pytest.raises(
+                RuntimeError, match="recorded sync caller error"
+            ):
+                for chunk in stream:
+                    if getattr(chunk, "content", None):
+                        raise RuntimeError("recorded sync caller error")
+            assert not span_exporter.get_finished_spans()
+            del stream
+            gc.collect()
+            gc.collect()
+
+    _run_recorded_sync_abandon()
+    gc.collect()
+    gc.collect()
+
+    (rec_sync_span,) = span_exporter.get_finished_spans()
+    assert rec_sync_span.status.status_code == StatusCode.ERROR
+    assert rec_sync_span.status.description == "abandoned stream"
+    assert rec_sync_span.attributes.get(ERROR_TYPE) == (
+        ErrorTypeValues.OTHER.value
+    )
+    assert (
+        rec_sync_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM)
+        is True
+    )
+
+    span_exporter.clear()
+
+    async def _run_recorded_async_abandon() -> None:
+        async_chat_model = OpenAIChat(
+            id="gpt-5.1",
+            async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
+        )
+        stream = async_chat_model.aresponse_stream(messages=prompt)
+        with pytest.raises(RuntimeError, match="recorded async caller error"):
+            async for chunk in stream:
+                if getattr(chunk, "content", None):
+                    raise RuntimeError("recorded async caller error")
+        assert not span_exporter.get_finished_spans()
+        del stream
+        gc.collect()
+        gc.collect()
+
+    with vcr.use_cassette("openai_chat_streaming_reasoning.yaml"):
+        asyncio.run(_run_recorded_async_abandon())
+    gc.collect()
+    gc.collect()
+
+    (rec_async_span,) = span_exporter.get_finished_spans()
+    assert rec_async_span.status.status_code == StatusCode.ERROR
+    assert rec_async_span.status.description == "abandoned stream"
+    assert rec_async_span.attributes.get(ERROR_TYPE) == (
+        ErrorTypeValues.OTHER.value
+    )
+    assert (
+        rec_async_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM)
+        is True
+    )
+
     metrics_data = metric_reader.get_metrics_data()
     duration_counts_by_error_type: dict[Any, int] = {}
     for rm in metrics_data.resource_metrics:
@@ -4683,7 +4774,7 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
                             duration_counts_by_error_type.get(err, 0)
                             + dp.count
                         )
-    assert duration_counts_by_error_type == {ErrorTypeValues.OTHER.value: 2}
+    assert duration_counts_by_error_type == {ErrorTypeValues.OTHER.value: 4}
 
 
 def test_model_async_stream_context_manager_preserves_body_error_when_delegate_cleanup_cancelled(
@@ -5043,6 +5134,19 @@ def test_recorded_openai_responses_streaming_and_tool_calling(
         assert turn1_call_ids == expected_call_ids
         assert turn2_call_ids == expected_call_ids
         assert turn2_result_ids == expected_call_ids
+        assert all(
+            isinstance(
+                s.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID), str
+            )
+            and s.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID)
+            for s in tool_spans
+        )
+        turn2_outputs: Any = turn2.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        )
+        assert turn2_outputs and "Seattle, WA" in str(
+            turn2_outputs[0]["parts"][0]["content"]
+        )
 
     span_exporter.clear()
     with vcr.use_cassette("openai_responses_tool_calling.yaml"):
@@ -5308,9 +5412,8 @@ def test_model_endpoint_honors_client_params_base_url_during_lazy_init(
         == "default-port.example.com"
     )
     assert "server.port" not in default_port_span.attributes
-    assert cleared_span.attributes.get("server.address") != (
-        "adapter.example.com"
-    )
+    assert "server.address" not in cleared_span.attributes
+    assert "server.port" not in cleared_span.attributes
     assert (
         gem_span.attributes.get("server.address") == "gemini-proxy.example.com"
     )
@@ -5521,3 +5624,424 @@ def test_model_bedrock_tagged_content_blocks(
             "response": ({"json": {"temp_f": 58}},),
         }
     ]
+
+
+def test_recorded_gemini_stream_generate_content(
+    instrument_agno_content_capture,
+    span_exporter,
+    metric_reader,
+    vcr,
+    monkeypatch,
+) -> None:
+    """Replay a recorded multi-chunk Google Gemini streamGenerateContent response through sync and async Gemini streams."""
+    from agno.models.google import Gemini
+    from google import genai
+    from google.genai.types import HttpOptions
+
+    for env_var in (
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+
+    prompt = [
+        Message(
+            role="user",
+            content="Write a short 3-sentence summary of why OpenTelemetry is useful.",
+        )
+    ]
+
+    with vcr.use_cassette("gemini_stream_generate_content.yaml"):
+        sync_model = Gemini(
+            id="gemini-2.5-flash",
+            client=genai.Client(
+                api_key="test_google_genai_api_key",
+                http_options=HttpOptions(api_version="v1beta"),
+            ),
+            temperature=0.2,
+            max_output_tokens=1024,
+        )
+        sync_chunks = list(sync_model.response_stream(messages=prompt))
+    assert any(getattr(c, "content", None) for c in sync_chunks)
+
+    async def _run_async_gemini_stream() -> list[Any]:
+        async_model = Gemini(
+            id="gemini-2.5-flash",
+            client=genai.Client(
+                api_key="test_google_genai_api_key",
+                http_options=HttpOptions(api_version="v1beta"),
+            ),
+            temperature=0.2,
+            max_output_tokens=1024,
+        )
+        collected: list[Any] = []
+        async for chunk in async_model.aresponse_stream(messages=prompt):
+            collected.append(chunk)
+        return collected
+
+    with vcr.use_cassette("gemini_stream_generate_content.yaml"):
+        async_chunks = asyncio.run(_run_async_gemini_stream())
+    assert any(getattr(c, "content", None) for c in async_chunks)
+
+    import importlib.metadata
+
+    is_agno_v2 = importlib.metadata.version("agno").startswith("2.")
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    for span in spans:
+        attrs = span.attributes
+        assert attrs.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
+        assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "gcp.gemini"
+        assert (
+            attrs.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+            == "gemini-2.5-flash"
+        )
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.2
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 1024
+        if is_agno_v2:
+            # Agno 2.3.x sums per-chunk cumulative Gemini usageMetadata across
+            # the 3 streamed SSE chunks rather than taking the final cumulative value.
+            assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 48
+            assert (
+                attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 2538
+            )
+        else:
+            assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 16
+            assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 870
+            assert (
+                attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)
+                == 800
+            )
+        assert (
+            attrs.get("server.address") == "generativelanguage.googleapis.com"
+        )
+        assert "server.port" not in attrs
+        output_msgs: Any = attrs.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        assert (
+            output_msgs
+            and "OpenTelemetry provides"
+            in output_msgs[0]["parts"][0]["content"]
+        )
+
+    metric_names = {
+        metric.name
+        for rm in metric_reader.get_metrics_data().resource_metrics
+        for sm in rm.scope_metrics
+        for metric in sm.metrics
+    }
+    assert "gen_ai.client.operation.time_to_first_chunk" in metric_names
+    assert "gen_ai.client.operation.time_per_output_chunk" in metric_names
+
+
+def test_gemini_generation_config_and_generative_model_kwargs_precedence(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Gemini generation_config and generative_model_kwargs are honored with Agno's override precedence."""
+    import json
+
+    import httpx
+    from agno.models.google import Gemini
+    from google import genai
+    from google.genai.types import GenerateContentConfig, HttpOptions
+
+    captured_gen_configs: list[dict[str, Any]] = []
+    gemini_payload = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "ok"}]},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 4,
+            "totalTokenCount": 14,
+        },
+    }
+
+    def _sync_handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content.decode("utf-8"))
+        captured_gen_configs.append(body.get("generationConfig") or {})
+        return httpx.Response(200, json=gemini_payload)
+
+    async def _async_handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content.decode("utf-8"))
+        captured_gen_configs.append(body.get("generationConfig") or {})
+        return httpx.Response(200, json=gemini_payload)
+
+    def _make_client() -> genai.Client:
+        return genai.Client(
+            api_key="test-key",
+            http_options=HttpOptions(
+                httpx_client=httpx.Client(
+                    transport=httpx.MockTransport(_sync_handler)
+                ),
+                httpx_async_client=httpx.AsyncClient(
+                    transport=httpx.MockTransport(_async_handler)
+                ),
+            ),
+        )
+
+    # 1. Dict generation_config
+    dict_cfg_model = Gemini(
+        id="gemini-2.5-flash",
+        generation_config={
+            "temperature": 0.3,
+            "max_output_tokens": 128,
+            "top_p": 0.8,
+            "top_k": 32,
+            "stop_sequences": ["END"],
+            "seed": 9,
+        },
+        client=_make_client(),
+    )
+    dict_cfg_model.response(
+        messages=[Message(role="user", content="dict cfg")]
+    )
+    (dict_span,) = span_exporter.get_finished_spans()
+    assert (
+        dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
+        == 0.3
+    )
+    assert (
+        dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
+        == 128
+    )
+    assert (
+        dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.8
+    )
+    assert dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 32
+    assert list(
+        dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES)
+        or ()
+    ) == ["END"]
+    assert dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_SEED) == 9
+    # On Agno >= 3.2, verify outgoing wire generationConfig matches telemetry
+    last_cfg = captured_gen_configs[-1]
+    if "temperature" in last_cfg:
+        assert last_cfg["temperature"] == 0.3
+        assert last_cfg["maxOutputTokens"] == 128
+
+    span_exporter.clear()
+
+    # 2. GenerateContentConfig object in generation_config (async path)
+    typed_cfg_model = Gemini(
+        id="gemini-2.5-flash",
+        generation_config=GenerateContentConfig(
+            temperature=0.35,
+            max_output_tokens=200,
+            top_k=24,
+        ),
+        client=_make_client(),
+    )
+    asyncio.run(
+        typed_cfg_model.aresponse(
+            messages=[Message(role="user", content="typed cfg")]
+        )
+    )
+    (typed_span,) = span_exporter.get_finished_spans()
+    assert (
+        typed_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
+        == 0.35
+    )
+    assert (
+        typed_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
+        == 200
+    )
+    assert (
+        typed_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 24
+    )
+
+    span_exporter.clear()
+
+    # 3. Override precedence: direct attrs > generative_model_kwargs > generation_config
+    #    (and explicit None in generative_model_kwargs clears generation_config).
+    precedence_model = Gemini(
+        id="gemini-2.5-flash",
+        generation_config={
+            "temperature": 0.3,
+            "top_p": 0.6,
+            "max_output_tokens": 128,
+            "top_k": 20,
+        },
+        generative_model_kwargs={
+            "temperature": 0.5,
+            "top_p": 0.75,
+            "top_k": None,
+        },
+        temperature=0.8,
+        client=_make_client(),
+    )
+    precedence_model.response(
+        messages=[Message(role="user", content="precedence")]
+    )
+    (prec_span,) = span_exporter.get_finished_spans()
+    assert (
+        prec_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
+        == 0.8
+    )
+    assert (
+        prec_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.75
+    )
+    assert (
+        prec_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
+        == 128
+    )
+    assert GenAIAttributes.GEN_AI_REQUEST_TOP_K not in prec_span.attributes
+
+    span_exporter.clear()
+
+    # 4. request_params['config'] still replaces all lower-precedence config sources
+    req_override_model = Gemini(
+        id="gemini-2.5-flash",
+        generation_config={"temperature": 0.3, "max_output_tokens": 128},
+        generative_model_kwargs={"top_p": 0.75},
+        temperature=0.8,
+        request_params={"config": {"temperature": 0.15}},
+        client=_make_client(),
+    )
+    req_override_model.response(
+        messages=[Message(role="user", content="request_params override")]
+    )
+    (req_span,) = span_exporter.get_finished_spans()
+    assert (
+        req_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
+        == 0.15
+    )
+    assert GenAIAttributes.GEN_AI_REQUEST_TOP_P not in req_span.attributes
+    assert GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS not in req_span.attributes
+
+
+def test_openai_responses_input_file_url_content_block(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """OpenAI Responses input_file blocks with file_url are captured as document UriPart/BlobPart."""
+    import base64
+
+    import httpx
+    import openai
+    from agno.models.openai.responses import OpenAIResponses
+
+    pdf_bytes = b"%PDF-1.4\nresponses-file"
+    pdf_data_url = "data:application/pdf;base64," + base64.b64encode(
+        pdf_bytes
+    ).decode("ascii")
+
+    payload = {
+        "id": "resp_input_file_url",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Reviewed report.",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+        "usage": {
+            "input_tokens": 12,
+            "output_tokens": 4,
+            "total_tokens": 16,
+        },
+    }
+    client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _req: httpx.Response(200, json=payload)
+            )
+        ),
+    )
+    model = OpenAIResponses(id="gpt-4o-mini", client=client)
+    model.response(
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "input_file",
+                        "file_url": "https://example.com/report.pdf",
+                    },
+                    {
+                        "type": "input_file",
+                        "file_url": pdf_data_url,
+                    },
+                ],
+            )
+        ]
+    )
+
+    (span,) = span_exporter.get_finished_spans()
+    input_msgs: Any = span.attributes.get(
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert len(input_msgs) == 1
+    assert list(input_msgs[0]["parts"]) == [
+        {
+            "type": "uri",
+            "modality": "document",
+            "mime_type": "application/pdf",
+            "uri": "https://example.com/report.pdf",
+        },
+        {
+            "type": "blob",
+            "modality": "document",
+            "mime_type": "application/pdf",
+            "content": pdf_bytes,
+        },
+    ]
+
+
+def test_model_endpoint_omitted_when_base_url_missing(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+) -> None:
+    """When no base_url, host, or client endpoint is configured, neither server.address nor server.port is emitted."""
+
+    class _NoEndpointModel(MockModel):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="sync ok")
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="async ok")
+
+    model = _NoEndpointModel(id="no-endpoint-model", provider="Custom")
+    model.response(messages=[Message(role="user", content="sync no url")])
+    asyncio.run(
+        model.aresponse(
+            messages=[Message(role="user", content="async no url")]
+        )
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    for span in spans:
+        assert "server.address" not in span.attributes
+        assert "server.port" not in span.attributes
+
+    metrics_data = metric_reader.get_metrics_data()
+    observed_duration_points = 0
+    for rm in metrics_data.resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                if metric.name == "gen_ai.client.operation.duration":
+                    for dp in metric.data.data_points:
+                        observed_duration_points += dp.count
+                        assert "server.address" not in dp.attributes
+                        assert "server.port" not in dp.attributes
+    assert observed_duration_points == 2

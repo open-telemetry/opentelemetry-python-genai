@@ -526,6 +526,97 @@ def test_async_stream_wrapper_exit_closes_and_propagates_user_errors():
     asyncio.run(exercise())
 
 
+def test_async_stream_wrapper_exit_preserves_body_error_when_close_raises_base_exception():
+    active = ContextVar("active", default=False)
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class _ScopedWrapper(_TestAsyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+    async def exercise():
+        body_error = ValueError("body failure")
+        close_error = asyncio.CancelledError("close cancelled")
+        stream = _FakeAsyncStream(chunks=["chunk"], close_error=close_error)
+        wrapper = _ScopedWrapper(stream)
+
+        with pytest.raises(ValueError, match="body failure") as raised:
+            async with wrapper:
+                raise body_error
+
+        assert raised.value is body_error
+        assert stream.close_count == 1
+        assert wrapper._self_stop_count == 0
+        assert wrapper._self_failures == [body_error]
+        assert not active.get()
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_exit_propagates_finalization_and_context_base_exceptions():
+    async def exercise():
+        body_error = ValueError("body failure")
+        finalize_cancel = asyncio.CancelledError("finalize cancelled")
+
+        class _FailingFinalizeWrapper(_TestAsyncStreamWrapper):
+            def _on_stream_error(self, error):
+                raise finalize_cancel
+
+        stream1 = _FakeAsyncStream(chunks=["chunk"])
+        wrapper1 = _FailingFinalizeWrapper(stream1)
+        with pytest.raises(asyncio.CancelledError, match="finalize cancelled"):
+            async with wrapper1:
+                raise body_error
+        assert stream1.close_count == 0
+
+        ctx_error = RuntimeError("context exit boom")
+
+        @contextmanager
+        def broken_scope() -> Iterator[None]:
+            try:
+                yield
+            finally:
+                raise ctx_error
+
+        class _BrokenContextWrapper(_TestAsyncStreamWrapper):
+            def _execution_context(self) -> AbstractContextManager[None]:
+                return broken_scope()
+
+        stream2 = _FakeAsyncStream(chunks=["chunk"])
+        wrapper2 = _BrokenContextWrapper(stream2)
+        with pytest.raises(RuntimeError, match="context exit boom"):
+            async with wrapper2:
+                raise body_error
+        assert stream2.close_count == 1
+        assert wrapper2._self_failures == [body_error]
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_normal_exit_propagates_close_base_exception():
+    async def exercise():
+        close_error = asyncio.CancelledError("close cancelled")
+        stream = _FakeAsyncStream(chunks=["chunk"], close_error=close_error)
+        wrapper = _TestAsyncStreamWrapper(stream)
+
+        with pytest.raises(asyncio.CancelledError, match="close cancelled"):
+            async with wrapper:
+                pass
+
+        assert stream.close_count == 1
+        assert wrapper._self_stop_count == 0
+        assert wrapper._self_failures == [close_error]
+
+    asyncio.run(exercise())
+
+
 def test_async_stream_wrapper_getattr_passthrough():
     wrapper = _TestAsyncStreamWrapper(_FakeAsyncStream())
 
