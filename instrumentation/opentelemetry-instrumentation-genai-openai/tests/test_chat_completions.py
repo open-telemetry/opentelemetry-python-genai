@@ -7,6 +7,7 @@ import json
 import logging
 import os
 
+import openai._base_client as base_client
 import pytest
 from openai import (
     NOT_GIVEN,
@@ -64,6 +65,9 @@ from .test_utils import (
     format_simple_expected_output_message,
     get_current_weather_tool_definition,
 )
+
+# Newer openai releases vendor httpx as httpx2.
+httpx = getattr(base_client, "httpx2", None) or base_client.httpx
 
 
 def test_chat_completion_with_content(
@@ -1684,6 +1688,49 @@ def test_chat_completion_stream_helper_user_exception(
         assert (
             spans[0].attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
         )
+
+
+def test_chat_completion_stream_helper_user_exception_reentrant_hook(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    if not hasattr(openai_client.chat.completions, "stream"):
+        pytest.skip("chat.completions.stream() not available")
+
+    nested = []
+
+    # Opens another streaming request while the outer stream() is being
+    # entered, before the outer stream wrapper exists.
+    def open_nested_stream(response: httpx.Response) -> None:
+        if nested:
+            return
+        nested.append(
+            openai_client.chat.completions.create(
+                model=DEFAULT_MODEL, messages=USER_ONLY_PROMPT, stream=True
+            )
+        )
+        nested[0].close()
+
+    client = OpenAI(
+        http_client=httpx.Client(
+            event_hooks={"response": [open_nested_stream]}
+        )
+    )
+    with vcr.use_cassette(
+        "test_chat_completion_streaming_not_complete.yaml",
+        allow_playback_repeats=True,
+    ):
+        with pytest.raises(RuntimeError, match="user failure"):
+            with client.chat.completions.stream(
+                model=DEFAULT_MODEL, messages=USER_ONLY_PROMPT
+            ):
+                raise RuntimeError("user failure")
+
+        # The caller's exception belongs to the outer stream's span.
+        error_types = [
+            span.attributes.get(ErrorAttributes.ERROR_TYPE)
+            for span in span_exporter.get_finished_spans()
+        ]
+        assert error_types.count("RuntimeError") == 1
 
 
 def test_chat_completion_multiple_choices_streaming(

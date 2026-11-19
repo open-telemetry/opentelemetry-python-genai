@@ -305,8 +305,10 @@ class ChatStreamManagerWrapper(ObjectProxy, Generic[ResponseFormatT]):
             )
         finally:
             _entered_chat_streams.reset(token)
-        if entered and isinstance(entered[0], ChatStreamWrapper):
-            self._self_stream_wrapper = entered[0]
+        # HTTP hooks can open other streams during entry. This request's
+        # wrapper is created after its response arrives, so it is last.
+        if entered and isinstance(entered[-1], ChatStreamWrapper):
+            self._self_stream_wrapper = entered[-1]
         return stream
 
     def __exit__(
@@ -341,8 +343,10 @@ class AsyncChatStreamManagerWrapper(ObjectProxy, Generic[ResponseFormatT]):
             )
         finally:
             _entered_chat_streams.reset(token)
-        if entered and isinstance(entered[0], AsyncChatStreamWrapper):
-            self._self_stream_wrapper = entered[0]
+        # HTTP hooks can open other streams during entry. This request's
+        # wrapper is created after its response arrives, so it is last.
+        if entered and isinstance(entered[-1], AsyncChatStreamWrapper):
+            self._self_stream_wrapper = entered[-1]
         return stream
 
     async def __aexit__(
