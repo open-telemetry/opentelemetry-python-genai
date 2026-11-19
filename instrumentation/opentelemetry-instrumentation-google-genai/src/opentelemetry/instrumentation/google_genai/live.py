@@ -310,6 +310,7 @@ class _StagedSend:
     completes_turn: bool = False
     omit_tool_response: bool = False
     starts_new_turn: bool = False
+    seq: int = 0
     turn: _OutboundTurn | None = None
     status: str = "pending"
     applied: bool = False
@@ -325,7 +326,9 @@ class _OutboundTurn:
     input_messages: list[InputMessage] = field(default_factory=list)
     media_bytes: int = 0
     system_instruction: list[SystemInstructionPart] | None = None
+    system_instruction_rev: int = 0
     tool_definitions: list[ToolDefinition] | None = None
+    tool_definitions_rev: int = 0
     staged_sends: deque[_StagedSend] = field(default_factory=deque)
     sealed: bool = False
     has_confirmed_turn_complete: bool = False
@@ -437,7 +440,9 @@ class _ActiveGeneration:
     system_instruction: list[SystemInstructionPart] = field(
         default_factory=list
     )
+    system_instruction_rev: int = 0
     tool_definitions: list[ToolDefinition] = field(default_factory=list)
+    tool_definitions_rev: int = 0
     completed_output_messages: list[OutputMessage] = field(
         default_factory=list
     )
@@ -558,15 +563,20 @@ class _LiveSessionTracker:
 
         self._outbound_turns: deque[_OutboundTurn] = deque()
         self._write_turn: _OutboundTurn | None = None
+        self._next_send_seq: int = 0
+        self._current_send_seq: int = 0
         self._pending_input_transcript_deltas: list[str] = []
         self._deferred_generations: list[_ActiveGeneration] = []
         self._capture_content_override: bool | None = None
         self._active_gen: _ActiveGeneration | None = None
         self._speech_invocation: UserSpeechInvocation | None = None
+        self._session_finalized: bool = False
         self.terminal_error: BaseException | None = None
 
         self.system_instruction: list[SystemInstructionPart] = []
+        self._system_instruction_rev: int = 0
         self.tool_definitions: list[ToolDefinition] = []
+        self._tool_definitions_rev: int = 0
         self._config_content_extracted: bool = False
         if self._should_capture_content():
             self._ensure_config_content_extracted()
@@ -626,6 +636,8 @@ class _LiveSessionTracker:
             or staged.omit_tool_response
         ):
             return
+        self._next_send_seq += 1
+        staged.seq = self._next_send_seq
         if (
             staged.starts_new_turn
             and self._outbound_turns
@@ -644,6 +656,20 @@ class _LiveSessionTracker:
         if staged.completes_turn:
             turn.sealed = True
 
+    def _apply_session_context_update(self, turn: _OutboundTurn) -> None:
+        if (
+            turn.system_instruction is not None
+            and turn.system_instruction_rev >= self._system_instruction_rev
+        ):
+            self.system_instruction = list(turn.system_instruction)
+            self._system_instruction_rev = turn.system_instruction_rev
+        if (
+            turn.tool_definitions is not None
+            and turn.tool_definitions_rev >= self._tool_definitions_rev
+        ):
+            self.tool_definitions = list(turn.tool_definitions)
+            self._tool_definitions_rev = turn.tool_definitions_rev
+
     def _commit_to_bound_generation(
         self, staged: _StagedSend, target_gen: _ActiveGeneration
     ) -> None:
@@ -652,11 +678,13 @@ class _LiveSessionTracker:
         # resulting inputs/context updates to ``target_gen``.
         scratch_turn = _OutboundTurn()
         saved_write_turn = self._write_turn
+        saved_send_seq = self._current_send_seq
         saved_active_gen = self._active_gen
         saved_override = self._capture_content_override
 
         target_capture = target_gen.invocation.should_capture_content
         self._write_turn = scratch_turn
+        self._current_send_seq = staged.seq
         self._active_gen = None
         self._capture_content_override = target_capture
         try:
@@ -666,6 +694,7 @@ class _LiveSessionTracker:
             )
         finally:
             self._write_turn = saved_write_turn
+            self._current_send_seq = saved_send_seq
             self._active_gen = saved_active_gen
             self._capture_content_override = saved_override
 
@@ -674,16 +703,29 @@ class _LiveSessionTracker:
                 target_gen.input_messages, scratch_turn.input_messages
             )
         if target_capture:
-            if scratch_turn.system_instruction is not None:
-                self.system_instruction = list(scratch_turn.system_instruction)
+            if (
+                scratch_turn.system_instruction is not None
+                and scratch_turn.system_instruction_rev
+                >= target_gen.system_instruction_rev
+            ):
                 target_gen.system_instruction = list(
                     scratch_turn.system_instruction
                 )
-            if scratch_turn.tool_definitions is not None:
-                self.tool_definitions = list(scratch_turn.tool_definitions)
+                target_gen.system_instruction_rev = (
+                    scratch_turn.system_instruction_rev
+                )
+            if (
+                scratch_turn.tool_definitions is not None
+                and scratch_turn.tool_definitions_rev
+                >= target_gen.tool_definitions_rev
+            ):
                 target_gen.tool_definitions = list(
                     scratch_turn.tool_definitions
                 )
+                target_gen.tool_definitions_rev = (
+                    scratch_turn.tool_definitions_rev
+                )
+            self._apply_session_context_update(scratch_turn)
 
     def _drain_turn(self, turn: _OutboundTurn) -> None:
         while turn.staged_sends and turn.staged_sends[0].status != "pending":
@@ -697,11 +739,14 @@ class _LiveSessionTracker:
                 self._commit_to_bound_generation(staged, turn.bound_gen)
             else:
                 saved_write_turn = self._write_turn
+                saved_send_seq = self._current_send_seq
                 self._write_turn = turn
+                self._current_send_seq = staged.seq
                 try:
                     staged.context.run(staged.commit_fn)
                 finally:
                     self._write_turn = saved_write_turn
+                    self._current_send_seq = saved_send_seq
 
         if turn.bound_gen is not None:
             if not turn.staged_sends:
@@ -1213,12 +1258,18 @@ class _LiveSessionTracker:
             return
         self._ensure_config_content_extracted()
         turn = self._target_turn()
+        rev = self._current_send_seq
+        if rev == 0:
+            self._next_send_seq += 1
+            rev = self._next_send_seq
         if system_instruction is not None:
             turn.system_instruction = _extract_system_instruction(
                 system_instruction
             )
+            turn.system_instruction_rev = rev
         if tools is not None:
             turn.tool_definitions = _extract_tool_definitions(tools)
+            turn.tool_definitions_rev = rev
 
     def on_send(
         self,
@@ -1336,48 +1387,43 @@ class _LiveSessionTracker:
             turn_complete=bool(end_of_turn),
         )
 
+    def _consume_turn(
+        self,
+        turn: _OutboundTurn,
+        input_msgs: list[InputMessage],
+        capture_content: bool,
+    ) -> None:
+        self._flush_pending_audio(turn=turn, capture_content=capture_content)
+        if capture_content:
+            self._apply_session_context_update(turn)
+            _merge_input_messages(input_msgs, turn.input_messages)
+        turn.input_messages.clear()
+        turn.media_bytes = 0
+
     def _claim_outbound_inputs(
         self, capture_content: bool
     ) -> tuple[list[InputMessage], _OutboundTurn | None]:
         input_msgs: list[InputMessage] = []
         bound_turn: _OutboundTurn | None = None
+        claimed_any_input = False
 
-        if self._outbound_turns and self._outbound_turns[0].staged_sends:
-            # The earliest queued turn still has in-flight sends draining;
-            # claim ONLY this turn so subsequent turns' pre-write sends stay
-            # associated with their own outbound turns.
-            turn = self._outbound_turns.popleft()
-            self._flush_pending_audio(
-                turn=turn, capture_content=capture_content
-            )
-            if capture_content:
-                if turn.system_instruction is not None:
-                    self.system_instruction = list(turn.system_instruction)
-                if turn.tool_definitions is not None:
-                    self.tool_definitions = list(turn.tool_definitions)
-                _merge_input_messages(input_msgs, turn.input_messages)
-            turn.input_messages.clear()
-            turn.media_bytes = 0
-            bound_turn = turn
-        else:
-            # Consume leading fully-confirmed turns, stopping before any turn
-            # that still has unconfirmed in-flight sends.
-            while (
-                self._outbound_turns
-                and not self._outbound_turns[0].staged_sends
-            ):
+        while self._outbound_turns:
+            head = self._outbound_turns[0]
+            if head.staged_sends:
+                if claimed_any_input:
+                    # Do not bind a later turn's unconfirmed sends to a
+                    # generation that already claimed prior input.
+                    break
                 turn = self._outbound_turns.popleft()
-                self._flush_pending_audio(
-                    turn=turn, capture_content=capture_content
-                )
-                if capture_content:
-                    if turn.system_instruction is not None:
-                        self.system_instruction = list(turn.system_instruction)
-                    if turn.tool_definitions is not None:
-                        self.tool_definitions = list(turn.tool_definitions)
-                    _merge_input_messages(input_msgs, turn.input_messages)
-                turn.input_messages.clear()
-                turn.media_bytes = 0
+                self._consume_turn(turn, input_msgs, capture_content)
+                bound_turn = turn
+                break
+            turn = self._outbound_turns.popleft()
+            if turn.input_messages or turn.pending_audio_chunks:
+                claimed_any_input = True
+            self._consume_turn(turn, input_msgs, capture_content)
+            if turn.sealed:
+                break
 
         return input_msgs, bound_turn
 
@@ -1415,9 +1461,11 @@ class _LiveSessionTracker:
                 system_instruction=(
                     list(self.system_instruction) if capture_content else []
                 ),
+                system_instruction_rev=self._system_instruction_rev,
                 tool_definitions=(
                     list(self.tool_definitions) if capture_content else []
                 ),
+                tool_definitions_rev=self._tool_definitions_rev,
                 input_transcript_deltas=input_transcript_deltas,
                 bound_turn=bound_turn,
             )
@@ -1804,6 +1852,26 @@ class _LiveSessionTracker:
                     ),
                 )
 
+    def finalize_session(self, error: BaseException | None = None) -> None:
+        if self._session_finalized:
+            return
+        self._session_finalized = True
+        if error is not None:
+            self.on_session_error(error)
+        else:
+            self.on_session_close()
+        effective_error = error if error is not None else self.terminal_error
+        self._telemetry_handler.emit_realtime_session_ended(
+            self.provider,
+            request_model=self.request_model,
+            realtime_session_id=self.realtime_session_id,
+            server_address=self.server_address,
+            server_port=self.server_port,
+            error=effective_error,
+            error_type_resolver=resolve_error_type,
+            context=self.caller_context,
+        )
+
 
 async def _run_transactional_send(
     tracker: _LiveSessionTracker,
@@ -1856,6 +1924,7 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
     orig_send_tool_response = session.send_tool_response
     orig_send = getattr(session, "send", None)
     orig_send_context_update = getattr(session, "send_context_update", None)
+    orig_close = getattr(session, "close", None)
     orig_receive = session._receive
 
     ws: object = getattr(session, "_ws", None)
@@ -2037,6 +2106,24 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
 
         setattr(session, "send_context_update", wrapped_send_context_update)
 
+    if callable(orig_close):
+
+        @functools.wraps(orig_close)
+        async def wrapped_close(*args: object, **kwargs: object) -> object:
+            close_error: BaseException | None = None
+            try:
+                res = orig_close(*args, **kwargs)
+                if inspect.isawaitable(res):
+                    res = await res
+                return res
+            except BaseException as exc:
+                close_error = exc
+                raise
+            finally:
+                tracker.finalize_session(error=close_error)
+
+        setattr(session, "close", wrapped_close)
+
 
 @contextlib.asynccontextmanager
 async def _connect_context_manager(
@@ -2096,27 +2183,11 @@ async def _connect_context_manager(
     except BaseException as exc:
         session_error = exc
         if tracker is not None:
-            tracker.on_session_error(exc)
+            tracker.finalize_session(error=exc)
         raise
     finally:
         if session_started and tracker is not None:
-            if session_error is None:
-                tracker.on_session_close()
-            effective_error = (
-                session_error
-                if session_error is not None
-                else tracker.terminal_error
-            )
-            telemetry_handler.emit_realtime_session_ended(
-                provider,
-                request_model=request_model_name,
-                realtime_session_id=tracker.realtime_session_id,
-                server_address=server_address,
-                server_port=server_port,
-                error=effective_error,
-                error_type_resolver=resolve_error_type,
-                context=caller_context,
-            )
+            tracker.finalize_session(error=session_error)
 
 
 class _LiveMethodsSnapshot:
