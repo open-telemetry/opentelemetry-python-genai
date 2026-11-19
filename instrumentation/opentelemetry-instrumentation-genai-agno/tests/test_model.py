@@ -4492,3 +4492,553 @@ def test_gemini_provider_resolved_from_effective_client_settings(
     assert resolve_model_provider(none_override_model) == "gcp.gemini"
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
     assert resolve_model_provider(none_override_model) == "gcp.vertex_ai"
+
+
+def test_model_endpoint_omits_default_scheme_ports(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+) -> None:
+    """Explicit default ports (https:443, http:80) are omitted from server.port while non-default ports are preserved."""
+    import httpx
+    from agno.models.openai import OpenAIChat
+
+    payload = {
+        "id": "chatcmpl-default-port",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 3,
+            "total_tokens": 8,
+        },
+    }
+
+    def _make_http_client() -> httpx.Client:
+        return httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _req: httpx.Response(200, json=payload)
+            )
+        )
+
+    https_default_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        base_url="https://api.example.com:443/v1",
+        http_client=_make_http_client(),
+    )
+    https_default_model.response(messages=[Message(role="user", content="hi")])
+
+    http_default_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        base_url="http://plain.example.com:80/v1",
+        http_client=_make_http_client(),
+    )
+    http_default_model.response(messages=[Message(role="user", content="hi")])
+
+    custom_port_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        base_url="https://custom.example.com:8443/v1",
+        http_client=_make_http_client(),
+    )
+    custom_port_model.response(messages=[Message(role="user", content="hi")])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    https_span, http_span, custom_span = spans
+
+    assert https_span.attributes.get("server.address") == "api.example.com"
+    assert "server.port" not in https_span.attributes
+
+    assert http_span.attributes.get("server.address") == "plain.example.com"
+    assert "server.port" not in http_span.attributes
+
+    assert custom_span.attributes.get("server.address") == "custom.example.com"
+    assert custom_span.attributes.get("server.port") == 8443
+
+    metrics_data = metric_reader.get_metrics_data()
+    observed_ports_by_addr: dict[str, set[Any]] = {}
+    for rm in metrics_data.resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                if metric.name == "gen_ai.client.operation.duration":
+                    for dp in metric.data.data_points:
+                        addr = str(dp.attributes.get("server.address"))
+                        observed_ports_by_addr.setdefault(addr, set()).add(
+                            dp.attributes.get("server.port")
+                        )
+    assert observed_ports_by_addr["api.example.com"] == {None}
+    assert observed_ports_by_addr["plain.example.com"] == {None}
+    assert observed_ports_by_addr["custom.example.com"] == {8443}
+
+
+def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Abandoning a partially read public response_stream/aresponse_stream after a bare-iteration caller error ends the span with ERROR and error.type."""
+    import gc
+
+    from opentelemetry.semconv._incubating.attributes.error_attributes import (
+        ErrorTypeValues,
+    )
+
+    class _MultiChunkModel(MockModel):
+        def invoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> Iterator[ModelResponse]:
+            yield ModelResponse(content="chunk 1")
+            yield ModelResponse(content="chunk 2")
+
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            yield ModelResponse(content="async chunk 1")
+            yield ModelResponse(content="async chunk 2")
+
+    model = _MultiChunkModel(id="abandon-stream-model", provider="OpenAI")
+
+    def _run_sync_bare_error() -> None:
+        with pytest.raises(RuntimeError, match="caller sync failure"):
+            for chunk in model.response_stream(
+                messages=[Message(role="user", content="hi")]
+            ):
+                if getattr(chunk, "content", None):
+                    raise RuntimeError("caller sync failure")
+
+    _run_sync_bare_error()
+    gc.collect()
+    gc.collect()
+
+    sync_spans = span_exporter.get_finished_spans()
+    assert len(sync_spans) == 1
+    assert sync_spans[0].status.status_code == StatusCode.ERROR
+    assert sync_spans[0].attributes.get(ERROR_TYPE) == (
+        ErrorTypeValues.OTHER.value
+    )
+    assert (
+        sync_spans[0].attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM)
+        is True
+    )
+
+    span_exporter.clear()
+
+    async def _run_async_bare_error() -> None:
+        with pytest.raises(RuntimeError, match="caller async failure"):
+            async for chunk in model.aresponse_stream(
+                messages=[Message(role="user", content="hi async")]
+            ):
+                if getattr(chunk, "content", None):
+                    raise RuntimeError("caller async failure")
+
+    asyncio.run(_run_async_bare_error())
+    gc.collect()
+    gc.collect()
+
+    async_spans = span_exporter.get_finished_spans()
+    assert len(async_spans) == 1
+    assert async_spans[0].status.status_code == StatusCode.ERROR
+    assert async_spans[0].attributes.get(ERROR_TYPE) == (
+        ErrorTypeValues.OTHER.value
+    )
+    assert (
+        async_spans[0].attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM)
+        is True
+    )
+
+
+def test_model_async_stream_context_manager_preserves_body_error_when_delegate_cleanup_cancelled(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """When async with model.aresponse_stream(...) body raises ValueError and delegate cleanup raises CancelledError, ValueError is preserved and all delegates close."""
+    from agno.models.base import Model
+
+    events: list[str] = []
+
+    class _BaseCancellingDelegateModel(Model):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="unused")
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="unused")
+
+        def invoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> Iterator[ModelResponse]:
+            yield ModelResponse(content="unused")
+
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            try:
+                yield ModelResponse(content="chunk1")
+                yield ModelResponse(content="chunk2")
+            finally:
+                await asyncio.sleep(0)
+                events.append("base_cancelled")
+                raise asyncio.CancelledError("delegate close cancelled")
+
+        def _parse_provider_response(
+            self, response: Any, **kwargs: Any
+        ) -> ModelResponse:
+            return response
+
+        def _parse_provider_response_delta(
+            self, response: Any
+        ) -> ModelResponse:
+            return response
+
+    class _OuterDelegateModel(_BaseCancellingDelegateModel):
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            try:
+                async for delta in super().ainvoke_stream(*args, **kwargs):
+                    yield delta
+            finally:
+                await asyncio.sleep(0)
+                events.append("outer_closed")
+
+    async def _run() -> None:
+        # 1. Body raises ValueError while inner delegate cleanup raises CancelledError:
+        #    ValueError must survive and every delegate must still close.
+        model = _OuterDelegateModel(id="ctx-cancel-body", provider="Custom")
+        with pytest.raises(ValueError, match="caller body failure"):
+            async with model.aresponse_stream(
+                messages=[Message(role="user", content="hi")]
+            ) as stream:
+                async for chunk in stream:
+                    if getattr(chunk, "content", None):
+                        raise ValueError("caller body failure")
+        assert events == ["base_cancelled", "outer_closed"]
+
+        # 2. Normal exit (no body exception) still propagates CancelledError from cleanup
+        #    and closes all delegates.
+        events.clear()
+        model2 = _OuterDelegateModel(id="ctx-cancel-normal", provider="Custom")
+        with pytest.raises(
+            asyncio.CancelledError, match="delegate close cancelled"
+        ):
+            async with model2.aresponse_stream(
+                messages=[Message(role="user", content="hi")]
+            ) as stream2:
+                async for chunk in stream2:
+                    if getattr(chunk, "content", None):
+                        break
+        assert events == ["base_cancelled", "outer_closed"]
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes.get(ERROR_TYPE) == "ValueError"
+    assert spans[1].status.status_code == StatusCode.ERROR
+    assert (
+        spans[1].attributes.get(ERROR_TYPE)
+        == "asyncio.exceptions.CancelledError"
+    )
+
+
+def test_recorded_openai_chat_streaming_and_cached_tokens(
+    instrument_agno_content_capture,
+    span_exporter,
+    vcr,
+) -> None:
+    """Replay recorded OpenAI Chat Completions responses through real OpenAIChat sync/async streaming and cached-token paths."""
+    import openai
+    from agno.models.openai import OpenAIChat
+
+    # 1. Sync and async streaming replay with real reasoning tokens
+    with vcr.use_cassette("openai_chat_streaming_reasoning.yaml"):
+        sync_model = OpenAIChat(
+            id="gpt-5.1",
+            client=openai.OpenAI(api_key="test_openai_api_key"),
+        )
+        sync_chunks = list(
+            sync_model.response_stream(
+                messages=[
+                    Message(
+                        role="user",
+                        content="A farmer has 17 sheep and all but 9 run away. How many sheep remain? Explain your reasoning.",
+                    )
+                ]
+            )
+        )
+    assert any(getattr(c, "content", None) for c in sync_chunks)
+
+    async def _run_async_chat_stream() -> list[Any]:
+        async_model = OpenAIChat(
+            id="gpt-5.1",
+            async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
+        )
+        collected: list[Any] = []
+        async for chunk in async_model.aresponse_stream(
+            messages=[
+                Message(
+                    role="user",
+                    content="A farmer has 17 sheep and all but 9 run away. How many sheep remain? Explain your reasoning.",
+                )
+            ]
+        ):
+            collected.append(chunk)
+        return collected
+
+    with vcr.use_cassette("openai_chat_streaming_reasoning.yaml"):
+        async_chunks = asyncio.run(_run_async_chat_stream())
+    assert any(getattr(c, "content", None) for c in async_chunks)
+
+    emits_response_id = any(
+        isinstance(getattr(c, "provider_data", None), dict)
+        and c.provider_data.get("id")
+        for c in sync_chunks
+    )
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    for span in spans:
+        attrs = span.attributes
+        assert attrs.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
+        assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "openai"
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == "gpt-5.1"
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 29
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 92
+        assert (
+            attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)
+            == 10
+        )
+        assert attrs.get("server.address") == "api.openai.com"
+        assert "server.port" not in attrs
+        if emits_response_id:
+            assert (
+                attrs.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+                == "chatcmpl-EMxk4dQaiUamioadk6bK1Y462yRui"
+            )
+        output_msgs: Any = attrs.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        assert (
+            output_msgs
+            and "9 sheep remain" in output_msgs[0]["parts"][0]["content"]
+        )
+
+    # 2. Recorded non-streaming + streaming cached prompt tokens
+    span_exporter.clear()
+    with vcr.use_cassette("openai_chat_cached_tokens.yaml"):
+        cached_model = OpenAIChat(
+            id="gpt-4o-mini",
+            max_tokens=8,
+            client=openai.OpenAI(api_key="test_openai_api_key"),
+        )
+        non_stream_resp = cached_model.response(
+            messages=[Message(role="user", content="Reply with OK only.")]
+        )
+        stream_chunks = list(
+            cached_model.response_stream(
+                messages=[Message(role="user", content="Reply with OK only.")]
+            )
+        )
+    assert non_stream_resp.content == "OK"
+    assert any(getattr(c, "content", None) for c in stream_chunks)
+
+    cached_spans = span_exporter.get_finished_spans()
+    assert len(cached_spans) == 2
+    for span, expected_stream in zip(cached_spans, (None, True), strict=True):
+        attrs = span.attributes
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1457
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 2
+        assert (
+            attrs.get(GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS)
+            == 1408
+        )
+        assert (
+            attrs.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) == expected_stream
+        )
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 8
+        assert attrs.get("server.address") == "api.openai.com"
+        assert "server.port" not in attrs
+
+
+def test_recorded_openai_responses_streaming_and_tool_calling(
+    instrument_agno_content_capture,
+    span_exporter,
+    vcr,
+) -> None:
+    """Replay recorded OpenAI Responses sync/async streams and two-turn tool calls through real OpenAIResponses."""
+    import openai
+    from agno.models.openai.responses import OpenAIResponses
+    from agno.tools.function import Function
+
+    # 1. Sync and async streaming replay
+    with vcr.use_cassette("openai_responses_streaming.yaml"):
+        sync_model = OpenAIResponses(
+            id="gpt-4o-mini",
+            client=openai.OpenAI(api_key="test_openai_api_key"),
+        )
+        list(
+            sync_model.response_stream(
+                messages=[Message(role="user", content="Say this is a test")]
+            )
+        )
+
+    async def _run_async_responses_stream() -> None:
+        async_model = OpenAIResponses(
+            id="gpt-4o-mini",
+            async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
+        )
+        async for _ in async_model.aresponse_stream(
+            messages=[Message(role="user", content="Say this is a test")]
+        ):
+            pass
+
+    with vcr.use_cassette("openai_responses_streaming.yaml"):
+        asyncio.run(_run_async_responses_stream())
+
+    stream_spans = span_exporter.get_finished_spans()
+    assert len(stream_spans) == 2
+    for span in stream_spans:
+        attrs = span.attributes
+        assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "openai"
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
+        assert (
+            attrs.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "resp_048385de343c399f006a2e1ac3c6e881a0b3e7d86be0a3aa51"
+        )
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 22
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 6
+        assert attrs.get("server.address") == "api.openai.com"
+        assert "server.port" not in attrs
+        output_msgs: Any = attrs.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        assert output_msgs[0]["parts"][0]["content"] == "This is a test."
+
+    # 2. Recorded two-turn Responses tool loop with distinct fc_* and call_* IDs
+    span_exporter.clear()
+
+    def get_current_weather(location: str) -> str:
+        """Get the current weather in a given location."""
+        if "Seattle" in location:
+            return '{"location":"Seattle, WA","temperature":58,"unit":"F","conditions":"rain"}'
+        return '{"location":"San Francisco, CA","temperature":65,"unit":"F","conditions":"fog"}'
+
+    with vcr.use_cassette("openai_responses_tool_calling.yaml"):
+        tool_model = OpenAIResponses(
+            id="gpt-4o-mini",
+            client=openai.OpenAI(api_key="test_openai_api_key"),
+        )
+        resp = tool_model.response(
+            messages=[
+                Message(
+                    role="user",
+                    content="What's the weather in Seattle and San Francisco today?",
+                )
+            ],
+            tools=[Function.from_callable(get_current_weather)],
+        )
+    assert "Seattle, WA" in str(resp.content)
+
+    chat_spans = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
+    ]
+    assert len(chat_spans) == 2
+    turn1, turn2 = chat_spans
+    assert (
+        turn1.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp_06846aae2b482d8e006a9b1773c4ec87d08182937f685f261f"
+    )
+    assert (
+        turn2.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp_06846aae2b482d8e006a9b1775645c87d08005ec0fb2110764"
+    )
+    expected_call_ids = [
+        "call_krAHY11uDHrSPJIjNZLF7RHU",
+        "call_fr3gmaw1ffbKMC3N64V6Iux4",
+    ]
+    turn1_call_ids = [
+        part["id"]
+        for msg in (
+            turn1.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES) or ()
+        )
+        for part in msg["parts"]
+        if part.get("type") == "tool_call"
+    ]
+    turn2_call_ids = [
+        part["id"]
+        for msg in (
+            turn2.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES) or ()
+        )
+        for part in msg["parts"]
+        if part.get("type") == "tool_call"
+    ]
+    turn2_result_ids = [
+        part["id"]
+        for msg in (
+            turn2.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES) or ()
+        )
+        for part in msg["parts"]
+        if part.get("type") == "tool_call_response"
+    ]
+    assert turn1_call_ids == expected_call_ids
+    assert turn2_call_ids == expected_call_ids
+    assert turn2_result_ids == expected_call_ids
+
+
+def test_recorded_gemini_generate_content(
+    instrument_agno_content_capture,
+    span_exporter,
+    vcr,
+    monkeypatch,
+) -> None:
+    """Replay a recorded Google Gemini generateContent response through the real Gemini adapter."""
+    from agno.models.google import Gemini
+    from google import genai
+    from google.genai.types import HttpOptions
+
+    for env_var in (
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+
+    with vcr.use_cassette("gemini_generate_content.yaml"):
+        model = Gemini(
+            id="gemini-2.5-flash",
+            client=genai.Client(
+                api_key="test_google_genai_api_key",
+                http_options=HttpOptions(api_version="v1beta"),
+            ),
+        )
+        resp = model.response(
+            messages=[Message(role="user", content="Say this is a test")]
+        )
+    assert resp.content == "This is a test."
+
+    (span,) = span_exporter.get_finished_spans()
+    attrs = span.attributes
+    assert attrs.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
+    assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "gcp.gemini"
+    assert (
+        attrs.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == "gemini-2.5-flash"
+    )
+    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 6
+    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 25
+    if getattr(resp.response_usage, "reasoning_tokens", 0):
+        assert (
+            attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)
+            == 20
+        )
+    assert attrs.get("server.address") == "generativelanguage.googleapis.com"
+    assert "server.port" not in attrs
+    output_msgs: Any = attrs.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+    assert output_msgs[0]["parts"][0]["content"] == "This is a test."
