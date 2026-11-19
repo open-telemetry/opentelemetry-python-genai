@@ -594,11 +594,12 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         A suppressed invocation never attached itself to the context, so
         activating it here would reinstate the span it captured at creation --
         possibly an already ended outer span -- instead of leaving the caller's
-        current context alone. Matches ``_StreamTelemetry._execution_context``
-        in util-genai.
+        current context alone. Mirrors ``_StreamTelemetry._execution_context``
+        in util-genai; the invocation type is known here, so ``_suspended`` is
+        accessed directly rather than via ``getattr``.
         """
         invocation = self._self_invocation
-        if not getattr(invocation, "_suspended", False):
+        if not invocation._suspended:
             return nullcontext()
         return invocation.activate()
 
