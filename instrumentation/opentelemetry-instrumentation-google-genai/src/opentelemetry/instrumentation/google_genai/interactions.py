@@ -15,7 +15,8 @@ from collections.abc import (
     Sequence,
 )
 from sys import float_info
-from typing import Any, cast
+from types import UnionType
+from typing import Annotated, Any, Union, cast, get_args, get_origin
 
 try:
     # Google GenAI < 2.9.0
@@ -26,6 +27,15 @@ try:
     )
     from google.genai._interactions.types.content import Content
     from google.genai._interactions.types.content_param import ContentParam
+    from google.genai._interactions.types.document_content import (
+        DocumentContent,
+    )
+    from google.genai._interactions.types.function_call_step import (
+        FunctionCallStep,
+    )
+    from google.genai._interactions.types.function_result_step import (
+        FunctionResultStep,
+    )
     from google.genai._interactions.types.interaction import Interaction, Usage
     from google.genai._interactions.types.interaction_create_params import (
         Input,
@@ -34,8 +44,11 @@ try:
         InteractionSSEEvent,
     )
     from google.genai._interactions.types.step import Step
+    from google.genai._interactions.types.text_content import TextContent
+    from google.genai._interactions.types.user_input_step import UserInputStep
 
     _HAS_INTERACTIONS = True
+    _MODEL_DUMP_EXCLUDE_UNSET = True
 except ImportError:
     try:
         # Google GenAI >= 2.9.0
@@ -52,18 +65,25 @@ except ImportError:
         from google.genai._gaos.types.interactions import (
             Content,
             ContentParam,
+            DocumentContent,
+            FunctionCallStep,
+            FunctionResultStep,
             Interaction,
             InteractionSSEEvent,
             Step,
+            TextContent,
             Usage,
+            UserInputStep,
         )
         from google.genai._gaos.types.interactions import (
             InteractionsInput as Input,
         )
 
         _HAS_INTERACTIONS = True
+        _MODEL_DUMP_EXCLUDE_UNSET = False
     except ImportError:
         _HAS_INTERACTIONS = False
+        _MODEL_DUMP_EXCLUDE_UNSET = False
 
         # Placeholders for older versions where interactions are not supported
         class InteractionsResource:
@@ -85,10 +105,32 @@ except ImportError:
             total_cached_tokens = None
 
         class Content:
-            type: str | None = None
-            text: str | None = None
+            pass
+
+        class TextContent:
+            type: str = "text"
+            text: str = ""
+
+        class DocumentContent:
+            type: str = "document"
+            data: str | None = None
             mime_type: str | None = None
             uri: str | None = None
+
+        class UserInputStep:
+            type: str = "user_input"
+            content: Sequence[Content] | None = None
+
+        class FunctionCallStep:
+            type: str = "function_call"
+            id: str = ""
+            name: str = ""
+            arguments: dict[str, Any]
+
+        class FunctionResultStep:
+            type: str = "function_result"
+            call_id: str = ""
+            result: Any = None
 
         ContentParam = dict[str, object]
 
@@ -130,6 +172,7 @@ from opentelemetry.util.genai.stream import (
     SyncStreamWrapper,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
     Error,
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -147,8 +190,28 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     UriPart,
 )
+from opentelemetry.util.genai.utils import decode_base64
 
 _logger = logging.getLogger(__name__)
+
+
+def _union_model_types(annotation: object) -> tuple[type[object], ...]:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _union_model_types(get_args(annotation)[0])
+    if origin in (Union, UnionType):
+        models: list[type[object]] = []
+        for arg in get_args(annotation):
+            models.extend(_union_model_types(arg))
+        return tuple(models)
+    if isinstance(annotation, type):
+        return (annotation,)
+    return ()
+
+
+_STEP_MODEL_TYPES: tuple[type[object], ...] = (
+    _union_model_types(Step) if _HAS_INTERACTIONS else ()
+)
 
 # Interaction.status values that differ from the gen_ai.response.status value
 # set. `in_progress`, `completed`, `failed`, `cancelled` and `incomplete` are
@@ -297,11 +360,6 @@ _OUTPUT_TOOL_STEP_TYPES = {
     *_SERVER_TOOL_RESPONSE_NAMES,
 }
 
-_TOOL_STEP_TYPES = {
-    "function_result",
-    *_OUTPUT_TOOL_STEP_TYPES,
-}
-
 
 def _to_server_tool_part(
     item: Step | dict[str, object],
@@ -342,22 +400,19 @@ def _to_server_tool_part(
 def _interaction_output_item_to_part(
     item: Step | dict[str, object],
 ) -> MessagePart | None:
-    if isinstance(item, dict):
-        item_type = item.get("type")
+    if isinstance(item, FunctionCallStep):
+        return ToolCallRequestPart(
+            id=item.id if isinstance(item.id, str) else None,
+            name=item.name if isinstance(item.name, str) else "",
+            arguments=_as_json_value(item.arguments),
+        )
+    if isinstance(item, dict) and item.get("type") == "function_call":
         item_id = item.get("id")
         name = item.get("name")
-        arguments = item.get("arguments")
-    else:
-        item_type = item.type
-        item_id = item.id if item_type == "function_call" else None
-        name = item.name if item_type == "function_call" else None
-        arguments = item.arguments if item_type == "function_call" else None
-
-    if item_type == "function_call":
         return ToolCallRequestPart(
             id=item_id if isinstance(item_id, str) else None,
             name=name if isinstance(name, str) else "",
-            arguments=_as_json_value(arguments),
+            arguments=_as_json_value(item.get("arguments")),
         )
     return _to_server_tool_part(item)
 
@@ -365,17 +420,42 @@ def _interaction_output_item_to_part(
 def _interaction_item_to_part(
     item: Step | dict[str, object],
 ) -> MessagePart | None:
-    item_type = item.get("type") if isinstance(item, dict) else item.type
-    if item_type == "function_result":
-        call_id = (
-            item.get("call_id") if isinstance(item, dict) else item.call_id
+    if isinstance(item, FunctionResultStep):
+        return ToolCallResponsePart(
+            id=item.call_id if isinstance(item.call_id, str) else None,
+            response=_as_json_value(item.result),
         )
-        result = item.get("result") if isinstance(item, dict) else item.result
+    if isinstance(item, dict) and item.get("type") == "function_result":
+        call_id = item.get("call_id")
         return ToolCallResponsePart(
             id=call_id if isinstance(call_id, str) else None,
-            response=_as_json_value(result),
+            response=_as_json_value(item.get("result")),
         )
     return _interaction_output_item_to_part(item)
+
+
+def _document_to_part(
+    *,
+    mime_type: str | None,
+    uri: str | None,
+    data: str | None,
+) -> MessagePart | None:
+    if uri:
+        return UriPart(
+            mime_type=mime_type,
+            modality=Modality.DOCUMENT,
+            uri=uri,
+        )
+    if data:
+        decoded = decode_base64(data)
+        if decoded is None:
+            return None
+        return BlobPart(
+            mime_type=mime_type,
+            modality=Modality.DOCUMENT,
+            content=decoded,
+        )
+    return None
 
 
 def _content_item_to_part(
@@ -383,25 +463,28 @@ def _content_item_to_part(
 ) -> MessagePart | None:
     if isinstance(item, str):
         return TextPart(content=item)
+    if isinstance(item, TextContent):
+        return TextPart(content=item.text)
+    if isinstance(item, DocumentContent):
+        return _document_to_part(
+            mime_type=item.mime_type,
+            uri=item.uri,
+            data=item.data,
+        )
     if isinstance(item, dict):
         item_type = item.get("type")
-        text = item.get("text") if item_type == "text" else None
-        mime_type = item.get("mime_type") if item_type == "document" else None
-        uri = item.get("uri") if item_type == "document" else None
-    else:
-        item_type = item.type
-        text = item.text if item_type == "text" else None
-        mime_type = item.mime_type if item_type == "document" else None
-        uri = item.uri if item_type == "document" else None
-
-    if item_type == "text":
-        return TextPart(content=text if isinstance(text, str) else "")
-    if item_type == "document":
-        return UriPart(
-            mime_type=mime_type if isinstance(mime_type, str) else None,
-            modality=Modality.DOCUMENT,
-            uri=uri if isinstance(uri, str) else "",
-        )
+        if item_type == "text":
+            text = item.get("text")
+            return TextPart(content=text if isinstance(text, str) else "")
+        if item_type == "document":
+            mime_type = item.get("mime_type")
+            uri = item.get("uri")
+            data = item.get("data")
+            return _document_to_part(
+                mime_type=mime_type if isinstance(mime_type, str) else None,
+                uri=uri if isinstance(uri, str) else None,
+                data=data if isinstance(data, str) else None,
+            )
     return None
 
 
@@ -423,7 +506,9 @@ def _interactions_input_to_messages(
             )
         ]
 
-    if not isinstance(input_data, Sequence):
+    if isinstance(input_data, (bytes, bytearray)) or not isinstance(
+        input_data, Sequence
+    ):
         input_data = [input_data]
 
     parts: list[MessagePart] = []
@@ -432,29 +517,49 @@ def _interactions_input_to_messages(
             parts.append(TextPart(content=item))
             continue
 
-        item_type = item.get("type") if isinstance(item, dict) else item.type
-        message_part = None
         if isinstance(item, dict):
-            message_part = _interaction_item_to_part(item)
-        elif item_type in _TOOL_STEP_TYPES:
-            message_part = _interaction_item_to_part(cast(Step, item))
+            item_dict = cast(dict[str, object], item)
+            message_part = _interaction_item_to_part(item_dict)
+            if message_part is not None:
+                parts.append(message_part)
+                continue
+            item_type = item_dict.get("type")
+            if item_type == "user_input":
+                content = item_dict.get("content")
+                if isinstance(content, Sequence) and not isinstance(
+                    content, (str, bytes, bytearray)
+                ):
+                    for sub_item in content:
+                        if isinstance(sub_item, dict):
+                            part = _content_item_to_part(
+                                cast(dict[str, object], sub_item)
+                            )
+                        elif isinstance(
+                            sub_item, (str, TextContent, DocumentContent)
+                        ):
+                            part = _content_item_to_part(sub_item)
+                        else:
+                            part = None
+                        if part is not None:
+                            parts.append(part)
+            elif item_type in ("text", "document"):
+                if part := _content_item_to_part(item_dict):
+                    parts.append(part)
+            continue
 
-        if message_part is not None:
-            parts.append(message_part)
-        elif item_type == "user_input":
-            content = (
-                item.get("content") if isinstance(item, dict) else item.content
-            )
-            if isinstance(content, Sequence) and not isinstance(
-                content, (str, bytes)
-            ):
-                for sub_item in content:
-                    if part := _content_item_to_part(sub_item):
-                        parts.append(part)
-        elif item_type in ("text", "document"):
-            if part := _content_item_to_part(
-                cast("Content | ContentParam | dict[str, object]", item)
-            ):
+        if isinstance(item, UserInputStep):
+            for sub_item in item.content or ():
+                if part := _content_item_to_part(sub_item):
+                    parts.append(part)
+            continue
+
+        if isinstance(item, (TextContent, DocumentContent)):
+            if part := _content_item_to_part(item):
+                parts.append(part)
+            continue
+
+        if isinstance(item, _STEP_MODEL_TYPES):
+            if part := _interaction_item_to_part(cast(Step, item)):
                 parts.append(part)
 
     return [InputMessage(role=Role.USER.value, parts=parts)]
@@ -772,7 +877,10 @@ def _as_payload(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return {key: _as_json_value(item) for key, item in value.items()}
     if hasattr(value, "model_dump"):
-        dumped = value.model_dump(exclude_none=True, mode="json")
+        dumped = value.model_dump(
+            exclude_unset=_MODEL_DUMP_EXCLUDE_UNSET,
+            mode="json",
+        )
         return dumped if isinstance(dumped, dict) else None
     return None
 

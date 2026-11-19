@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import json
 import os
 from collections.abc import Iterator
@@ -24,7 +25,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.test_util_genai.instrumentor import instrument
-from opentelemetry.trace import StatusCode, get_tracer_provider
+from opentelemetry.trace import (
+    StatusCode,
+    get_current_span,
+    get_tracer_provider,
+)
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -1088,6 +1093,10 @@ def test_sync_interactions_get_resumed_stream(
     )
 
 
+_INLINE_DOCUMENT_BYTES = b"%PDF-1.4\ninline document"
+_INLINE_DOCUMENT_B64 = base64.b64encode(_INLINE_DOCUMENT_BYTES).decode("ascii")
+
+
 def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
     try:
         from google.genai._interactions.types import (
@@ -1098,15 +1107,20 @@ def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
             UserInputStep,
         )
         from google.genai._interactions.types.tool import GoogleSearch
+
+        null_result: Any = {"answer": None, "ok": True}
     except ImportError:
         from google.genai._gaos.types.interactions import (
             DocumentContent,
             Function,
             FunctionResultStep,
+            FunctionResultStepResult,
             GoogleSearch,
             TextContent,
             UserInputStep,
         )
+
+        null_result = FunctionResultStepResult(answer=None, ok=True)
 
     steps: list[Any] = [
         UserInputStep(
@@ -1117,6 +1131,11 @@ def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
                     type="document",
                     mime_type="application/pdf",
                     uri="https://example.com/doc.pdf",
+                ),
+                DocumentContent(
+                    type="document",
+                    mime_type="application/pdf",
+                    data=_INLINE_DOCUMENT_B64,
                 ),
             ],
         ),
@@ -1129,6 +1148,11 @@ def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
                     "mime_type": "application/pdf",
                     "uri": "https://example.com/london.pdf",
                 },
+                {
+                    "type": "document",
+                    "mime_type": "application/pdf",
+                    "data": _INLINE_DOCUMENT_B64,
+                },
             ],
         },
         FunctionResultStep(
@@ -1136,6 +1160,12 @@ def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
             call_id="call-123",
             name="get_weather",
             result=[TextContent(type="text", text="22C and Sunny")],
+        ),
+        FunctionResultStep(
+            type="function_result",
+            call_id="call-456",
+            name="get_alert",
+            result=null_result,
         ),
     ]
     tools: list[Any] = [
@@ -1216,6 +1246,12 @@ def _assert_create_tool_call_and_steps_span(
                     "mime_type": "application/pdf",
                     "uri": "https://example.com/doc.pdf",
                 },
+                {
+                    "type": "blob",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "content": _INLINE_DOCUMENT_BYTES,
+                },
                 {"type": "text", "content": "And in London?"},
                 {
                     "type": "uri",
@@ -1224,9 +1260,20 @@ def _assert_create_tool_call_and_steps_span(
                     "uri": "https://example.com/london.pdf",
                 },
                 {
+                    "type": "blob",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "content": _INLINE_DOCUMENT_BYTES,
+                },
+                {
                     "type": "tool_call_response",
                     "id": "call-123",
                     "response": [{"type": "text", "text": "22C and Sunny"}],
+                },
+                {
+                    "type": "tool_call_response",
+                    "id": "call-456",
+                    "response": {"answer": None, "ok": True},
                 },
             ],
         }
@@ -1249,6 +1296,66 @@ def _assert_create_tool_call_and_steps_span(
             ],
         }
     ]
+
+
+def _assert_malformed_input_span(
+    otel_mocker: OTelMocker, exc: BaseException, content_mode: str
+) -> None:
+    assert not isinstance(exc, AttributeError)
+    assert not get_current_span().get_span_context().is_valid
+    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["error.type"] != "AttributeError"
+    if content_mode == "no_content_capture":
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    else:
+        assert get_content_attribute(
+            span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+        ) == [{"role": "user", "parts": []}]
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_malformed_input")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_malformed_input(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    with pytest.raises(Exception) as exc_info:
+        client.interactions.create(
+            model="gemini-2.5-flash",
+            input=[None, {"type": "user_input", "content": [None]}],
+        )
+
+    _assert_malformed_input_span(otel_mocker, exc_info.value, content_mode)
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_malformed_input")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_malformed_input(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    with pytest.raises(Exception) as exc_info:
+        await client.aio.interactions.create(
+            model="gemini-2.5-flash",
+            input=[None, {"type": "user_input", "content": [None]}],
+        )
+
+    _assert_malformed_input_span(otel_mocker, exc_info.value, content_mode)
 
 
 @pytest.mark.vcr
