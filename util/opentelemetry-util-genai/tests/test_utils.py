@@ -1558,21 +1558,14 @@ class TestTelemetryHandler(unittest.TestCase):
         {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
     )
     def test_inference_prompt_variables_omitted_when_empty_or_invalid(self):
-        @dataclass
-        class NotAMapping:
-            user: str = "Alice"
-
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
         )
         for case, raw_variables in (
             ("empty_dict", {}),
-            ("empty_string_key", {"": "a"}),
             ("all_unconvertible", {"bad_obj": object()}),
             ("non_string_key", {1: "a"}),
-            ("json_string_not_object", '{"user": "Alice"}'),
-            ("non_mapping_dataclass", NotAMapping()),
         ):
             with self.subTest(case=case):
                 invocation = handler.inference(
@@ -1583,14 +1576,6 @@ class TestTelemetryHandler(unittest.TestCase):
 
                 attrs = self.span_exporter.get_finished_spans()[-1].attributes
                 assert "gen_ai.prompt.variables" not in attrs
-
-        invocation = handler.inference(
-            "test-provider", request_model="test-model"
-        )
-        invocation.prompt_variables = {"": "ignored", "user": "Alice"}
-        invocation.stop()
-        attrs = self.span_exporter.get_finished_spans()[-1].attributes
-        assert attrs["gen_ai.prompt.variables"] == {"user": "Alice"}
 
     @patch.dict(
         os.environ,

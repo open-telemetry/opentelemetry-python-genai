@@ -56,7 +56,7 @@ from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
     object_to_any_value,
 )
-from opentelemetry.util.types import AnyValue, AttributeValue
+from opentelemetry.util.types import AttributeValue
 
 _GEN_AI_PROMPT_VARIABLES: Final = "gen_ai.prompt.variables"
 
@@ -555,20 +555,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 detach(token)
 
 
-def _prompt_variables_to_any_value(
-    prompt_variables: object,
-) -> AnyValue | None:
-    if not isinstance(prompt_variables, Mapping):
-        return None
-    converted = object_to_any_value(
-        cast(Mapping[object, object], prompt_variables)
-    )
-    if not isinstance(converted, Mapping):
-        return None
-    cleaned = {k: v for k, v in converted.items() if k}
-    return cleaned or None
-
-
 def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
@@ -641,7 +627,9 @@ def get_content_attributes(
         ),
         (
             _GEN_AI_PROMPT_VARIABLES,
-            _prompt_variables_to_any_value(prompt_variables),
+            (object_to_any_value(prompt_variables) or None)
+            if prompt_variables
+            else None,
         ),
     )
     return {key: value for key, value in optional_attrs if value is not None}

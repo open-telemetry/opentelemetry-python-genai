@@ -351,13 +351,15 @@ def extract_converse_request(
                 invocation.output_type = text_format_str
 
     prompt_variables = kwargs.get("promptVariables")
-    if capture_content and _is_dict(prompt_variables):
-        variables: dict[str, str] = {}
-        for var_name, var_val in prompt_variables.items():
-            if _is_dict(var_val) and "text" in var_val:
-                variables[var_name] = str(var_val["text"])
-        if variables:
-            invocation.prompt_variables = variables
+    if capture_content and _is_dict(prompt_variables) and prompt_variables:
+        invocation.prompt_variables = {
+            var_name: (
+                str(var_val["text"])
+                if _is_dict(var_val) and "text" in var_val
+                else var_val
+            )
+            for var_name, var_val in prompt_variables.items()
+        }
 
     # system instruction
     raw_system = kwargs.get("system")

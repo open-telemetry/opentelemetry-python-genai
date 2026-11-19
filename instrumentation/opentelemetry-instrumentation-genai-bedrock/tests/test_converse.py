@@ -591,6 +591,8 @@ def test_extract_converse_request_guardrail_and_prompt_variables(
                 "promptVariables": {
                     "user_name": {"text": "Alice"},
                     "language": {"text": "French"},
+                    "structured": {"items": [1, 2]},
+                    "count": 3,
                 },
             },
             invocation,
@@ -605,6 +607,8 @@ def test_extract_converse_request_guardrail_and_prompt_variables(
         assert invocation.prompt_variables == {
             "user_name": "Alice",
             "language": "French",
+            "structured": {"items": [1, 2]},
+            "count": 3,
         }
 
 
