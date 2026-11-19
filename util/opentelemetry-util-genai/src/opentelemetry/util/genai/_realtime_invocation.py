@@ -38,23 +38,31 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.types import AttributeValue
 
-REALTIME_INFERENCE_OPERATION_NAME: Final = "realtime_inference"
-USER_SPEECH_OPERATION_NAME: Final = "user_speech"
-REALTIME_SESSION_STARTED_EVENT_NAME: Final = (
+# TODO: Migrate to gen_ai_attributes constants once available in the semconv
+# package. Added to the GenAI semantic conventions in
+# https://github.com/open-telemetry/semantic-conventions-genai/pull/394.
+_REALTIME_INFERENCE_OPERATION_NAME: Final = "realtime_inference"
+_USER_SPEECH_OPERATION_NAME: Final = "user_speech"
+_REALTIME_SESSION_STARTED_EVENT_NAME: Final = (
     "gen_ai.client.realtime_session.started"
 )
-REALTIME_SESSION_ENDED_EVENT_NAME: Final = (
+_REALTIME_SESSION_ENDED_EVENT_NAME: Final = (
     "gen_ai.client.realtime_session.ended"
 )
-GEN_AI_REALTIME_SESSION_ID: Final = "gen_ai.realtime_session.id"
+_GEN_AI_REALTIME_SESSION_ID: Final = "gen_ai.realtime_session.id"
 
 
 class RealtimeInferenceInvocation(InferenceInvocation):
     """Represents a single realtime inference generation turn.
 
     Use ``handler.realtime_inference(provider)`` rather than constructing this directly.
+
+    Reference: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-realtime.md#realtime-content-generation
+
     Unlike ``InferenceInvocation``, ``realtime_inference`` does not emit a
-    ``gen_ai.client.inference.operation.details`` event.
+    ``gen_ai.client.inference.operation.details`` event. In addition to the
+    inference attributes, sets ``gen_ai.realtime_session.id`` when
+    ``realtime_session_id`` is provided.
     """
 
     def __init__(
@@ -86,7 +94,7 @@ class RealtimeInferenceInvocation(InferenceInvocation):
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
-            operation_name=REALTIME_INFERENCE_OPERATION_NAME,
+            operation_name=_REALTIME_INFERENCE_OPERATION_NAME,
             error_type_resolver=error_type_resolver,
             content_capturing_mode=content_capturing_mode,
             start_span=start_span,
@@ -120,7 +128,7 @@ class RealtimeInferenceInvocation(InferenceInvocation):
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs = super()._get_attributes()
         if self._realtime_session_id is not None:
-            attrs[GEN_AI_REALTIME_SESSION_ID] = self._realtime_session_id
+            attrs[_GEN_AI_REALTIME_SESSION_ID] = self._realtime_session_id
         return attrs
 
     def _enrich_from_context(self, data: InferenceData) -> None:
@@ -193,7 +201,7 @@ class SuppressedRealtimeInferenceInvocation(
 
 
 @dataclass
-class UserSpeechData:
+class _UserSpeechData:
     """Typed data container for a user_speech invocation."""
 
     provider_name: str | None = None
@@ -207,7 +215,19 @@ class UserSpeechData:
 
 
 class UserSpeechInvocation(GenAIInvocation):
-    """Represents a user_speech span capturing a user speech utterance."""
+    """Represents a user_speech span capturing a user speech utterance.
+
+    Use ``handler.user_speech()`` rather than constructing this directly.
+
+    Reference: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-realtime.md#user-speech-span
+
+    Semantic convention attributes for user speech spans:
+
+    - ``gen_ai.operation.name``: ``"user_speech"`` (Required)
+    - ``gen_ai.provider.name``: Set at span start only when ``provider`` is provided (Recommended)
+    - ``gen_ai.realtime_session.id``: Set when ``realtime_session_id`` is provided (Conditionally Required)
+    - ``error.type``: Set when the operation ends in an error (Conditionally Required)
+    """
 
     def __init__(
         self,
@@ -226,7 +246,7 @@ class UserSpeechInvocation(GenAIInvocation):
         start_attributes: dict[str, AttributeValue] = {}
         if provider is not None:
             start_attributes[GenAI.GEN_AI_PROVIDER_NAME] = provider
-        self._data: UserSpeechData = UserSpeechData(
+        self._data: _UserSpeechData = _UserSpeechData(
             provider_name=provider,
             realtime_session_id=realtime_session_id,
         )
@@ -235,8 +255,8 @@ class UserSpeechInvocation(GenAIInvocation):
             instruments,
             logger,
             completion_hook,
-            operation_name=USER_SPEECH_OPERATION_NAME,
-            span_name=USER_SPEECH_OPERATION_NAME,
+            operation_name=_USER_SPEECH_OPERATION_NAME,
+            span_name=_USER_SPEECH_OPERATION_NAME,
             span_kind=SpanKind.INTERNAL,
             error_type_resolver=error_type_resolver,
             start_attributes=start_attributes,
@@ -266,16 +286,18 @@ class UserSpeechInvocation(GenAIInvocation):
             self._apply_error_attributes(error)
         self._data.attributes = self.attributes
         self._data.metric_attributes = self.metric_attributes
+        if not self.span.is_recording():
+            return
         attributes: dict[str, AttributeValue] = {}
         if self._data.realtime_session_id is not None:
-            attributes[GEN_AI_REALTIME_SESSION_ID] = (
+            attributes[_GEN_AI_REALTIME_SESSION_ID] = (
                 self._data.realtime_session_id
             )
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
 
 
-def build_realtime_session_attributes(
+def _build_realtime_session_attributes(
     provider: str,
     *,
     request_model: str | None = None,
@@ -288,7 +310,7 @@ def build_realtime_session_attributes(
     optional_attrs = (
         (GenAI.GEN_AI_PROVIDER_NAME, provider),
         (GenAI.GEN_AI_REQUEST_MODEL, request_model),
-        (GEN_AI_REALTIME_SESSION_ID, realtime_session_id),
+        (_GEN_AI_REALTIME_SESSION_ID, realtime_session_id),
         (server_attributes.SERVER_ADDRESS, server_address),
         (server_attributes.SERVER_PORT, server_port),
         (error_attributes.ERROR_TYPE, error_type),
@@ -306,15 +328,22 @@ def emit_realtime_session_started_event(
     server_port: int | None = None,
     context: Context | None = None,
 ) -> None:
-    """Emit a ``gen_ai.client.realtime_session.started`` event."""
+    """Emit a ``gen_ai.client.realtime_session.started`` event (INFO severity).
+
+    Reference: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-realtime.md#event-gen_aiclientrealtime_sessionstarted
+
+    Sets ``gen_ai.provider.name`` (Required) and, when provided,
+    ``gen_ai.request.model``, ``gen_ai.realtime_session.id``,
+    ``server.address``, and ``server.port``.
+    """
     ctx = context if context is not None else get_current()
     if not logger.enabled(
         context=ctx,
         severity_number=SeverityNumber.INFO,
-        event_name=REALTIME_SESSION_STARTED_EVENT_NAME,
+        event_name=_REALTIME_SESSION_STARTED_EVENT_NAME,
     ):
         return
-    attributes = build_realtime_session_attributes(
+    attributes = _build_realtime_session_attributes(
         provider,
         request_model=request_model,
         realtime_session_id=realtime_session_id,
@@ -323,7 +352,7 @@ def emit_realtime_session_started_event(
     )
     logger.emit(
         LogRecord(
-            event_name=REALTIME_SESSION_STARTED_EVENT_NAME,
+            event_name=_REALTIME_SESSION_STARTED_EVENT_NAME,
             severity_number=SeverityNumber.INFO,
             attributes=attributes,
             context=ctx,
@@ -343,7 +372,16 @@ def emit_realtime_session_ended_event(
     error_type_resolver: ErrorTypeResolver | None = None,
     context: Context | None = None,
 ) -> None:
-    """Emit a ``gen_ai.client.realtime_session.ended`` event."""
+    """Emit a ``gen_ai.client.realtime_session.ended`` event.
+
+    Reference: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-realtime.md#event-gen_aiclientrealtime_sessionended
+
+    Sets severity to ``INFO`` on normal close and ``WARN`` when ``error`` is
+    provided. Sets ``gen_ai.provider.name`` (Required) and, when provided,
+    ``gen_ai.request.model``, ``gen_ai.realtime_session.id``,
+    ``server.address``, ``server.port``, and ``error.type`` (resolved from
+    ``error``).
+    """
     ctx = context if context is not None else get_current()
     severity = (
         SeverityNumber.WARN if error is not None else SeverityNumber.INFO
@@ -351,7 +389,7 @@ def emit_realtime_session_ended_event(
     if not logger.enabled(
         context=ctx,
         severity_number=severity,
-        event_name=REALTIME_SESSION_ENDED_EVENT_NAME,
+        event_name=_REALTIME_SESSION_ENDED_EVENT_NAME,
     ):
         return
     resolved_error_type: str | None = None
@@ -359,7 +397,7 @@ def emit_realtime_session_ended_event(
         if isinstance(error, BaseException):
             error = Error.from_exception(error, error_type_resolver)
         resolved_error_type = error.type
-    attributes = build_realtime_session_attributes(
+    attributes = _build_realtime_session_attributes(
         provider,
         request_model=request_model,
         realtime_session_id=realtime_session_id,
@@ -369,7 +407,7 @@ def emit_realtime_session_ended_event(
     )
     logger.emit(
         LogRecord(
-            event_name=REALTIME_SESSION_ENDED_EVENT_NAME,
+            event_name=_REALTIME_SESSION_ENDED_EVENT_NAME,
             severity_number=severity,
             attributes=attributes,
             context=ctx,

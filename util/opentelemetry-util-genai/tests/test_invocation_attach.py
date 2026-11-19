@@ -29,6 +29,8 @@ from opentelemetry.util.genai.stream import (
 
 _FACTORIES: dict[str, Callable[..., GenAIInvocation]] = {
     "inference": lambda h, **kw: h.inference("prov", **kw),
+    "realtime_inference": lambda h, **kw: h.realtime_inference("prov", **kw),
+    "user_speech": lambda h, **kw: h.user_speech(provider="prov", **kw),
     "embedding": lambda h, **kw: h.embedding("prov", **kw),
     "retrieval": lambda h, **kw: h.retrieval(**kw),
     "fetch_response": lambda h, **kw: h.fetch_response(
