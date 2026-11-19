@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import functools
+import inspect
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
@@ -168,14 +169,14 @@ def _resolve_output_type(
                 str(getattr(m, "value", m)).upper() for m in seq_modalities
             ]
             if any(m.endswith("AUDIO") for m in upper_modalities):
-                return "speech"
+                return GenAI.GenAiOutputTypeValues.SPEECH.value
             if any(m.endswith("TEXT") for m in upper_modalities):
-                return "text"
+                return GenAI.GenAiOutputTypeValues.TEXT.value
             if any(m.endswith("IMAGE") for m in upper_modalities):
-                return "image"
+                return GenAI.GenAiOutputTypeValues.IMAGE.value
     if is_vertex:
         # Vertex AI Live defaults responseModalities to ["AUDIO"] when omitted.
-        return "speech"
+        return GenAI.GenAiOutputTypeValues.SPEECH.value
     return None
 
 
@@ -430,6 +431,14 @@ class _LiveSessionTracker:
             (request_model or "").lower()
         )
 
+        self._pending_audio_chunks: list[bytes] = []
+        self._pending_audio_mime_type: str | None = None
+        self._pending_input_messages: list[InputMessage] = []
+        self._pending_input_transcript_deltas: list[str] = []
+        self._active_gen: _ActiveGeneration | None = None
+        self._speech_invocation: UserSpeechInvocation | None = None
+        self.terminal_error: BaseException | None = None
+
         self.system_instruction: list[SystemInstructionPart] = []
         self.tool_definitions: list[ToolDefinition] = []
         if self._should_capture_content():
@@ -444,15 +453,9 @@ class _LiveSessionTracker:
                     cast(ToolListUnion | ToolListUnionDict, tools)
                 )
 
-        self._pending_audio_chunks: list[bytes] = []
-        self._pending_audio_mime_type: str | None = None
-        self._pending_input_messages: list[InputMessage] = []
-        self._pending_input_transcript_deltas: list[str] = []
-        self._active_gen: _ActiveGeneration | None = None
-        self._speech_invocation: UserSpeechInvocation | None = None
-        self.terminal_error: BaseException | None = None
-
     def _should_capture_content(self) -> bool:
+        if self._active_gen is not None:
+            return self._active_gen.invocation.should_capture_content
         return _should_capture_live_content(self._telemetry_handler)
 
     def _mark_new_user_utterance(self) -> None:
@@ -1194,20 +1197,16 @@ async def _run_transactional_send(
     if existing_slot is not None:
         existing_slot[:] = [commit_fn]
         res = call_fn()
-        if hasattr(res, "__await__"):
-            return await cast(
-                Callable[..., AsyncIterator[object]], lambda: res
-            )()
+        if inspect.isawaitable(res):
+            return await res
         return res
 
     slot: list[Callable[[], None]] = [commit_fn]
     token = _ACTIVE_SEND_CALLBACK.set(slot)
     try:
         res = call_fn()
-        if hasattr(res, "__await__"):
-            res = await cast(
-                Callable[..., AsyncIterator[object]], lambda: res
-            )()
+        if inspect.isawaitable(res):
+            res = await res
     except BaseException as exc:
         slot.clear()
         if not isinstance(exc, (ValueError, TypeError)):
@@ -1240,10 +1239,8 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
             slot = _ACTIVE_SEND_CALLBACK.get()
             try:
                 res = orig_ws_send(*args, **kwargs)
-                if hasattr(res, "__await__"):
-                    res = await cast(
-                        Callable[..., AsyncIterator[object]], lambda: res
-                    )()
+                if inspect.isawaitable(res):
+                    res = await res
             except BaseException as exc:
                 if slot is not None:
                     slot.clear()
@@ -1315,15 +1312,19 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
         *args: object, **kwargs: object
     ) -> LiveServerMessage:
         active_gen = tracker._active_gen
-        try:
-            if active_gen is not None:
-                with active_gen.invocation.activate():
+        if active_gen is not None:
+            with active_gen.invocation.activate():
+                try:
                     message = await orig_receive(*args, **kwargs)
-            else:
+                except BaseException as exc:
+                    tracker.on_receive_error(exc)
+                    raise
+        else:
+            try:
                 message = await orig_receive(*args, **kwargs)
-        except BaseException as exc:
-            tracker.on_receive_error(exc)
-            raise
+            except BaseException as exc:
+                tracker.on_receive_error(exc)
+                raise
         tracker.on_server_message(message)
         return message
 

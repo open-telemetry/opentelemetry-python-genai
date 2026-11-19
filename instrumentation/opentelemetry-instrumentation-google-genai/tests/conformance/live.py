@@ -65,16 +65,18 @@ def _attr(span: dict[str, Any], name: str) -> Any:
     return None
 
 
-def _part_types(messages_json: str | None) -> list[str]:
-    messages = json.loads(messages_json) if messages_json else []
-    return [part["type"] for message in messages for part in message["parts"]]
+def _part_types(messages: list[dict[str, Any]] | None) -> list[str]:
+    return [
+        part["type"]
+        for message in (messages or [])
+        for part in message["parts"]
+    ]
 
 
-def _blob_modalities(messages_json: str | None) -> list[str]:
-    messages = json.loads(messages_json) if messages_json else []
+def _blob_modalities(messages: list[dict[str, Any]] | None) -> list[str]:
     return [
         part["modality"]
-        for message in messages
+        for message in (messages or [])
         for part in message["parts"]
         if part["type"] == "blob"
     ]
@@ -469,8 +471,8 @@ class LiveMultimodalAndToolsScenario(Scenario):
         assert _part_types(_attr(gen25_1, "gen_ai.output.messages")) == [
             "tool_call"
         ]
-        tools_json = json.loads(_attr(gen25_1, "gen_ai.tool.definitions"))
-        assert tools_json[0]["name"] == "_get_weather"
+        tools_defs = _attr(gen25_1, "gen_ai.tool.definitions")
+        assert tools_defs[0]["name"] == "_get_weather"
 
         assert _attr(gen25_2, "gen_ai.response.finish_reasons") == ["stop"]
         assert _part_types(_attr(gen25_2, "gen_ai.input.messages")) == [

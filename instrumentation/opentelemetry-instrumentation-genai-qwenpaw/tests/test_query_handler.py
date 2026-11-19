@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import json
 from collections.abc import AsyncIterator
 from types import AsyncGeneratorType
 
@@ -147,14 +146,14 @@ async def test_query_handler_captures_messages_in_span_only_mode(
     (span,) = span_exporter.get_finished_spans()
     attributes = dict(span.attributes or {})
 
-    assert isinstance(attributes[GenAI.GEN_AI_INPUT_MESSAGES], str)
-    input_messages = json.loads(attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    assert isinstance(attributes[GenAI.GEN_AI_INPUT_MESSAGES], tuple)
+    input_messages = attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert input_messages[0]["role"] == "user"
     assert input_messages[0]["parts"][0]["type"] == "text"
     assert input_messages[0]["parts"][0]["content"] == "/stop"
 
-    assert isinstance(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES], str)
-    output_messages = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    assert isinstance(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES], tuple)
+    output_messages = attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0].get("finish_reason") is None
     assert output_messages[0]["parts"][0]["type"] == "text"
@@ -211,7 +210,7 @@ async def test_stream_side_error_reraises_and_fails_span(
     assert attributes[error_attributes.ERROR_TYPE] == error_type
     assert isinstance(attributes[error_attributes.ERROR_TYPE], str)
     # Output captured before the failure must survive on the error span.
-    output_messages = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["parts"][0]["content"] == "partial"
     assert output_messages[0].get("finish_reason") is None
     assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in attributes
@@ -241,7 +240,7 @@ async def test_caller_side_error_reraises_and_fails_span(
     attributes = dict(span.attributes or {})
     assert attributes[error_attributes.ERROR_TYPE] == "ValueError"
     assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in attributes
-    output_messages = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["parts"][0]["content"] == "partial"
     assert output_messages[0].get("finish_reason") is None
 
@@ -286,7 +285,7 @@ async def test_early_close_finalizes_span_with_partial_output(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.UNSET
     attributes = dict(span.attributes or {})
-    output_messages = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["parts"][0]["content"] == "early-output"
     assert output_messages[0].get("finish_reason") is None
     assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in attributes
@@ -400,7 +399,7 @@ async def test_abandoned_stream_finalizes_span_with_partial_output(
     attributes = dict(span.attributes or {})
     assert attributes[error_attributes.ERROR_TYPE] == "_OTHER"
     assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in attributes
-    output_messages = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["parts"][0]["content"] == "partial"
     assert output_messages[0].get("finish_reason") is None
 

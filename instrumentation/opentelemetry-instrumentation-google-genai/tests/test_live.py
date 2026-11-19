@@ -288,7 +288,7 @@ async def test_live_voice_turn_spans_events_and_metrics(
     )
     assert attrs[ServerAttributes.SERVER_PORT] == 443
 
-    input_msgs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+    input_msgs = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["type"] == "blob"
@@ -298,7 +298,7 @@ async def test_live_voice_turn_spans_events_and_metrics(
         "content": "Say hello in three words.",
     }
 
-    output_msgs = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    output_msgs = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["finish_reason"] == "stop"
@@ -306,8 +306,8 @@ async def test_live_voice_turn_spans_events_and_metrics(
     assert part_types == ["reasoning", "blob", "transcription"]
     assert output_msgs[0]["parts"][2]["content"] == "Hello there friend."
 
-    sys_instr = json.loads(attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
-    assert sys_instr == [{"type": "text", "content": "Be concise."}]
+    sys_instr = attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]
+    assert sys_instr == ({"type": "text", "content": "Be concise."},)
 
     # Verify events: only realtime_session.started and realtime_session.ended
     logs = log_exporter.get_finished_logs()
@@ -489,14 +489,14 @@ async def test_live_gemini_2_5_two_generation_tool_call(
         "tool_call",
     )
     assert span1.attributes[GenAI.GEN_AI_OUTPUT_TYPE] == "speech"
-    s1_out = json.loads(span1.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    s1_out = span1.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert s1_out[0]["finish_reason"] == "tool_call"
     assert s1_out[0]["parts"][0]["type"] == "tool_call"
     assert s1_out[0]["parts"][0]["name"] == "get_weather"
 
     assert span2.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
     assert span2.attributes[GenAI.GEN_AI_OUTPUT_TYPE] == "speech"
-    s2_in = json.loads(span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    s2_in = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert s2_in[0]["role"] == "tool"
     assert s2_in[0]["parts"][0]["type"] == "tool_call_response"
     assert s2_in[0]["parts"][0]["id"] == "call-weather-1"
@@ -627,19 +627,19 @@ async def test_live_gemini_3_single_generation_parallel_tool_calls_and_followup_
     # Per PR #394, gen_ai.input.messages and gen_ai.output.messages
     # on a single-generation tool exchange omit intermediate tool call and
     # tool result events.
-    in_msgs_1 = json.loads(span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    in_msgs_1 = span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in_msgs_1) == 1
     assert in_msgs_1[0]["role"] == "user"
 
-    out_msgs_1 = json.loads(span1.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    out_msgs_1 = span1.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert len(out_msgs_1) == 1
     assert out_msgs_1[0]["finish_reason"] == "stop"
 
     # Second turn must only contain the new user message, not the second tool reply
-    in_msgs_2 = json.loads(span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    in_msgs_2 = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in_msgs_2) == 1
     assert in_msgs_2[0]["role"] == "user"
-    assert in_msgs_2[0]["parts"] == [{"type": "text", "content": "Thanks!"}]
+    assert in_msgs_2[0]["parts"] == ({"type": "text", "content": "Thanks!"},)
 
 
 @pytest.mark.asyncio
@@ -835,12 +835,12 @@ async def test_live_interleaved_events_speech_across_generations_and_error_spans
     assert gen1_span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "interrupted",
     )
-    gen1_in = json.loads(gen1_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    gen1_in = gen1_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(gen1_in) == 1
     assert gen1_in[0]["role"] == "user"
-    assert gen1_in[0]["parts"] == [
-        {"type": "transcription", "content": "What is the weather?"}
-    ]
+    assert gen1_in[0]["parts"] == (
+        {"type": "transcription", "content": "What is the weather?"},
+    )
 
     # First speech span preserved across generation boundary and ended cleanly on activity_end
     speech1_span = spans[1]
@@ -1047,7 +1047,7 @@ async def test_live_public_client_transport_replay_zero_settings_and_client_cont
     assert GenAI.GEN_AI_REQUEST_TOP_K not in attrs
     assert GenAI.GEN_AI_REQUEST_SEED not in attrs
 
-    in_msgs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+    in_msgs = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
     texts = [m["parts"][0]["content"] for m in in_msgs]
     assert texts == ["First turn", "Second turn", "Third turn", "Fourth turn"]
 
@@ -1310,14 +1310,14 @@ async def test_live_barge_in_overlapping_speech_and_transcription(
     assert len(spans) == 2
     span1, span2 = spans[0], spans[1]
 
-    in1 = json.loads(span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    in1 = span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in1) == 1
     assert in1[0]["parts"][1] == {
         "type": "transcription",
         "content": "Tell me about Paris.",
     }
 
-    in2 = json.loads(span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    in2 = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in2) == 1
     assert in2[0]["parts"][0]["type"] == "blob"
     assert in2[0]["parts"][1] == {
@@ -1604,14 +1604,14 @@ async def test_live_fallback_session_id_and_continuous_audio_coalescing(
     # Turn 1 had no prior input messages; all mic audio sent during Turn 1 belongs
     # to Turn 2 as a single coalesced user InputMessage.
     assert GenAI.GEN_AI_INPUT_MESSAGES not in span1.attributes
-    turn2_in = json.loads(span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    turn2_in = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(turn2_in) == 1
     assert turn2_in[0]["role"] == "user"
     assert [p["type"] for p in turn2_in[0]["parts"]] == [
         "blob",
         "transcription",
     ]
-    assert turn2_in[0]["parts"][0]["content"] == "AQIDBAUG"
+    assert turn2_in[0]["parts"][0]["content"] == b"\x01\x02\x03\x04\x05\x06"
     assert turn2_in[0]["parts"][1]["content"] == "Follow up question"
 
 
@@ -1784,21 +1784,21 @@ async def test_live_public_client_tool_exchange_2_5_and_3_1_and_callable_tools(
     assert s25_1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_call",
     )
-    tools_defs = json.loads(s25_1.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])
+    tools_defs = s25_1.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
     assert tools_defs[0]["name"] == "get_weather"
 
     assert s25_2.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
-    s25_2_in = json.loads(s25_2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    s25_2_in = s25_2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert s25_2_in[0]["parts"][0]["type"] == "tool_call_response"
 
     if has_live_thinking:
         assert s31.attributes["gen_ai.request.reasoning.level"] == "HIGH"
     assert s31.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
-    s31_in = json.loads(s31.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    s31_in = s31.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(s31_in) == 1
-    assert s31_in[0]["parts"] == [
-        {"type": "text", "content": "Compare Tokyo and Osaka."}
-    ]
+    assert s31_in[0]["parts"] == (
+        {"type": "text", "content": "Compare Tokyo and Osaka."},
+    )
 
 
 @pytest.mark.asyncio
@@ -1898,13 +1898,13 @@ async def test_live_public_client_barge_in_interruption_and_receive_error(
     assert span1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "interrupted",
     )
-    in1 = json.loads(span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    in1 = span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert in1[0]["parts"][1]["content"] == "Tell me about Paris."
 
     assert span2.status.status_code == StatusCode.ERROR
     assert span2.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
     assert span2.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("error",)
-    in2 = json.loads(span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    in2 = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert in2[0]["parts"][1]["content"] == "Stop, tell me about Rome."
 
     logs = log_exporter.get_finished_logs()
@@ -2033,18 +2033,18 @@ async def test_live_transactional_sends_failed_requests_retries_and_session_send
     assert len(spans) == 2
     inf_span, speech_span = spans[0], spans[1]
 
-    in_msgs = json.loads(inf_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    in_msgs = inf_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in_msgs) == 6
-    assert in_msgs[0]["parts"] == [
-        {"type": "text", "content": "Valid realtime text"}
-    ]
-    assert in_msgs[1]["parts"] == [
-        {"type": "text", "content": "Valid client content"}
-    ]
+    assert in_msgs[0]["parts"] == (
+        {"type": "text", "content": "Valid realtime text"},
+    )
+    assert in_msgs[1]["parts"] == (
+        {"type": "text", "content": "Valid client content"},
+    )
     assert in_msgs[2]["parts"][0]["id"] == "call-ok"
-    assert in_msgs[3]["parts"] == [
-        {"type": "text", "content": "Sent via send()"}
-    ]
+    assert in_msgs[3]["parts"] == (
+        {"type": "text", "content": "Sent via send()"},
+    )
     assert in_msgs[4]["parts"][0]["modality"] == "image"
     assert in_msgs[5]["parts"][0]["id"] == "call-send-fn"
 
@@ -2173,14 +2173,14 @@ async def test_live_send_context_update_snapshot_and_missing_method_branch(
     assert len(spans) == 2
     span1, span2 = spans[0], spans[1]
 
-    sys1 = json.loads(span1.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
-    tools1 = json.loads(span1.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])
-    assert sys1 == [{"type": "text", "content": "Initial system instruction"}]
+    sys1 = span1.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]
+    tools1 = span1.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+    assert sys1 == ({"type": "text", "content": "Initial system instruction"},)
     assert [t["name"] for t in tools1] == ["tool_v1"]
 
-    sys2 = json.loads(span2.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
-    tools2 = json.loads(span2.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])
-    assert sys2 == [{"type": "text", "content": "Updated system instruction"}]
+    sys2 = span2.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]
+    tools2 = span2.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+    assert sys2 == ({"type": "text", "content": "Updated system instruction"},)
     assert [t["name"] for t in tools2] == ["tool_v2"]
 
     # Also verify send_context_update with NO_CONTENT and EVENT_ONLY does not record instructions/tools

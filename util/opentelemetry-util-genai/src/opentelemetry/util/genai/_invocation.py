@@ -9,7 +9,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from types import TracebackType
 from typing import Any, ClassVar, Self, TypeAlias, cast
 
@@ -105,7 +105,7 @@ class ContextData:
                 "upload_completion",
             ):
                 continue
-            val = getattr(other, f.name)
+            val = getattr(other, f.name, None)
             if val is not None and (
                 overwrite or getattr(self, f.name) is None
             ):
@@ -191,9 +191,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     workflow, tool) rather than constructing invocations directly.
     """
 
-    _records_stream_telemetry: ClassVar[bool] = False
-    """Whether stream wrappers mark this invocation as streamed and record chunk timing."""
-
     _exception_event_name: ClassVar[str | None] = None
     """Name of the event emitted when the operation fails with an exception, if any."""
 
@@ -278,7 +275,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                     context=ctx,
                 )
             self._span_context: Context = ctx
-            self._attach_to_context = _attach_to_context
             self._context_token: ContextToken | None = (
                 attach(self._span_context) if _attach_to_context else None
             )
@@ -286,9 +282,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             ctx = get_current() if context is None else context
             self.span = get_current_span(context=ctx)
             self._span_context = ctx
-            # Never attached, so never treated as suspended by the stream wrappers.
-            self._attach_to_context = False
             self._context_token = None
+        # Owned by __enter__/__exit__; stop()/fail() can run inside nested
+        # scopes, where detaching it would restore contexts out of order.
+        self._with_token: ContextToken | None = None
         self._monotonic_start_s: float = timeit.default_timer()
         self._monotonic_end_s: float | None = None
         self._end_time_ns: int | None = None
@@ -328,44 +325,60 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         return self._span_context
 
     @property
-    def _suspended(self) -> bool:
-        """True when this invocation attached itself to the context and ``suspend`` has since run.
+    def _needs_activation(self) -> bool:
+        """True when this invocation owns a span that was not attached on creation.
 
-        Describes the original attachment only: it stays true during a
-        temporary ``activate`` and after the invocation has finished. The
-        stream wrappers activate such an invocation around each read. An
-        invocation that is still attached is left alone: its original
-        attachment is outstanding, and activating it around the read that
+        Stream wrappers activate such an invocation around each read. One that
+        is still attached is left alone: activating it around the read that
         finishes it would reinstate the ended span after ``stop`` detached it.
         """
-        return self._attach_to_context and self._context_token is None
+        return self._start_span and self._context_token is None
 
     def suspend(self) -> None:
-        """Restore the context that was current before this invocation started.
+        """Detach this invocation's span if it was attached when the invocation started.
 
-        Call this when handing control back to the caller while the invocation
-        is still running -- returning a stream the caller has not drained yet,
-        for example -- so unrelated caller work is not parented under this
-        invocation's span. Idempotent, and pairs with ``activate``.
+        Idempotent, and a no-op when nothing is attached.
+
+        .. deprecated:: 1.4b0
+            Create the invocation with ``_attach_to_context=False`` and scope
+            work with ``with invocation:`` or ``invocation.activate()``. Stream
+            wrappers make such an invocation current around each read.
         """
+        self._detach()
+
+    def _detach(self) -> None:
         token, self._context_token = self._context_token, None
-        if token is not None:
+        # Finishing inside a still-active nested scope: detaching here would
+        # replace that scope's context with the caller's while it runs.
+        if token is not None and get_current() is self._span_context:
             detach(token)
 
     @contextmanager
     def activate(self) -> Iterator[None]:
         """Make this invocation's span the current span inside the block.
 
-        Restores the previous context on exit. A no-op once the invocation has finished.
+        Restores the previous context on exit. An exception escaping the block
+        fails the invocation; leaving the block normally does not stop it. Does
+        not change the context once the invocation has finished, while it is
+        attached on creation, or when it does not own a span.
         """
-        if self._finished:
-            yield
-            return
-        token = attach(self.context)
+        token = (
+            attach(self.context)
+            if self._needs_activation and not self._finished
+            else None
+        )
         try:
             yield
+        # Stream wrappers read inside this block: end of iteration and
+        # generator close are not failures.
+        except (StopIteration, StopAsyncIteration, GeneratorExit):
+            raise
+        except BaseException as error:
+            self.fail(error)
+            raise
         finally:
-            detach(token)
+            if token is not None:
+                detach(token)
 
     def _get_attributes(self) -> dict[str, AttributeValue]:  # pylint: disable=no-self-use
         """Return typed attributes for span/event recording."""
@@ -460,16 +473,21 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         Subclasses pass whichever content fields they carry; the wrapper substitutes []
         for unspecified list fields
         """
-        self._completion_hook.on_completion(
-            inputs=inputs or [],
-            outputs=outputs or [],
-            system_instruction=cast(
-                "list[MessagePart]", system_instruction or []
-            ),
-            tool_definitions=tool_definitions,
-            span=self.span,
-            log_record=log_record,
-        )
+        # stop()/fail() of an unattached invocation can run outside activate().
+        token = attach(self._span_context)
+        try:
+            self._completion_hook.on_completion(
+                inputs=inputs or [],
+                outputs=outputs or [],
+                system_instruction=cast(
+                    "list[MessagePart]", system_instruction or []
+                ),
+                tool_definitions=tool_definitions,
+                span=self.span,
+                log_record=log_record,
+            )
+        finally:
+            detach(token)
 
     @abstractmethod
     def _apply_finish(self, error: Error | None = None) -> None:
@@ -487,7 +505,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             if error is not None:
                 self._emit_exception_event(error)
         finally:
-            self.suspend()
+            self._detach()
             self.span.end(end_time=self._end_time_ns)
             if self._context_key is not None:
                 self._span_context = set_value(
@@ -534,6 +552,12 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._finish(error)
 
     def __enter__(self) -> Self:
+        if (
+            self._needs_activation
+            and not self._finished
+            and self._with_token is None
+        ):
+            self._with_token = attach(self._span_context)
         return self
 
     def __exit__(
@@ -542,10 +566,15 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        if exc_value is not None:
-            self.fail(exc_value)
-        else:
-            self.stop()
+        try:
+            if exc_value is not None:
+                self.fail(exc_value)
+            else:
+                self.stop()
+        finally:
+            token, self._with_token = self._with_token, None
+            if token is not None:
+                detach(token)
 
 
 def _json_dumps_unless_str(value: object) -> str | None:
@@ -571,7 +600,7 @@ def get_content_attributes(
     prompt_variables: Mapping[str, object] | None = None,
     for_span: bool,
     content_capturing_mode: ContentCapturingMode | None = None,
-) -> dict[str, Any]:
+) -> dict[str, AttributeValue]:
     """Serialize messages, system instructions, and tool definitions into attributes.
 
     Args:
@@ -581,8 +610,8 @@ def get_content_attributes(
             is deprecated; use ``SystemInstructionPart``.
         tool_definitions: Tool definitions to serialize (may be None).
         prompt_variables: Prompt template variables to serialize (may be None).
-        for_span: If True, serialize for span attributes (JSON string);
-                  if False, serialize for event attributes (list of dicts).
+        for_span: If True, check span content capturing modes;
+                  if False, check event content capturing modes.
         content_capturing_mode: Configured content capturing mode; if None,
                                 reads from environment.
     """
@@ -603,32 +632,38 @@ def get_content_attributes(
         )
     )
 
-    def serialize(items: Sequence[Any]) -> Any:
-        dicts = [asdict(item) for item in items]
-        return gen_ai_json_dumps(dicts) if for_span else dicts
-
     if mode not in allowed_modes:
         return {}
 
     optional_attrs = (
         (
             GenAI.GEN_AI_INPUT_MESSAGES,
-            serialize(input_messages) if input_messages else None,
+            object_to_any_value(list(input_messages))
+            if input_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_OUTPUT_MESSAGES,
-            serialize(output_messages) if output_messages else None,
+            object_to_any_value(list(output_messages))
+            if output_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
-            serialize(system_instruction) if system_instruction else None,
+            object_to_any_value(list(system_instruction))
+            if system_instruction
+            else None,
         ),
         (
             GenAI.GEN_AI_TOOL_DEFINITIONS,
-            serialize(tool_definitions) if tool_definitions else None,
+            object_to_any_value(list(tool_definitions))
+            if tool_definitions
+            else None,
         ),
     )
-    result = {key: value for key, value in optional_attrs if value is not None}
+    result: dict[str, AttributeValue] = {
+        key: value for key, value in optional_attrs if value is not None
+    }
     if prompt_variables:
         for k, v in prompt_variables.items():
             serialized = _json_dumps_unless_str(v)
