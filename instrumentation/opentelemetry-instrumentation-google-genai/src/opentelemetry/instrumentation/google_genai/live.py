@@ -335,7 +335,9 @@ def _extract_tool_response_keys(
 class _PendingToolCallBatch:
     """Tracks unanswered function calls from a Gemini 2.x ``tool_call`` batch."""
 
+    all_ids: set[str] = field(default_factory=set)
     remaining_ids: set[str] = field(default_factory=set)
+    cancelled_ids: set[str] = field(default_factory=set)
     remaining_unidentified: int = 0
     turn: _OutboundTurn | None = None
 
@@ -362,6 +364,9 @@ class _StagedSend:
     consumed_tool_ids: list[str] = field(default_factory=list)
     consumed_tool_unidentified: int = 0
     popped_tool_batch: bool = False
+    updates_system_instruction: bool = False
+    updates_tool_definitions: bool = False
+    dependent_gens: list[_ActiveGeneration] = field(default_factory=list)
     seq: int = 0
     turn: _OutboundTurn | None = None
     status: str = "pending"
@@ -524,6 +529,7 @@ class _ActiveGeneration:
     awaiting_tool_response: bool = False
     accepting_input_transcription: bool = True
     bound_turn: _OutboundTurn | None = None
+    pending_context_deps: list[_StagedSend] = field(default_factory=list)
     deferred_finish_reason: str | None = None
     deferred_error: Error | BaseException | None = None
 
@@ -752,6 +758,7 @@ class _LiveSessionTracker:
 
         self._outbound_turns: deque[_OutboundTurn] = deque()
         self._pending_tool_call_batches: deque[_PendingToolCallBatch] = deque()
+        self._pending_context_updates: list[_StagedSend] = []
         self._write_turn: _OutboundTurn | None = None
         self._next_send_seq: int = 0
         self._current_send_seq: int = 0
@@ -821,13 +828,19 @@ class _LiveSessionTracker:
 
     def register_inflight_send(self, staged: _StagedSend) -> None:
         if (
-            staged.status != "pending"
+            self._session_finalized
+            or staged.status != "pending"
             or staged.turn is not None
             or staged.omit_tool_response
         ):
             return
         self._next_send_seq += 1
         staged.seq = self._next_send_seq
+        if (
+            staged.updates_system_instruction
+            or staged.updates_tool_definitions
+        ) and staged not in self._pending_context_updates:
+            self._pending_context_updates.append(staged)
         matched_batch: _PendingToolCallBatch | None = None
         if staged.is_tool_response:
             if self._pending_tool_call_batches:
@@ -867,7 +880,10 @@ class _LiveSessionTracker:
             if (
                 last.input_messages
                 or last.pending_audio_chunks
-                or last.staged_sends
+                or any(
+                    other.has_input_payload and other.status != "aborted"
+                    for other in last.staged_sends
+                )
             ):
                 last.sealed = True
         if (
@@ -913,6 +929,42 @@ class _LiveSessionTracker:
             self.tool_definitions = list(turn.tool_definitions)
             self._tool_definitions_rev = turn.tool_definitions_rev
 
+    def _apply_context_update_to_generation(
+        self, gen: _ActiveGeneration, source: _OutboundTurn
+    ) -> None:
+        if not gen.invocation.should_capture_content:
+            return
+        if (
+            source.system_instruction is not None
+            and source.system_instruction_rev >= gen.system_instruction_rev
+        ):
+            gen.system_instruction = list(source.system_instruction)
+            gen.system_instruction_rev = source.system_instruction_rev
+        if (
+            source.tool_definitions is not None
+            and source.tool_definitions_rev >= gen.tool_definitions_rev
+        ):
+            gen.tool_definitions = list(source.tool_definitions)
+            gen.tool_definitions_rev = source.tool_definitions_rev
+
+    def _release_pending_context_update(
+        self,
+        staged: _StagedSend,
+        source: _OutboundTurn | None = None,
+    ) -> None:
+        if staged in self._pending_context_updates:
+            self._pending_context_updates.remove(staged)
+        if not staged.dependent_gens:
+            return
+        dependents = list(staged.dependent_gens)
+        staged.dependent_gens.clear()
+        for dep_gen in dependents:
+            if staged in dep_gen.pending_context_deps:
+                dep_gen.pending_context_deps.remove(staged)
+            if source is not None:
+                self._apply_context_update_to_generation(dep_gen, source)
+            self._maybe_finish_deferred_generation(dep_gen)
+
     def _commit_to_bound_generation(
         self, staged: _StagedSend, target_gen: _ActiveGeneration
     ) -> None:
@@ -926,10 +978,15 @@ class _LiveSessionTracker:
         saved_override = self._capture_content_override
 
         target_capture = target_gen.invocation.should_capture_content
+        any_dep_capture = any(
+            dep.invocation.should_capture_content
+            for dep in staged.dependent_gens
+        )
+        effective_capture = target_capture or any_dep_capture
         self._write_turn = scratch_turn
         self._current_send_seq = staged.seq
         self._active_gen = None
-        self._capture_content_override = target_capture
+        self._capture_content_override = effective_capture
         try:
             staged.context.run(staged.commit_fn)
         finally:
@@ -945,29 +1002,12 @@ class _LiveSessionTracker:
                 mime_type = scratch_turn.pending_audio_mime_type or "audio/pcm"
                 for chunk in scratch_turn.pending_audio_chunks:
                     target_gen.append_input_audio(chunk, mime_type)
-            if (
-                scratch_turn.system_instruction is not None
-                and scratch_turn.system_instruction_rev
-                >= target_gen.system_instruction_rev
-            ):
-                target_gen.system_instruction = list(
-                    scratch_turn.system_instruction
-                )
-                target_gen.system_instruction_rev = (
-                    scratch_turn.system_instruction_rev
-                )
-            if (
-                scratch_turn.tool_definitions is not None
-                and scratch_turn.tool_definitions_rev
-                >= target_gen.tool_definitions_rev
-            ):
-                target_gen.tool_definitions = list(
-                    scratch_turn.tool_definitions
-                )
-                target_gen.tool_definitions_rev = (
-                    scratch_turn.tool_definitions_rev
-                )
+            self._apply_context_update_to_generation(target_gen, scratch_turn)
+        if effective_capture:
             self._apply_session_context_update(scratch_turn)
+        self._release_pending_context_update(
+            staged, source=scratch_turn if effective_capture else None
+        )
 
     def _drain_turn(self, turn: _OutboundTurn) -> None:
         while turn.staged_sends and turn.staged_sends[0].status != "pending":
@@ -982,15 +1022,33 @@ class _LiveSessionTracker:
             if turn.bound_gen is not None:
                 self._commit_to_bound_generation(staged, turn.bound_gen)
             else:
+                detached_turn = turn not in self._outbound_turns
                 saved_write_turn = self._write_turn
                 saved_send_seq = self._current_send_seq
+                saved_active_gen = self._active_gen
+                saved_override = self._capture_content_override
                 self._write_turn = turn
                 self._current_send_seq = staged.seq
+                if detached_turn:
+                    self._active_gen = None
+                    any_dep_capture = any(
+                        dep.invocation.should_capture_content
+                        for dep in staged.dependent_gens
+                    )
+                    self._capture_content_override = (
+                        any_dep_capture
+                        or self._telemetry_handler.should_capture_realtime_content()
+                    )
                 try:
                     staged.context.run(staged.commit_fn)
                 finally:
                     self._write_turn = saved_write_turn
                     self._current_send_seq = saved_send_seq
+                    self._active_gen = saved_active_gen
+                    self._capture_content_override = saved_override
+                if detached_turn:
+                    self._apply_session_context_update(turn)
+                self._release_pending_context_update(staged, source=turn)
 
         if turn.bound_gen is not None:
             if not turn.staged_sends:
@@ -1011,27 +1069,49 @@ class _LiveSessionTracker:
             self._outbound_turns.remove(turn)
 
     def _detach_bound_turn(self, active_gen: _ActiveGeneration) -> None:
+        if active_gen.pending_context_deps:
+            for ctx_staged in list(active_gen.pending_context_deps):
+                if active_gen in ctx_staged.dependent_gens:
+                    ctx_staged.dependent_gens.remove(active_gen)
+            active_gen.pending_context_deps.clear()
         turn = active_gen.bound_turn
         active_gen.bound_turn = None
         if turn is None:
             return
-        for staged in list(turn.staged_sends):
+        remaining_staged = list(turn.staged_sends)
+        turn.staged_sends.clear()
+        turn.bound_gen = None
+        for staged in remaining_staged:
             if staged.status == "confirmed" and not staged.applied:
                 staged.applied = True
                 self._commit_to_bound_generation(staged, active_gen)
-        turn.staged_sends.clear()
-        turn.bound_gen = None
+            elif (
+                staged.status == "pending"
+                and not self._session_finalized
+                and (
+                    staged.updates_system_instruction
+                    or staged.updates_tool_definitions
+                )
+            ):
+                turn.staged_sends.append(staged)
+            elif not staged.applied:
+                self._release_pending_context_update(staged)
+
+    def _has_pending_sends(self, active_gen: _ActiveGeneration) -> bool:
+        return bool(
+            (
+                active_gen.bound_turn is not None
+                and active_gen.bound_turn.staged_sends
+            )
+            or active_gen.pending_context_deps
+        )
 
     def _maybe_finish_deferred_generation(
         self, active_gen: _ActiveGeneration
     ) -> None:
-        has_pending = bool(
-            active_gen.bound_turn is not None
-            and active_gen.bound_turn.staged_sends
-        )
         if (
             active_gen.deferred_finish_reason is not None
-            and not has_pending
+            and not self._has_pending_sends(active_gen)
             and active_gen in self._deferred_generations
         ):
             self._deferred_generations.remove(active_gen)
@@ -1049,11 +1129,7 @@ class _LiveSessionTracker:
         finish_reason: str,
         error: Error | BaseException | None = None,
     ) -> None:
-        has_pending = bool(
-            active_gen.bound_turn is not None
-            and active_gen.bound_turn.staged_sends
-        )
-        if has_pending and error is None:
+        if self._has_pending_sends(active_gen) and error is None:
             active_gen.invocation.mark_end()
             active_gen.deferred_finish_reason = finish_reason
             active_gen.deferred_error = None
@@ -1080,9 +1156,10 @@ class _LiveSessionTracker:
     def confirm_inflight_send(self, staged: _StagedSend) -> None:
         if staged.status != "pending":
             return
-        if staged.omit_tool_response:
+        if self._session_finalized or staged.omit_tool_response:
             staged.status = "confirmed"
             staged.applied = True
+            self._release_pending_context_update(staged)
             return
         if staged.turn is None:
             self.register_inflight_send(staged)
@@ -1095,10 +1172,18 @@ class _LiveSessionTracker:
         if staged.status != "pending":
             return
         staged.status = "aborted"
+        self._release_pending_context_update(staged)
+        if self._session_finalized:
+            return
         reopened_batch: _PendingToolCallBatch | None = None
         if staged.consumed_tool_batch is not None:
             batch = staged.consumed_tool_batch
-            batch.remaining_ids.update(staged.consumed_tool_ids)
+            restored_ids = [
+                cid
+                for cid in staged.consumed_tool_ids
+                if cid not in batch.cancelled_ids
+            ]
+            batch.remaining_ids.update(restored_ids)
             batch.remaining_unidentified += staged.consumed_tool_unidentified
             if not batch.is_complete:
                 reopened_batch = batch
@@ -1115,14 +1200,23 @@ class _LiveSessionTracker:
             for other in turn.staged_sends:
                 if other.consumed_tool_batch is reopened_batch:
                     other.completes_turn = False
-        if staged.completes_turn or reopened_batch is not None:
+        if (
+            staged.completes_turn
+            or reopened_batch is not None
+            or turn.tool_batch is not None
+        ):
+            batch_has_active_response = (
+                turn.has_confirmed_input_payload
+                or bool(turn.input_messages)
+                or any(
+                    other.has_input_payload and other.status != "aborted"
+                    for other in turn.staged_sends
+                )
+            )
             batch_completed = bool(
                 turn.tool_batch is not None
                 and turn.tool_batch.is_complete
-                and (
-                    turn.has_confirmed_input_payload
-                    or bool(turn.input_messages)
-                )
+                and batch_has_active_response
             )
             turn.sealed = (
                 turn.has_confirmed_turn_complete
@@ -1281,6 +1375,8 @@ class _LiveSessionTracker:
         self._enforce_pending_media_budget()
 
     def _start_user_speech(self) -> None:
+        if self._session_finalized:
+            return
         self._mark_new_user_utterance()
         if (
             self._speech_invocation is not None
@@ -1727,6 +1823,25 @@ class _LiveSessionTracker:
             active_gen.bound_turn = bound_turn
             if bound_turn is not None:
                 bound_turn.bound_gen = active_gen
+            if capture_content and self._pending_context_updates:
+                for ctx_staged in self._pending_context_updates:
+                    if (
+                        ctx_staged.turn is None
+                        or ctx_staged.turn is bound_turn
+                        or ctx_staged.turn in self._outbound_turns
+                    ):
+                        continue
+                    needs_sys = (
+                        ctx_staged.updates_system_instruction
+                        and active_gen.system_instruction_rev < ctx_staged.seq
+                    )
+                    needs_tools = (
+                        ctx_staged.updates_tool_definitions
+                        and active_gen.tool_definitions_rev < ctx_staged.seq
+                    )
+                    if needs_sys or needs_tools:
+                        active_gen.pending_context_deps.append(ctx_staged)
+                        ctx_staged.dependent_gens.append(active_gen)
             self._active_gen = active_gen
         return self._active_gen
 
@@ -1841,6 +1956,8 @@ class _LiveSessionTracker:
             invocation.stop()
 
     def on_server_message(self, message: LiveServerMessage | None) -> None:
+        if self._session_finalized:
+            return
         self.terminal_error = None
         if message is None:
             return
@@ -1860,31 +1977,65 @@ class _LiveSessionTracker:
 
         if tool_call_cancellation is not None:
             cancelled_ids = getattr(tool_call_cancellation, "ids", None) or ()
-            if cancelled_ids and self._pending_tool_call_batches:
-                cancelled_set = {str(cid) for cid in cancelled_ids if cid}
-                for batch in list(self._pending_tool_call_batches):
-                    batch.remaining_ids.difference_update(cancelled_set)
-                completed_batches: list[_PendingToolCallBatch] = []
-                while (
-                    self._pending_tool_call_batches
-                    and self._pending_tool_call_batches[0].is_complete
+            cancelled_set = {str(cid) for cid in cancelled_ids if cid}
+            if cancelled_set:
+                seen_batches: set[int] = set()
+                live_batches: list[_PendingToolCallBatch] = []
+
+                def _add_batch(batch: _PendingToolCallBatch | None) -> None:
+                    if batch is not None and id(batch) not in seen_batches:
+                        seen_batches.add(id(batch))
+                        live_batches.append(batch)
+
+                for batch in self._pending_tool_call_batches:
+                    _add_batch(batch)
+                live_turns: list[_OutboundTurn] = list(self._outbound_turns)
+                if (
+                    self._active_gen is not None
+                    and self._active_gen.bound_turn is not None
                 ):
-                    completed_batches.append(
-                        self._pending_tool_call_batches.popleft()
-                    )
+                    live_turns.append(self._active_gen.bound_turn)
+                for deferred_gen in self._deferred_generations:
+                    if deferred_gen.bound_turn is not None:
+                        live_turns.append(deferred_gen.bound_turn)
+                for turn in live_turns:
+                    _add_batch(turn.tool_batch)
+                    for staged in turn.staged_sends:
+                        _add_batch(staged.consumed_tool_batch)
+
+                for batch in live_batches:
+                    matched_cancelled = cancelled_set & batch.all_ids
+                    if matched_cancelled:
+                        batch.cancelled_ids.update(matched_cancelled)
+                    batch.remaining_ids.difference_update(cancelled_set)
+
+                remaining_batches: deque[_PendingToolCallBatch] = deque()
+                completed_batches: list[_PendingToolCallBatch] = []
+                for batch in self._pending_tool_call_batches:
+                    if batch.is_complete:
+                        completed_batches.append(batch)
+                    else:
+                        remaining_batches.append(batch)
+                self._pending_tool_call_batches = remaining_batches
+
                 for completed_batch in completed_batches:
                     batch_turn = completed_batch.turn
                     if (
                         batch_turn is not None
                         and batch_turn in self._outbound_turns
                         and not batch_turn.sealed
-                        and (
-                            batch_turn.input_messages
-                            or batch_turn.staged_sends
-                            or batch_turn.has_confirmed_input_payload
-                        )
                     ):
-                        batch_turn.sealed = True
+                        batch_has_active_response = (
+                            batch_turn.has_confirmed_input_payload
+                            or bool(batch_turn.input_messages)
+                            or any(
+                                other.has_input_payload
+                                and other.status != "aborted"
+                                for other in batch_turn.staged_sends
+                            )
+                        )
+                        if batch_has_active_response:
+                            batch_turn.sealed = True
 
         raw_vad: object = (
             getattr(voice_activity, "voice_activity_type", None)
@@ -1907,7 +2058,11 @@ class _LiveSessionTracker:
                     if (
                         open_turn.input_messages
                         or open_turn.pending_audio_chunks
-                        or open_turn.staged_sends
+                        or any(
+                            other.has_input_payload
+                            and other.status != "aborted"
+                            for other in open_turn.staged_sends
+                        )
                     ):
                         open_turn.sealed = True
                 self._stop_user_speech()
@@ -2067,6 +2222,7 @@ class _LiveSessionTracker:
                 if batch_ids or batch_unidentified:
                     self._pending_tool_call_batches.append(
                         _PendingToolCallBatch(
+                            all_ids=set(batch_ids),
                             remaining_ids=batch_ids,
                             remaining_unidentified=batch_unidentified,
                         )
@@ -2126,9 +2282,13 @@ class _LiveSessionTracker:
                 )
 
     def on_send_error(self, exc: BaseException) -> None:
+        if self._session_finalized:
+            return
         self._fail_active_operations(exc)
 
     def on_receive_error(self, exc: BaseException) -> None:
+        if self._session_finalized:
+            return
         self._fail_active_operations(exc)
 
     def on_session_error(self, exc: BaseException) -> None:
@@ -2165,6 +2325,7 @@ class _LiveSessionTracker:
             self.on_session_error(error)
         else:
             self.on_session_close()
+        self._pending_context_updates.clear()
         effective_error = error if error is not None else self.terminal_error
         self._telemetry_handler.emit_realtime_session_ended(
             self.provider,
@@ -2191,6 +2352,8 @@ async def _run_transactional_send(
     is_tool_response: bool = False,
     tool_response_ids: tuple[str, ...] = (),
     tool_response_unidentified: int = 0,
+    updates_system_instruction: bool = False,
+    updates_tool_definitions: bool = False,
 ) -> object:
     existing_staged = _ACTIVE_SEND_CALLBACK.get()
     if existing_staged is not None:
@@ -2203,6 +2366,8 @@ async def _run_transactional_send(
         existing_staged.is_tool_response = is_tool_response
         existing_staged.tool_response_ids = tool_response_ids
         existing_staged.tool_response_unidentified = tool_response_unidentified
+        existing_staged.updates_system_instruction = updates_system_instruction
+        existing_staged.updates_tool_definitions = updates_tool_definitions
         res = call_fn()
         if inspect.isawaitable(res):
             return await res
@@ -2219,6 +2384,8 @@ async def _run_transactional_send(
         is_tool_response=is_tool_response,
         tool_response_ids=tool_response_ids,
         tool_response_unidentified=tool_response_unidentified,
+        updates_system_instruction=updates_system_instruction,
+        updates_tool_definitions=updates_tool_definitions,
     )
     token = _ACTIVE_SEND_CALLBACK.set(staged)
     try:
@@ -2446,6 +2613,8 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                     system_instruction=sys_inst, tools=tools
                 ),
                 lambda: orig_send_context_update(*args, **kwargs),
+                updates_system_instruction=sys_inst is not None,
+                updates_tool_definitions=tools is not None,
             )
 
         setattr(session, "send_context_update", wrapped_send_context_update)

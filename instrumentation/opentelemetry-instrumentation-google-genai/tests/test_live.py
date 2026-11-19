@@ -25,6 +25,7 @@ from opentelemetry.instrumentation.google_genai import (
 from opentelemetry.instrumentation.google_genai import (
     live as live_module,
 )
+from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -5928,3 +5929,477 @@ async def test_live_gemini_2_tool_batch_rollback_and_retry_keeps_responses_in_si
     )
     assert ended.severity_number == SeverityNumber.INFO
     assert ErrorAttributes.ERROR_TYPE not in ended.attributes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via_legacy_send", [False, True])
+@pytest.mark.parametrize("send_b_first", [False, True])
+async def test_live_gemini_2_cancelled_tool_call_while_send_suspended_does_not_reopen_turn(
+    via_legacy_send: bool,
+    send_b_first: bool,
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    call_a_entered = asyncio.Event()
+    never_release = asyncio.Event()
+
+    class _SuspendToolAWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if "call-cancel-a" in raw:
+                call_a_entered.set()
+                await asyncio.wait_for(never_release.wait(), timeout=5.0)
+            await super().send(payload)
+
+    fake_ws = _SuspendToolAWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-cancel-a",
+                            "name": "get_weather",
+                            "args": {"city": "Seoul"},
+                        },
+                        {
+                            "id": "call-cancel-b",
+                            "name": "get_time",
+                            "args": {"city": "Seoul"},
+                        },
+                    ]
+                }
+            },
+            {"toolCallCancellation": {"ids": ["call-cancel-a"]}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Only Seoul time available."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply to next prompt."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    async def _send_tool_resp(
+        session: Any, resp: genai_types.FunctionResponse
+    ) -> None:
+        if via_legacy_send:
+            await session.send(input=resp)
+        else:
+            await session.send_tool_response(function_responses=resp)
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[
+                            genai_types.Part(text="Weather and time in Seoul?")
+                        ],
+                    ),
+                    turn_complete=True,
+                )
+                msg1 = await session._receive()
+                assert msg1.tool_call is not None
+
+                resp_a = genai_types.FunctionResponse(
+                    id="call-cancel-a",
+                    name="get_weather",
+                    response={"temp_c": 12},
+                )
+                resp_b = genai_types.FunctionResponse(
+                    id="call-cancel-b",
+                    name="get_time",
+                    response={"time": "10:00"},
+                )
+
+                if send_b_first:
+                    await _send_tool_resp(session, resp_b)
+                    task_a = asyncio.create_task(
+                        _send_tool_resp(session, resp_a)
+                    )
+                    await asyncio.wait_for(call_a_entered.wait(), timeout=5.0)
+                else:
+                    task_a = asyncio.create_task(
+                        _send_tool_resp(session, resp_a)
+                    )
+                    await asyncio.wait_for(call_a_entered.wait(), timeout=5.0)
+                    await _send_tool_resp(session, resp_b)
+
+                # Server cancels call A while its send task is suspended.
+                cancel_msg = await session._receive()
+                assert cancel_msg.tool_call_cancellation is not None
+
+                # Cancelling task A must NOT restore cancelled call A or reopen
+                # the batch's sealed turn containing confirmed response B.
+                task_a.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task_a
+
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Next user prompt")],
+                    ),
+                    turn_complete=True,
+                )
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    gen1, gen2, gen3 = spans
+
+    assert gen1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    gen2_inputs = gen2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    assert [m["parts"][0]["id"] for m in gen2_inputs] == ["call-cancel-b"]
+    assert gen3.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Next user prompt"},),
+        },
+    )
+
+    ended = next(
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name == "gen_ai.client.realtime_session.ended"
+    )
+    assert ended.severity_number == SeverityNumber.INFO
+    assert ErrorAttributes.ERROR_TYPE not in ended.attributes
+
+
+@pytest.mark.asyncio
+async def test_live_pending_context_update_propagates_to_subsequent_generation_without_replacement(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    has_context_update = hasattr(
+        genai_types, "LiveClientContextUpdate"
+    ) and hasattr(genai_live.AsyncSession, "send_context_update")
+    if not has_context_update:
+        return
+
+    def tool_init(query: str) -> str:
+        """Initial tool."""
+        return query
+
+    def tool_a(query: str) -> str:
+        """Tool A."""
+        return query
+
+    update_a_written = asyncio.Event()
+    release_update_a = asyncio.Event()
+
+    class _DrainingContextUpdateWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            await super().send(payload)
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if "System A" in raw:
+                update_a_written.set()
+                await asyncio.wait_for(release_update_a.wait(), timeout=5.0)
+
+    fake_ws = _DrainingContextUpdateWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply 1"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply 2"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply 3"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            config = genai_types.LiveConnectConfig(
+                response_modalities=[genai_types.Modality.TEXT],
+                system_instruction="Initial system",
+                tools=[tool_init],
+            )
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                # Turn 1: context update A writes before Turn 1 and stays
+                # draining while Replies 1, 2, and 3 arrive and complete.
+                update_a_task = asyncio.create_task(
+                    session.send_context_update(
+                        system_instruction="System A",
+                        tools=[tool_a],
+                    )
+                )
+                await asyncio.wait_for(update_a_written.wait(), timeout=5.0)
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Turn 1 prompt")],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+
+                # Turn 2 has NO replacement context update; it must inherit
+                # pending context update A once A finishes draining.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Turn 2 prompt")],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+
+                # Turn 3 replaces ONLY system_instruction while still
+                # inheriting tools from pending update A.
+                await session.send_context_update(
+                    system_instruction="System C",
+                )
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Turn 3 prompt")],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+
+                # All three generations wait on update A's confirmation.
+                assert span_exporter.get_finished_spans() == ()
+
+                release_update_a.set()
+                await update_a_task
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    by_reply = {
+        span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES][0]["parts"][0][
+            "content"
+        ]: span
+        for span in spans
+    }
+
+    span1 = by_reply["Reply 1"]
+    assert span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Turn 1 prompt"},),
+        },
+    )
+    assert span1.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "System A"},
+    )
+    assert [
+        t["name"] for t in span1.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+    ] == ["tool_a"]
+
+    span2 = by_reply["Reply 2"]
+    assert span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Turn 2 prompt"},),
+        },
+    )
+    assert span2.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "System A"},
+    )
+    assert [
+        t["name"] for t in span2.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+    ] == ["tool_a"]
+
+    span3 = by_reply["Reply 3"]
+    assert span3.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Turn 3 prompt"},),
+        },
+    )
+    assert span3.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "System C"},
+    )
+    assert [
+        t["name"] for t in span3.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+    ] == ["tool_a"]
+
+
+@pytest.mark.asyncio
+async def test_live_close_during_outstanding_receive_ignores_late_buffered_frames(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    has_vad_signal = (
+        "voice_activity_detection_signal"
+        in genai_types.LiveServerMessage.model_fields
+    )
+
+    started_spans: list[str] = []
+
+    class _StartRecorder(SpanProcessor):
+        def on_start(self, span: Any, parent_context: Any = None) -> None:
+            started_spans.append(span.name)
+
+    tracer_provider.add_span_processor(_StartRecorder())
+
+    late_frames: list[dict[str, Any]] = [
+        {
+            "serverContent": {
+                "modelTurn": {
+                    "role": "model",
+                    "parts": [{"text": "Late buffered model output"}],
+                },
+            }
+        }
+    ]
+    if has_vad_signal:
+        late_frames.append(
+            {
+                "voiceActivityDetectionSignal": {
+                    "vadSignalType": "VAD_SIGNAL_TYPE_SOS"
+                }
+            }
+        )
+
+    for late_frame in late_frames:
+        span_exporter.clear()
+        log_exporter.clear()
+        started_spans.clear()
+
+        recv_entered = asyncio.Event()
+        release_recv = asyncio.Event()
+        recv_calls = 0
+
+        class _BufferedAfterCloseWebSocket(_FakeWebSocket):
+            async def recv(self, decode: bool = True) -> bytes | str:
+                nonlocal recv_calls
+                recv_calls += 1
+                if recv_calls == 2:
+                    recv_entered.set()
+                    await asyncio.wait_for(release_recv.wait(), timeout=5.0)
+                return await super().recv(decode=decode)
+
+        fake_ws = _BufferedAfterCloseWebSocket(
+            [{"setupComplete": {}}, late_frame]
+        )
+
+        with patch(
+            "google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)
+        ):
+            with instrument(
+                GoogleGenAiSdkInstrumentor(),
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+                content_capture="SPAN_AND_EVENT",
+                extra_env={
+                    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"
+                },
+            ):
+                client = genai.Client(api_key="test-key", vertexai=False)
+                async with client.aio.live.connect(
+                    model="gemini-2.5-flash-native-audio-preview-12-2025",
+                ) as session:
+                    recv_iter = session.receive()
+                    recv_task = asyncio.create_task(recv_iter.__anext__())
+                    await asyncio.wait_for(recv_entered.wait(), timeout=5.0)
+
+                    # Another task closes the session while receive() is
+                    # suspended waiting on the websocket.
+                    await session.close()
+
+                    # Release the buffered frame after finalization; it must
+                    # still return to the caller without starting any span.
+                    release_recv.set()
+                    late_msg = await asyncio.wait_for(recv_task, timeout=5.0)
+                    assert late_msg is not None
+                    await recv_iter.aclose()
+
+        assert started_spans == []
+        assert span_exporter.get_finished_spans() == ()
+        logs = [log.log_record for log in log_exporter.get_finished_logs()]
+        assert [log.event_name for log in logs] == [
+            "gen_ai.client.realtime_session.started",
+            "gen_ai.client.realtime_session.ended",
+        ]
+        assert logs[1].severity_number == SeverityNumber.INFO
+        assert ErrorAttributes.ERROR_TYPE not in logs[1].attributes
