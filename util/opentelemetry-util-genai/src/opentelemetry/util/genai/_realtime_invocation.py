@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import ClassVar, Final
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
@@ -26,12 +26,10 @@ from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
+    _is_active_completion_hook,
     _resolve_suppressed_content_and_hook,
 )
-from opentelemetry.util.genai.completion_hook import (
-    CompletionHook,
-    _NoOpCompletionHook,
-)
+from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
@@ -50,6 +48,36 @@ _REALTIME_SESSION_ENDED_EVENT_NAME: Final = (
     "gen_ai.client.realtime_session.ended"
 )
 _GEN_AI_REALTIME_SESSION_ID: Final = "gen_ai.realtime_session.id"
+
+
+def should_capture_realtime_content(
+    content_capturing_mode: ContentCapturingMode,
+    completion_hook: CompletionHook,
+    *,
+    context: Context | None = None,
+) -> bool:
+    """Return True when realtime_inference content should be captured.
+
+    Mirrors the effective capture policy of :class:`RealtimeInferenceInvocation`
+    and :class:`SuppressedRealtimeInferenceInvocation` before a generation turn
+    starts so instrumentations can decide whether to buffer incoming media or
+    messages without reading private handler internals.
+    """
+    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY, context=context)
+    if isinstance(ctx_data, InferenceData):
+        (
+            capture_content_to_context,
+            upload_completion,
+            _,
+            _,
+        ) = _resolve_suppressed_content_and_hook(
+            ctx_data, content_capturing_mode, completion_hook
+        )
+        return capture_content_to_context or upload_completion
+    return content_capturing_mode in (
+        ContentCapturingMode.SPAN_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    ) or _is_active_completion_hook(completion_hook)
 
 
 @dataclass
@@ -116,7 +144,6 @@ class RealtimeInferenceInvocation(InferenceInvocation):
         else:
             self._realtime_data = _RealtimeInferenceData()
         self._realtime_data.realtime_session_id = realtime_session_id
-        self._emit_event = False
 
     @property
     def realtime_session_id(self) -> str | None:
@@ -139,8 +166,8 @@ class RealtimeInferenceInvocation(InferenceInvocation):
         """
         if not self._start_span:
             return super().should_capture_content
-        return self._should_capture_content_on_span or not isinstance(
-            self._completion_hook, _NoOpCompletionHook
+        return self._should_capture_content_on_span or (
+            _is_active_completion_hook(self._completion_hook)
         )
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
@@ -214,12 +241,6 @@ class _UserSpeechData:
 
     provider_name: str | None = None
     realtime_session_id: str | None = None
-    attributes: dict[str, AttributeValue] = field(
-        default_factory=dict[str, AttributeValue]
-    )
-    metric_attributes: dict[str, AttributeValue] = field(
-        default_factory=dict[str, AttributeValue]
-    )
 
 
 class UserSpeechInvocation(GenAIInvocation):
@@ -271,11 +292,7 @@ class UserSpeechInvocation(GenAIInvocation):
             context=context,
             _attach_to_context=_attach_to_context,
             content_capturing_mode=content_capturing_mode,
-            attributes=self._data.attributes,
-            metric_attributes=self._data.metric_attributes,
         )
-        self._data.attributes = self.attributes
-        self._data.metric_attributes = self.metric_attributes
 
     @property
     def provider(self) -> str | None:
@@ -292,8 +309,6 @@ class UserSpeechInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        self._data.attributes = self.attributes
-        self._data.metric_attributes = self.metric_attributes
         if not self.span.is_recording():
             return
         attributes: dict[str, AttributeValue] = {}
