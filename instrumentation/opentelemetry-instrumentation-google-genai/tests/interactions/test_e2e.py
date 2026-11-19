@@ -1298,15 +1298,45 @@ def _assert_create_tool_call_and_steps_span(
     ]
 
 
+def _expected_malformed_input_exception() -> type[Exception]:
+    try:
+        from google.genai._interactions import BadRequestError
+        from google.genai._interactions.resources.interactions import (  # noqa: F401
+            InteractionsResource,
+        )
+
+        return BadRequestError
+    except ImportError:
+        from pydantic import ValidationError
+
+        return ValidationError
+
+
 def _assert_malformed_input_span(
     otel_mocker: OTelMocker, exc: BaseException, content_mode: str
 ) -> None:
-    assert not isinstance(exc, AttributeError)
+    from pydantic import ValidationError
+
     assert not get_current_span().get_span_context().is_valid
     span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
     assert span is not None
     assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes["error.type"] != "AttributeError"
+    if isinstance(exc, ValidationError):
+        assert any("input" in err["loc"] for err in exc.errors())
+        assert (
+            span.attributes["error.type"]
+            == "pydantic_core._pydantic_core.ValidationError"
+        )
+    else:
+        from google.genai._interactions import BadRequestError
+
+        assert isinstance(exc, BadRequestError)
+        assert exc.status_code == 400
+        assert (
+            "'input' must be a Content[], string, Turn[], Step[], or Content"
+            in str(exc)
+        )
+        assert span.attributes["error.type"] == "400"
     if content_mode == "no_content_capture":
         assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
     else:
@@ -1327,7 +1357,8 @@ def test_sync_interactions_create_malformed_input(
     content_mode: str,
 ) -> None:
     request.getfixturevalue(content_mode)
-    with pytest.raises(Exception) as exc_info:
+    expected_exc = _expected_malformed_input_exception()
+    with pytest.raises(expected_exc) as exc_info:
         client.interactions.create(
             model="gemini-2.5-flash",
             input=[None, {"type": "user_input", "content": [None]}],
@@ -1349,7 +1380,8 @@ async def test_async_interactions_create_malformed_input(
     content_mode: str,
 ) -> None:
     request.getfixturevalue(content_mode)
-    with pytest.raises(Exception) as exc_info:
+    expected_exc = _expected_malformed_input_exception()
+    with pytest.raises(expected_exc) as exc_info:
         await client.aio.interactions.create(
             model="gemini-2.5-flash",
             input=[None, {"type": "user_input", "content": [None]}],
