@@ -1831,6 +1831,12 @@ def _parse_endpoint_url(raw_url: Any) -> tuple[str | None, int | None]:
     return None, None
 
 
+def _extract_mapping_or_attr(obj: Any, key: str) -> Any:
+    if isinstance(obj, Mapping):
+        return cast(Mapping[str, Any], obj).get(key)
+    return getattr(obj, key, None)
+
+
 def _resolve_model_endpoint(
     instance: Model,
     *,
@@ -1854,15 +1860,38 @@ def _resolve_model_endpoint(
         if addr is not None:
             return addr, port
 
-    base_url = _get_property_value(
-        instance, "base_url"
-    ) or _get_property_value(instance, "host")
-    if base_url:
-        addr, port = _parse_endpoint_url(base_url)
-        if addr is not None:
-            return addr, port
+    client_params = _get_property_value(instance, "client_params")
+    typed_client_params = (
+        cast(Mapping[str, Any], client_params)
+        if isinstance(client_params, Mapping)
+        else None
+    )
+    if typed_client_params is not None:
+        for key in ("base_url", "azure_endpoint", "host"):
+            if key in typed_client_params:
+                addr, port = _parse_endpoint_url(typed_client_params[key])
+                if addr is not None:
+                    return addr, port
+        http_options = typed_client_params.get("http_options")
+        if http_options is not None:
+            addr, port = _parse_endpoint_url(
+                _extract_mapping_or_attr(http_options, "base_url")
+            )
+            if addr is not None:
+                return addr, port
+
+    for key in ("base_url", "azure_endpoint", "host"):
+        if typed_client_params is not None and key in typed_client_params:
+            continue
+        raw_url = _get_property_value(instance, key)
+        if raw_url:
+            addr, port = _parse_endpoint_url(raw_url)
+            if addr is not None:
+                return addr, port
 
     http_client = _get_property_value(instance, "http_client")
+    if http_client is None and typed_client_params is not None:
+        http_client = typed_client_params.get("http_client")
     if http_client is not None:
         return _parse_endpoint_url(_extract_client_base_url(http_client))
 
