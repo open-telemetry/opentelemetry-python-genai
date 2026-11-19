@@ -115,6 +115,11 @@ Context data classes accept two boolean parameters (defaulting to ``False``):
 Stream execution context
 ------------------------
 
+.. note::
+
+   ``opentelemetry.util.genai.stream`` requires the ``wrapt`` extra
+   (``pip install opentelemetry-util-genai[wrapt]``).
+
 ``SyncStreamWrapper`` and ``AsyncStreamWrapper`` scope each stream read and
 cleanup operation with ``_execution_context()``. Context is restored before
 returning a chunk to the consumer. Generator ``send``/``throw`` and
@@ -194,6 +199,13 @@ included (as dictionaries instead of JSON strings) only in ``EVENT_ONLY`` or ``S
 To suppress these events while keeping a ``LoggerProvider`` active, configure your logger or
 ``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
 <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
+
+When an inference, embeddings, retrieval, fetch response, agent invocation, or tool execution
+operation fails with an exception, the package also emits the operation's exception event (for
+example ``gen_ai.client.inference.exception``) with ``WARN`` severity, carrying ``exception.type``,
+``exception.message``, and ``exception.stacktrace``. ``exception.message`` may contain sensitive
+information. The event is not emitted for failures reported without an exception, or for a
+``BaseException`` that is not an ``Exception``, such as cancellation.
 
 Completion Hook / Upload
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -276,6 +288,11 @@ For embedding invocations, the following attributes are set:
 Capturing request iterators
 ---------------------------
 
+.. note::
+
+   ``opentelemetry.util.genai.iterator_capture`` requires the ``wrapt`` extra
+   (``pip install opentelemetry-util-genai[wrapt]``).
+
 Use ``IteratorCapture.from_property()`` for a named request property. It replaces
 that property's value in ``kwargs`` and records values as the SDK reads them.
 Disabled captures and missing properties leave ``kwargs`` untouched and return
@@ -321,9 +338,27 @@ Installation
 
     pip install opentelemetry-util-genai
 
-For upload support (requires ``fsspec``)::
+Optional Dependencies (Extras)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    pip install opentelemetry-util-genai[upload]
+The base ``opentelemetry-util-genai`` package depends only on ``opentelemetry-api``
+and ``opentelemetry-semantic-conventions`` (suitable for native SDK/framework integrations
+that call ``TelemetryHandler`` directly without monkeypatching or proxy wrappers).
+
+Additional capabilities are provided via optional extras:
+
+- ``wrapt`` -- Installs ``wrapt`` for transparent object-proxy wrappers in
+  ``opentelemetry.util.genai.stream`` (``SyncStreamWrapper``, ``AsyncStreamWrapper``,
+  ``SyncStreamManagerWrapper``, ``AsyncStreamManagerWrapper``) and
+  ``opentelemetry.util.genai.iterator_capture`` (``IteratorCapture``)::
+
+      pip install opentelemetry-util-genai[wrapt]
+
+- ``upload`` -- Installs ``fsspec`` for the built-in ``upload`` completion hook
+  (``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload``) to upload captured prompts and
+  completions to local or cloud object storage::
+
+      pip install opentelemetry-util-genai[upload]
 
 
 Design Document

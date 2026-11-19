@@ -44,5 +44,5 @@ openai
 -e instrumentation/opentelemetry-instrumentation-genai-openai
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
--e util/opentelemetry-util-genai
+-e util/opentelemetry-util-genai[wrapt]
 -e instrumentation/opentelemetry-instrumentation-genai-agno

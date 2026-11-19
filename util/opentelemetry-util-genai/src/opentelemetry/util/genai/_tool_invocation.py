@@ -64,6 +64,8 @@ class ToolInvocation(GenAIInvocation):
     - error.type: Error type if operation failed (Conditionally Required)
     """
 
+    _exception_event_name = "gen_ai.execute_tool.exception"
+
     def __init__(
         self,
         tracer: Tracer,

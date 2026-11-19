@@ -29,6 +29,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -660,6 +661,7 @@ async def test_tool_carries_nearest_agent_name(
     asynchronous: bool,
     nested: bool,
     span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
     instrument_langchain: None,
 ) -> None:
     def calculate(
@@ -723,6 +725,17 @@ async def test_tool_carries_nearest_agent_name(
         assert (
             specialist_span.parent.span_id == coordinator_span.context.span_id
         )
+
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {
+        metric.name: metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    assert "gen_ai.invoke_agent.inference_calls" not in metrics
+    assert "gen_ai.invoke_agent.tool_calls" not in metrics
 
 
 def _model_response(

@@ -80,7 +80,8 @@ the caller's context while the stream is unconsumed: call `invocation.suspend()`
 the stream, and re-activate the invocation only while a chunk is being read.
 
 Instrument streams by subclassing `SyncStreamWrapper` / `AsyncStreamWrapper` from
-`opentelemetry.util.genai.stream` (the public, supported helpers). The base class proxies the
+`opentelemetry.util.genai.stream` (the public, supported helpers; requires the `[wrapt]` extra:
+`opentelemetry-util-genai[wrapt]`). The base class proxies the
 underlying SDK stream, drives iteration, and finalizes telemetry exactly once on success, error,
 or `close()`. Subclasses pass the SDK stream and the invocation to
 `super().__init__(stream, invocation)`, which also marks the invocation as a streamed request

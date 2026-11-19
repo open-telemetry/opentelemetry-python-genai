@@ -1,5 +1,5 @@
 ---
-applyTo: "tox.ini,pytest.ini,pyproject.toml,uv.lock,.codespellrc,.pre-commit-config.yaml,scripts/**,.github/workflows/**,.github/actions/**"
+applyTo: "tox.ini,tox-uv.toml,pytest.ini,**/pyproject.toml,**/tests/requirements.*.txt,uv.lock,eachdist.ini,versions.env,pyrightconfig*.json,.codespellrc,.pre-commit-config.yaml,scripts/**,.github/workflows/**,.github/actions/**"
 ---
 
 Review rules for PRs touching build, test-matrix, and CI configuration. Flag violations with a
@@ -27,6 +27,11 @@ these, not just the first:
 
 The uv workspace picks up new packages via the `instrumentation/*` glob in root `pyproject.toml`,
 so no edit is needed there.
+
+A new package must also be wired into releases, and start at the repo's current version series
+(compare `version.py` with an existing package). Flag a package missing from `eachdist.ini` or
+from the package lists in `.github/workflows/prepare-release.yml`, `release-package.yml`, or
+`prepare-backport-patch.yml`.
 
 ## 2. Lower bounds
 

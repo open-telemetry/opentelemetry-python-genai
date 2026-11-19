@@ -18,7 +18,13 @@ if TYPE_CHECKING:
         def __init__(self, wrapped: object) -> None: ...
 
 else:
-    from wrapt import ObjectProxy as _ObjectProxy
+    try:
+        from wrapt import ObjectProxy as _ObjectProxy
+    except ModuleNotFoundError as exc:
+        raise ImportError(
+            "opentelemetry.util.genai.iterator_capture requires the 'wrapt' extra. "
+            "Install it with: pip install 'opentelemetry-util-genai[wrapt]'"
+        ) from exc
 
 _logger = logging.getLogger(__name__)
 _InputT = TypeVar("_InputT")

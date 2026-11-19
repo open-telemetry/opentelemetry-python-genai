@@ -1568,7 +1568,7 @@ def test_responses_create_captures_custom_tool_call_output(
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
-        "tool_calls",
+        "tool_call",
     )
     output_messages = _load_span_messages(
         span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
@@ -1664,7 +1664,7 @@ def test_responses_create_captures_computer_tool_loop(
     first_span, second_span = span_exporter.get_finished_spans()
     assert first_span.attributes[
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ] == ("tool_calls",)
+    ] == ("tool_call",)
     first_output = _load_span_messages(
         first_span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
@@ -1726,7 +1726,7 @@ def test_responses_create_captures_tool_call_content(
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
-        "tool_calls",
+        "tool_call",
     )
 
     input_messages = _load_span_messages(

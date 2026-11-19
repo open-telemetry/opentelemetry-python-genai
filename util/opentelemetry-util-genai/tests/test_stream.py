@@ -2620,3 +2620,24 @@ def test_tool_stream_wrapper_leaves_detached_tool_invocation_alone():
     assert inside == [caller_span]
     assert get_current_span() is caller_span
     assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_missing_wrapt_raises_helpful_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util  # pylint: disable=import-outside-toplevel
+    import sys  # pylint: disable=import-outside-toplevel
+
+    import opentelemetry.util.genai.stream as mod  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setitem(sys.modules, "wrapt", None)
+    spec = importlib.util.spec_from_file_location(
+        "_test_stream_no_wrapt", mod.__file__
+    )
+    assert spec is not None and spec.loader is not None
+    fresh_module = importlib.util.module_from_spec(spec)
+    with pytest.raises(
+        ImportError,
+        match=r"opentelemetry\.util\.genai\.stream requires the 'wrapt' extra",
+    ):
+        spec.loader.exec_module(fresh_module)
