@@ -38,26 +38,19 @@ from google.genai.types import (
     ToolUnionDict,
 )
 
-from opentelemetry.context import Context, get_current, get_value
+from opentelemetry.context import Context, get_current
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes.error_attributes import ErrorTypeValues
-from opentelemetry.util.genai.completion_hook import (
-    _NoOpCompletionHook,
-    _SafeCompletionHook,
-)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    CLIENT_INFERENCE_CONTEXT_KEY,
     Error,
-    InferenceData,
     RealtimeInferenceInvocation,
     UserSpeechInvocation,
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
-    ContentCapturingMode,
     InputMessage,
     MessagePart,
     Modality,
@@ -83,50 +76,11 @@ from .message import _to_part, to_input_messages, to_system_instructions
 
 _ORIGINAL_ASYNC_LIVE_CONNECT = AsyncLive.connect
 _MAX_BUFFERED_MEDIA_BYTES: Final = 4 * 1024 * 1024
-_ACTIVE_SEND_CALLBACK: contextvars.ContextVar[
-    list[Callable[[], None]] | None
-] = contextvars.ContextVar(
-    "_otel_google_genai_live_active_send_callback", default=None
-)
-
-
-def _has_active_completion_hook(telemetry_handler: TelemetryHandler) -> bool:
-    hook = telemetry_handler._completion_hook
-    if isinstance(hook, _NoOpCompletionHook):
-        return False
-    if isinstance(hook, _SafeCompletionHook) and isinstance(
-        hook._wrapped, _NoOpCompletionHook
-    ):
-        return False
-    return True
-
-
-def _should_capture_live_content(telemetry_handler: TelemetryHandler) -> bool:
-    """Return True when message/audio content should be buffered for Live spans or hooks.
-
-    Because ``realtime_inference`` does not emit a
-    ``gen_ai.client.inference.operation.details`` event, ``EVENT_ONLY`` mode
-    captures content only when a completion hook is active or when running
-    inside an active outer inference context whose capture policy allows it.
-    """
-    mode = telemetry_handler._content_capturing_mode
-    has_active_hook = _has_active_completion_hook(telemetry_handler)
-    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
-    if isinstance(ctx_data, InferenceData):
-        capture_to_context = (
-            ctx_data.capture_content
-            and mode != ContentCapturingMode.NO_CONTENT
-        )
-        upload_completion = ctx_data.upload_completion and has_active_hook
-        return capture_to_context or upload_completion
-    return (
-        mode
-        in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        )
-        or has_active_hook
+_ACTIVE_SEND_CALLBACK: contextvars.ContextVar[_StagedSend | None] = (
+    contextvars.ContextVar(
+        "_otel_google_genai_live_active_send_callback", default=None
     )
+)
 
 
 def _strip_model_prefix(model: str | None) -> str | None:
@@ -347,7 +301,44 @@ def _is_interaction_complete(
     return bool(getattr(server_content, "turn_complete", False))
 
 
-@dataclass
+@dataclass(eq=False)
+class _StagedSend:
+    """Represents an in-flight WebSocket send awaiting transport confirmation."""
+
+    commit_fn: Callable[[], None]
+    context: contextvars.Context
+    bound_gen: _ActiveGeneration | None = None
+    settled: bool = False
+
+
+def _merge_input_messages(
+    target: list[InputMessage], committed: Sequence[InputMessage]
+) -> None:
+    """Merge newly confirmed input messages into ``target``, coalescing adjacent audio."""
+    for msg in committed:
+        if (
+            target
+            and target[-1].role == "user"
+            and msg.role == "user"
+            and len(target[-1].parts) == 1
+            and len(msg.parts) == 1
+            and isinstance(last_part := target[-1].parts[0], BlobPart)
+            and isinstance(new_part := msg.parts[0], BlobPart)
+            and last_part.modality == Modality.AUDIO
+            and new_part.modality == Modality.AUDIO
+            and last_part.mime_type == new_part.mime_type
+            and isinstance(last_part.content, bytes)
+            and isinstance(new_part.content, bytes)
+        ):
+            merged = last_part.content + new_part.content
+            if len(merged) > _MAX_BUFFERED_MEDIA_BYTES:
+                merged = merged[-_MAX_BUFFERED_MEDIA_BYTES:]
+            last_part.content = merged
+        else:
+            target.append(msg)
+
+
+@dataclass(eq=False)
 class _ActiveGeneration:
     invocation: RealtimeInferenceInvocation
     input_messages: list[InputMessage] = field(default_factory=list)
@@ -373,6 +364,9 @@ class _ActiveGeneration:
     turn_complete: bool = False
     awaiting_tool_response: bool = False
     accepting_input_transcription: bool = True
+    pending_sends: list[_StagedSend] = field(default_factory=list)
+    deferred_finish_reason: str | None = None
+    deferred_error: Error | BaseException | None = None
 
     def flush_current_turn_output_message(
         self, finish_reason: str | None
@@ -476,9 +470,9 @@ class _LiveSessionTracker:
         self._pending_input_messages: list[InputMessage] = []
         self._pending_media_bytes: int = 0
         self._pending_input_transcript_deltas: list[str] = []
-        self._inflight_sends: list[
-            tuple[list[Callable[[], None]], contextvars.Context]
-        ] = []
+        self._inflight_sends: list[_StagedSend] = []
+        self._deferred_generations: list[_ActiveGeneration] = []
+        self._capture_content_override: bool | None = None
         self._active_gen: _ActiveGeneration | None = None
         self._speech_invocation: UserSpeechInvocation | None = None
         self.terminal_error: BaseException | None = None
@@ -505,29 +499,145 @@ class _LiveSessionTracker:
             )
 
     def _should_capture_content(self) -> bool:
+        if self._capture_content_override is not None:
+            return self._capture_content_override
         if self._active_gen is not None:
             return self._active_gen.invocation.should_capture_content
-        return _should_capture_live_content(self._telemetry_handler)
+        return self._telemetry_handler.should_capture_realtime_content()
 
-    def register_inflight_send(self, slot: list[Callable[[], None]]) -> None:
-        if not slot:
+    def register_inflight_send(self, staged: _StagedSend) -> None:
+        if staged.settled or staged in self._inflight_sends:
             return
-        for existing_slot, _ in self._inflight_sends:
-            if existing_slot is slot:
-                return
-        self._inflight_sends.append((slot, contextvars.copy_context()))
+        self._inflight_sends.append(staged)
 
-    def unregister_inflight_send(self, slot: list[Callable[[], None]]) -> None:
-        self._inflight_sends = [
-            entry for entry in self._inflight_sends if entry[0] is not slot
-        ]
+    def _commit_to_bound_generation(
+        self, staged: _StagedSend, target_gen: _ActiveGeneration
+    ) -> None:
+        # Execute the confirmed send callback against isolated pending buffers
+        # so subsequent turns' pending state is unaffected, then attach any
+        # resulting inputs/context updates to ``target_gen``.
+        saved_chunks = self._pending_audio_chunks
+        saved_audio_bytes = self._pending_audio_bytes
+        saved_audio_mime = self._pending_audio_mime_type
+        saved_messages = self._pending_input_messages
+        saved_media_bytes = self._pending_media_bytes
+        saved_sys = self.system_instruction
+        saved_tools = self.tool_definitions
+        saved_active_gen = self._active_gen
+        saved_override = self._capture_content_override
 
-    def flush_inflight_sends(self) -> None:
-        while self._inflight_sends:
-            slot, ctx = self._inflight_sends.pop(0)
-            if slot:
-                cb = slot.pop(0)
-                ctx.run(cb)
+        target_capture = target_gen.invocation.should_capture_content
+        self._pending_audio_chunks = deque()
+        self._pending_audio_bytes = 0
+        self._pending_audio_mime_type = None
+        self._pending_input_messages = []
+        self._pending_media_bytes = 0
+        self._active_gen = None
+        self._capture_content_override = target_capture
+        try:
+            staged.context.run(staged.commit_fn)
+            self._flush_pending_audio(capture_content=target_capture)
+            committed_messages = self._pending_input_messages
+        finally:
+            self._pending_audio_chunks = saved_chunks
+            self._pending_audio_bytes = saved_audio_bytes
+            self._pending_audio_mime_type = saved_audio_mime
+            self._pending_input_messages = saved_messages
+            self._pending_media_bytes = saved_media_bytes
+            self._active_gen = saved_active_gen
+            self._capture_content_override = saved_override
+
+        if committed_messages:
+            _merge_input_messages(
+                target_gen.input_messages, committed_messages
+            )
+        if target_capture:
+            if self.system_instruction is not saved_sys:
+                target_gen.system_instruction = list(self.system_instruction)
+            if self.tool_definitions is not saved_tools:
+                target_gen.tool_definitions = list(self.tool_definitions)
+
+    def _detach_pending_sends(self, active_gen: _ActiveGeneration) -> None:
+        for staged in active_gen.pending_sends:
+            if staged.bound_gen is active_gen:
+                staged.bound_gen = None
+        active_gen.pending_sends.clear()
+
+    def _maybe_finish_deferred_generation(
+        self, active_gen: _ActiveGeneration
+    ) -> None:
+        if (
+            active_gen.deferred_finish_reason is not None
+            and not active_gen.pending_sends
+            and active_gen in self._deferred_generations
+        ):
+            self._deferred_generations.remove(active_gen)
+            finish_reason = active_gen.deferred_finish_reason
+            error = active_gen.deferred_error
+            active_gen.deferred_finish_reason = None
+            active_gen.deferred_error = None
+            self._populate_and_finish_generation(
+                active_gen, finish_reason=finish_reason, error=error
+            )
+
+    def _finish_or_defer_generation(
+        self,
+        active_gen: _ActiveGeneration,
+        finish_reason: str,
+        error: Error | BaseException | None = None,
+    ) -> None:
+        if active_gen.pending_sends and error is None:
+            active_gen.invocation.mark_end()
+            active_gen.deferred_finish_reason = finish_reason
+            active_gen.deferred_error = None
+            if active_gen not in self._deferred_generations:
+                self._deferred_generations.append(active_gen)
+            return
+        self._detach_pending_sends(active_gen)
+        self._populate_and_finish_generation(
+            active_gen, finish_reason=finish_reason, error=error
+        )
+
+    def _flush_deferred_generations(self) -> None:
+        while self._deferred_generations:
+            gen = self._deferred_generations.pop(0)
+            self._detach_pending_sends(gen)
+            finish_reason = gen.deferred_finish_reason or "stop"
+            error = gen.deferred_error
+            gen.deferred_finish_reason = None
+            gen.deferred_error = None
+            self._populate_and_finish_generation(
+                gen, finish_reason=finish_reason, error=error
+            )
+
+    def confirm_inflight_send(self, staged: _StagedSend) -> None:
+        if staged.settled:
+            return
+        staged.settled = True
+        if staged in self._inflight_sends:
+            self._inflight_sends.remove(staged)
+        target_gen = staged.bound_gen
+        staged.bound_gen = None
+        if target_gen is None:
+            staged.context.run(staged.commit_fn)
+            return
+        if staged in target_gen.pending_sends:
+            target_gen.pending_sends.remove(staged)
+        self._commit_to_bound_generation(staged, target_gen)
+        self._maybe_finish_deferred_generation(target_gen)
+
+    def abort_inflight_send(self, staged: _StagedSend) -> None:
+        if staged.settled:
+            return
+        staged.settled = True
+        if staged in self._inflight_sends:
+            self._inflight_sends.remove(staged)
+        target_gen = staged.bound_gen
+        staged.bound_gen = None
+        if target_gen is not None:
+            if staged in target_gen.pending_sends:
+                target_gen.pending_sends.remove(staged)
+            self._maybe_finish_deferred_generation(target_gen)
 
     def _mark_new_user_utterance(self) -> None:
         if self._active_gen is not None:
@@ -1032,7 +1142,7 @@ class _LiveSessionTracker:
                 self._pending_input_transcript_deltas
             )
             self._pending_input_transcript_deltas.clear()
-            self._active_gen = _ActiveGeneration(
+            active_gen = _ActiveGeneration(
                 invocation=invocation,
                 input_messages=input_msgs,
                 system_instruction=(
@@ -1043,6 +1153,13 @@ class _LiveSessionTracker:
                 ),
                 input_transcript_deltas=input_transcript_deltas,
             )
+            if self._inflight_sends:
+                pending = list(self._inflight_sends)
+                self._inflight_sends.clear()
+                for staged in pending:
+                    staged.bound_gen = active_gen
+                    active_gen.pending_sends.append(staged)
+            self._active_gen = active_gen
         return self._active_gen
 
     def _populate_and_finish_generation(
@@ -1096,26 +1213,33 @@ class _LiveSessionTracker:
             if prompt_tokens is not None:
                 invocation.input_tokens = prompt_tokens
 
+            thoughts_tokens = getattr(usage, "thoughts_token_count", None)
+            if thoughts_tokens is not None:
+                invocation.thinking_tokens = thoughts_tokens
+
             response_tokens = getattr(usage, "response_token_count", None)
             if response_tokens is not None:
-                invocation.output_tokens = response_tokens
+                # On Vertex Live, google-genai maps wire `candidatesTokenCount`
+                # (which excludes reasoning tokens) to `response_token_count`.
+                invocation.output_tokens = (
+                    response_tokens + (thoughts_tokens or 0)
+                    if self.is_vertex
+                    else response_tokens
+                )
             else:
                 candidates_tokens = getattr(
                     usage, "candidates_token_count", None
                 )
-                thoughts_tokens = getattr(usage, "thoughts_token_count", None)
                 if candidates_tokens is not None:
                     invocation.output_tokens = candidates_tokens + (
                         thoughts_tokens or 0
                     )
+                elif thoughts_tokens is not None:
+                    invocation.output_tokens = thoughts_tokens
 
             cached_tokens = getattr(usage, "cached_content_token_count", None)
             if cached_tokens is not None:
                 invocation.cache_read_input_tokens = cached_tokens
-
-            thoughts_tokens = getattr(usage, "thoughts_token_count", None)
-            if thoughts_tokens is not None:
-                invocation.thinking_tokens = thoughts_tokens
 
             prompt_details = getattr(usage, "prompt_tokens_details", None)
             if prompt_details is not None:
@@ -1159,18 +1283,6 @@ class _LiveSessionTracker:
         server_content = getattr(message, "server_content", None)
         tool_call = getattr(message, "tool_call", None)
         usage_metadata = getattr(message, "usage_metadata", None)
-
-        # Commit any in-flight send callbacks whose frames have already been
-        # handed to the WebSocket before processing server events triggered by
-        # them (e.g., when ws.send yields while draining after writing).
-        if (
-            voice_activity is not None
-            or vad_signal is not None
-            or server_content is not None
-            or tool_call is not None
-            or usage_metadata is not None
-        ):
-            self.flush_inflight_sends()
 
         raw_vad: object = (
             getattr(voice_activity, "voice_activity_type", None)
@@ -1351,7 +1463,7 @@ class _LiveSessionTracker:
                         )
                     )
                 self._active_gen = None
-                self._populate_and_finish_generation(
+                self._finish_or_defer_generation(
                     active_gen, finish_reason="tool_call"
                 )
                 return
@@ -1361,7 +1473,7 @@ class _LiveSessionTracker:
                 "interrupted" if active_gen.interrupted else "stop"
             )
             self._active_gen = None
-            self._populate_and_finish_generation(
+            self._finish_or_defer_generation(
                 active_gen, finish_reason=finish_reason
             )
 
@@ -1371,6 +1483,7 @@ class _LiveSessionTracker:
         if self._active_gen is not None:
             active_gen = self._active_gen
             self._active_gen = None
+            self._detach_pending_sends(active_gen)
             self._populate_and_finish_generation(
                 active_gen, finish_reason="error", error=exc
             )
@@ -1382,13 +1495,16 @@ class _LiveSessionTracker:
         self._fail_active_operations(exc)
 
     def on_session_error(self, exc: BaseException) -> None:
+        self._flush_deferred_generations()
         self._fail_active_operations(exc)
 
     def on_session_close(self) -> None:
+        self._flush_deferred_generations()
         self._stop_user_speech()
         if self._active_gen is not None:
             active_gen = self._active_gen
             self._active_gen = None
+            self._detach_pending_sends(active_gen)
             finish_reason = active_gen.turn_complete_reason or (
                 "interrupted"
                 if active_gen.interrupted
@@ -1414,29 +1530,30 @@ async def _run_transactional_send(
     commit_fn: Callable[[], None],
     call_fn: Callable[[], object],
 ) -> object:
-    existing_slot = _ACTIVE_SEND_CALLBACK.get()
-    if existing_slot is not None:
-        existing_slot[:] = [commit_fn]
+    existing_staged = _ACTIVE_SEND_CALLBACK.get()
+    if existing_staged is not None:
+        existing_staged.commit_fn = commit_fn
         res = call_fn()
         if inspect.isawaitable(res):
             return await res
         return res
 
-    slot: list[Callable[[], None]] = [commit_fn]
-    token = _ACTIVE_SEND_CALLBACK.set(slot)
+    staged = _StagedSend(
+        commit_fn=commit_fn,
+        context=contextvars.copy_context(),
+    )
+    token = _ACTIVE_SEND_CALLBACK.set(staged)
     try:
         res = call_fn()
         if inspect.isawaitable(res):
             res = await res
     except BaseException as exc:
-        slot.clear()
+        tracker.abort_inflight_send(staged)
         if not isinstance(exc, (ValueError, TypeError)):
             tracker.on_send_error(exc)
         raise
     else:
-        if slot:
-            cb = slot.pop(0)
-            cb()
+        tracker.confirm_inflight_send(staged)
         return res
     finally:
         _ACTIVE_SEND_CALLBACK.reset(token)
@@ -1457,24 +1574,20 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
 
         @functools.wraps(orig_ws_send)
         async def wrapped_ws_send(*args: object, **kwargs: object) -> object:
-            slot = _ACTIVE_SEND_CALLBACK.get()
-            if slot is not None:
-                tracker.register_inflight_send(slot)
+            staged = _ACTIVE_SEND_CALLBACK.get()
+            if staged is not None:
+                tracker.register_inflight_send(staged)
             try:
                 res = orig_ws_send(*args, **kwargs)
                 if inspect.isawaitable(res):
                     res = await res
             except BaseException as exc:
-                if slot is not None:
-                    slot.clear()
+                if staged is not None:
+                    tracker.abort_inflight_send(staged)
                 tracker.on_send_error(exc)
                 raise
-            finally:
-                if slot is not None:
-                    tracker.unregister_inflight_send(slot)
-            if slot:
-                cb = slot.pop(0)
-                cb()
+            if staged is not None:
+                tracker.confirm_inflight_send(staged)
             return res
 
         with contextlib.suppress(Exception):

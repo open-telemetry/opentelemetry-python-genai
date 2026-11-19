@@ -3070,3 +3070,569 @@ async def test_live_setup_handshake_failure_and_receive_cancellation(
         logs[1].attributes[ErrorAttributes.ERROR_TYPE]
         == expected_cancel_error_type
     )
+
+
+@pytest.mark.asyncio
+async def test_live_vertex_output_tokens_include_thoughts(
+    span_exporter,
+    metric_reader,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+    from google.auth.credentials import Credentials
+
+    class _FakeCredentials(Credentials):
+        def __init__(self) -> None:
+            super().__init__()
+            self.token = "fake-vertex-token"
+
+        @property
+        def valid(self) -> bool:
+            return True
+
+        def refresh(self, request: Any) -> None:  # pylint: disable=unused-argument
+            pass
+
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Vertex answer with reasoning"}],
+                    },
+                    "turnComplete": True,
+                },
+                "usageMetadata": {
+                    "promptTokenCount": 10,
+                    "candidatesTokenCount": 18,
+                    "thoughtsTokenCount": 4,
+                    "totalTokenCount": 32,
+                },
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            client = genai.Client(
+                vertexai=True,
+                project="test-proj",
+                location="us-central1",
+                credentials=_FakeCredentials(),
+            )
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                async for _ in session.receive():
+                    pass
+
+    (span,) = span_exporter.get_finished_spans()
+    attrs = dict(span.attributes)
+    assert (
+        attrs[GenAI.GEN_AI_PROVIDER_NAME]
+        == GenAI.GenAiProviderNameValues.GCP_VERTEX_AI.value
+    )
+    assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 10
+    assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 22
+    assert attrs["gen_ai.usage.reasoning.output_tokens"] == 4
+
+    metrics_data = metric_reader.get_metrics_data()
+    token_dps = [
+        dp
+        for rm in metrics_data.resource_metrics
+        for sm in rm.scope_metrics
+        for m in sm.metrics
+        if m.name == "gen_ai.client.token.usage"
+        for dp in m.data.data_points
+    ]
+    by_token_type = {
+        dp.attributes[GenAI.GEN_AI_TOKEN_TYPE]: dp.sum for dp in token_dps
+    }
+    assert by_token_type[GenAI.GenAiTokenTypeValues.INPUT.value] == 10
+    assert by_token_type[GenAI.GenAiTokenTypeValues.OUTPUT.value] == 22
+
+
+@pytest.mark.asyncio
+async def test_live_prewrite_suspended_send_failure_not_committed_on_inbound_frame(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    from google import genai
+
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
+    )
+    has_context_update = hasattr(
+        genai_types, "LiveClientContextUpdate"
+    ) and hasattr(genai_live.AsyncSession, "send_context_update")
+
+    # Part A: Turn 1 input is already confirmed. A second send (plus context
+    # update when supported) suspends BEFORE writing to the socket while Turn 1's
+    # response arrives and completes, and then fails with ConnectionError.
+    # Neither Turn 1 nor the tracker may record the rejected input/config.
+    expected_suspended = 2 if has_context_update else 1
+    suspended_count = 0
+    all_suspended = asyncio.Event()
+    fail_suspended = asyncio.Event()
+
+    class _PreWriteFailingWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            nonlocal suspended_count
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            frame = json.loads(raw)
+            is_rejected = "Rejected prompt" in raw or "Rejected system" in raw
+            if is_rejected:
+                suspended_count += 1
+                if suspended_count >= expected_suspended:
+                    all_suspended.set()
+                await asyncio.wait_for(fail_suspended.wait(), timeout=5.0)
+                raise ConnectionError("pre-write transport error")
+            self.sent_frames.append(frame)
+
+    ws_a = _PreWriteFailingWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Turn 1 complete"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_a)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            config = genai_types.LiveConnectConfig(
+                response_modalities=[genai_types.Modality.TEXT],
+                system_instruction="Initial system",
+            )
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Confirmed Turn 1")],
+                    ),
+                    turn_complete=True,
+                )
+
+                failing_tasks = [
+                    asyncio.create_task(
+                        session.send_client_content(
+                            turns=genai_types.Content(
+                                role="user",
+                                parts=[
+                                    genai_types.Part(text="Rejected prompt")
+                                ],
+                            ),
+                            turn_complete=True,
+                        )
+                    )
+                ]
+                if has_context_update:
+                    failing_tasks.append(
+                        asyncio.create_task(
+                            session.send_context_update(
+                                system_instruction="Rejected system",
+                            )
+                        )
+                    )
+
+                await asyncio.wait_for(all_suspended.wait(), timeout=5.0)
+
+                # Inbound Turn 1 arrives and completes while failing_tasks are
+                # suspended pre-write; it must not treat inbound traffic as ack.
+                async for _ in session.receive():
+                    pass
+
+                fail_suspended.set()
+                for task in failing_tasks:
+                    with pytest.raises(
+                        ConnectionError, match="pre-write transport error"
+                    ):
+                        await task
+
+    (span_a,) = span_exporter.get_finished_spans()
+    assert span_a.status.status_code == StatusCode.UNSET
+    assert span_a.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Confirmed Turn 1"},),
+        },
+    )
+    assert span_a.attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "Initial system"},
+    )
+    ended_a = next(
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name == "gen_ai.client.realtime_session.ended"
+    )
+    assert ended_a.severity_number == SeverityNumber.WARN
+    assert ended_a.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+    # Part B: While a generation is active, a pre-write suspended audio send
+    # receives an unrelated inbound chunk and then fails; rejected audio must
+    # not be committed to the active span or tracker.
+    span_exporter.clear()
+    log_exporter.clear()
+    audio_suspended = asyncio.Event()
+    fail_audio = asyncio.Event()
+
+    class _PreWriteFailingAudioWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            frame = json.loads(raw)
+            if "realtimeInput" in frame or "realtime_input" in frame:
+                audio_suspended.set()
+                await asyncio.wait_for(fail_audio.wait(), timeout=5.0)
+                raise ConnectionError("audio pre-write failed")
+            self.sent_frames.append(frame)
+
+    ws_b = _PreWriteFailingAudioWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Active chunk 1"}],
+                    },
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Active chunk 2"}],
+                    },
+                }
+            },
+        ]
+    )
+    created_trackers: list[live_module._LiveSessionTracker] = []
+    orig_tracker_init = live_module._LiveSessionTracker.__init__
+
+    def _capture_tracker(self, *args, **kwargs):
+        orig_tracker_init(self, *args, **kwargs)
+        created_trackers.append(self)
+
+    with (
+        patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_b)),
+        patch.object(
+            live_module._LiveSessionTracker, "__init__", _capture_tracker
+        ),
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session._receive()
+                audio_task = asyncio.create_task(
+                    session.send_realtime_input(
+                        audio=genai_types.Blob(
+                            data=b"REJECTED", mime_type="audio/pcm"
+                        )
+                    )
+                )
+                await asyncio.wait_for(audio_suspended.wait(), timeout=5.0)
+                await session._receive()
+                fail_audio.set()
+                with pytest.raises(
+                    ConnectionError, match="audio pre-write failed"
+                ):
+                    await audio_task
+
+                tracker = created_trackers[0]
+                assert not tracker._pending_audio_chunks
+                assert tracker._pending_input_messages == []
+
+    (span_b,) = span_exporter.get_finished_spans()
+    assert span_b.status.status_code == StatusCode.ERROR
+    assert span_b.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in span_b.attributes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["NO_CONTENT", "EVENT_ONLY"])
+async def test_live_completion_hook_capture_and_nested_upload_disabled(
+    mode: str,
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    import base64
+
+    from google import genai
+
+    from opentelemetry.util.genai.completion_hook import CompletionHook
+    from opentelemetry.util.genai.types import (
+        BlobPart,
+        FunctionToolDefinition,
+        Modality,
+        TextPart,
+        TranscriptionPart,
+    )
+
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, mode
+    )
+
+    class _RecordingHook(CompletionHook):
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def on_completion(
+            self,
+            *,
+            inputs,
+            outputs,
+            system_instruction,
+            tool_definitions=None,
+            span=None,
+            log_record=None,
+        ) -> None:
+            self.calls.append(
+                {
+                    "inputs": list(inputs),
+                    "outputs": list(outputs),
+                    "system_instruction": list(system_instruction),
+                    "tool_definitions": (
+                        list(tool_definitions)
+                        if tool_definitions is not None
+                        else None
+                    ),
+                    "span": span,
+                    "log_record": log_record,
+                }
+            )
+
+    def hook_tool(query: str) -> str:
+        """Search documentation."""
+        return query
+
+    def _make_ws() -> _FakeWebSocket:
+        return _FakeWebSocket(
+            [
+                {"setupComplete": {}},
+                {
+                    "serverContent": {
+                        "inputTranscription": {"text": "Hi Gemini"},
+                        "modelTurn": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "inlineData": {
+                                        "mimeType": "audio/pcm;rate=24000",
+                                        "data": base64.b64encode(
+                                            b"\x05\x06\x07\x08"
+                                        ).decode("ascii"),
+                                    }
+                                }
+                            ],
+                        },
+                        "outputTranscription": {"text": "Hello user"},
+                        "turnComplete": True,
+                    }
+                },
+            ]
+        )
+
+    # Case 1: Unsuppressed Live session with a recording completion hook in
+    # NO_CONTENT / EVENT_ONLY forwards exact audio, transcriptions, instructions,
+    # and tool definitions to the hook while keeping spans and lifecycle events
+    # free of content payloads.
+    hook = _RecordingHook()
+    with patch(
+        "google.genai.live.ws_connect", _make_fake_ws_connect(_make_ws())
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            completion_hook=hook,
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            config = genai_types.LiveConnectConfig(
+                response_modalities=[genai_types.Modality.AUDIO],
+                system_instruction="Hook system prompt",
+                tools=[hook_tool],
+            )
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"\x01\x02\x03\x04",
+                        mime_type="audio/pcm;rate=16000",
+                    )
+                )
+                await session.send_realtime_input(audio_stream_end=True)
+                async for _ in session.receive():
+                    pass
+
+    assert len(hook.calls) == 1
+    call = hook.calls[0]
+    assert len(call["inputs"]) == 1
+    assert call["inputs"][0].role == "user"
+    assert call["inputs"][0].parts == [
+        BlobPart(
+            mime_type="audio/pcm;rate=16000",
+            modality=Modality.AUDIO,
+            content=b"\x01\x02\x03\x04",
+        ),
+        TranscriptionPart(content="Hi Gemini"),
+    ]
+    assert len(call["outputs"]) == 1
+    assert call["outputs"][0].role == "assistant"
+    assert call["outputs"][0].parts == [
+        BlobPart(
+            mime_type="audio/pcm;rate=24000",
+            modality=Modality.AUDIO,
+            content=b"\x05\x06\x07\x08",
+        ),
+        TranscriptionPart(content="Hello user"),
+    ]
+    assert call["system_instruction"] == [
+        TextPart(content="Hook system prompt")
+    ]
+    assert call["tool_definitions"] is not None
+    assert len(call["tool_definitions"]) == 1
+    assert isinstance(call["tool_definitions"][0], FunctionToolDefinition)
+    assert call["tool_definitions"][0].name == "hook_tool"
+    assert call["log_record"] is None
+
+    (span,) = span_exporter.get_finished_spans()
+    for content_attr in (
+        GenAI.GEN_AI_INPUT_MESSAGES,
+        GenAI.GEN_AI_OUTPUT_MESSAGES,
+        GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
+        GenAI.GEN_AI_TOOL_DEFINITIONS,
+    ):
+        assert content_attr not in span.attributes
+
+    logs = [log.log_record for log in log_exporter.get_finished_logs()]
+    assert [log.event_name for log in logs] == [
+        "gen_ai.client.realtime_session.started",
+        "gen_ai.client.realtime_session.ended",
+    ]
+    for log_record in logs:
+        for content_attr in (
+            GenAI.GEN_AI_INPUT_MESSAGES,
+            GenAI.GEN_AI_OUTPUT_MESSAGES,
+            GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
+            GenAI.GEN_AI_TOOL_DEFINITIONS,
+        ):
+            assert content_attr not in log_record.attributes
+
+    # Case 2: Enclosing outer inference with uploads disabled (default
+    # upload_completion=False, capture_content=False) must NOT invoke the hook
+    # or capture content into the outer inference telemetry.
+    span_exporter.clear()
+    log_exporter.clear()
+    nested_hook = _RecordingHook()
+    outer_handler = TelemetryHandler(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    )
+    with patch(
+        "google.genai.live.ws_connect", _make_fake_ws_connect(_make_ws())
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            completion_hook=nested_hook,
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            config = genai_types.LiveConnectConfig(
+                response_modalities=[genai_types.Modality.AUDIO],
+                system_instruction="Suppressed hook prompt",
+                tools=[hook_tool],
+            )
+            with outer_handler.inference(
+                GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                request_model="outer-no-upload",
+            ):
+                async with client.aio.live.connect(
+                    model="gemini-2.5-flash-native-audio-preview-12-2025",
+                    config=config,
+                ) as session:
+                    await session.send_realtime_input(
+                        audio=genai_types.Blob(
+                            data=b"\x01\x02\x03\x04",
+                            mime_type="audio/pcm;rate=16000",
+                        )
+                    )
+                    await session.send_realtime_input(audio_stream_end=True)
+                    async for _ in session.receive():
+                        pass
+
+    assert nested_hook.calls == []
+    nested_spans = span_exporter.get_finished_spans()
+    assert len(nested_spans) == 1
+    assert (
+        nested_spans[0].attributes[GenAI.GEN_AI_OPERATION_NAME]
+        != "realtime_inference"
+    )
+    for content_attr in (
+        GenAI.GEN_AI_INPUT_MESSAGES,
+        GenAI.GEN_AI_OUTPUT_MESSAGES,
+        GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
+        GenAI.GEN_AI_TOOL_DEFINITIONS,
+    ):
+        assert content_attr not in nested_spans[0].attributes
+    for log in log_exporter.get_finished_logs():
+        for content_attr in (
+            GenAI.GEN_AI_INPUT_MESSAGES,
+            GenAI.GEN_AI_OUTPUT_MESSAGES,
+            GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
+            GenAI.GEN_AI_TOOL_DEFINITIONS,
+        ):
+            assert content_attr not in log.log_record.attributes
