@@ -14,6 +14,7 @@ from agno.models.google import Gemini
 from agno.models.message import Message
 from agno.models.moonshot import MoonShot
 from agno.models.openai import OpenAIChat
+from agno.models.openai.responses import OpenAIResponses
 from agno.models.openrouter import OpenRouter
 from agno.tools.function import Function
 from google import genai
@@ -423,11 +424,99 @@ class ChatStreamingScenario(Scenario):
         )
 
 
+class ChatRecordedStreamingScenario(Scenario):
+    expected_spans = {"chat": 2}
+    expected_metrics = (
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.token.usage",
+        "gen_ai.client.operation.time_to_first_chunk",
+        "gen_ai.client.operation.time_per_output_chunk",
+    )
+    expected_violations = _OPENAI_CHAT_GAPS
+
+    def run(
+        self,
+        *,
+        tracer_provider: TracerProvider,
+        meter_provider: MeterProvider,
+        logger_provider: LoggerProvider,
+        vcr: Any,
+    ) -> None:
+        with instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            with vcr.use_cassette("openai_chat_streaming_reasoning.yaml"):
+                chat_model = OpenAIChat(
+                    id="gpt-5.1",
+                    client=openai.OpenAI(api_key="test_openai_api_key"),
+                )
+                list(
+                    chat_model.response_stream(
+                        messages=[
+                            Message(
+                                role="user",
+                                content="A farmer has 17 sheep and all but 9 run away. How many sheep remain? Explain your reasoning.",
+                            )
+                        ]
+                    )
+                )
+            with vcr.use_cassette("openai_responses_streaming.yaml"):
+                responses_model = OpenAIResponses(
+                    id="gpt-4o-mini",
+                    client=openai.OpenAI(api_key="test_openai_api_key"),
+                )
+                list(
+                    responses_model.response_stream(
+                        messages=[
+                            Message(role="user", content="Say this is a test")
+                        ]
+                    )
+                )
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        spans = _chat_spans(report)
+        assert len(spans) == 2, f"expected 2 chat spans, saw {len(spans)}"
+        by_model = {_attr(s, "gen_ai.request.model"): s for s in spans}
+        _assert_attrs_exact(
+            by_model["gpt-5.1"],
+            {
+                "gen_ai.request.stream": (True, bool),
+                "gen_ai.response.id": (
+                    "chatcmpl-EMxk4dQaiUamioadk6bK1Y462yRui",
+                    str,
+                ),
+                "gen_ai.usage.input_tokens": (29, int),
+                "gen_ai.usage.output_tokens": (92, int),
+                "gen_ai.usage.reasoning.output_tokens": (10, int),
+                "server.address": ("api.openai.com", str),
+            },
+        )
+        _assert_attrs_exact(
+            by_model["gpt-4o-mini"],
+            {
+                "gen_ai.request.stream": (True, bool),
+                "gen_ai.response.id": (
+                    "resp_048385de343c399f006a2e1ac3c6e881a0b3e7d86be0a3aa51",
+                    str,
+                ),
+                "gen_ai.usage.input_tokens": (22, int),
+                "gen_ai.usage.output_tokens": (6, int),
+                "server.address": ("api.openai.com", str),
+            },
+        )
+
+
 class ChatToolCallingScenario(Scenario):
     expected_spans = {"chat": 2, "execute_tool": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
+        "gen_ai.execute_tool.duration",
     )
     expected_violations = _OPENAI_CHAT_GAPS
 

@@ -1832,6 +1832,14 @@ def _extract_client_base_url(client: Any) -> Any:
     return getattr(client, "host", None)
 
 
+_DEFAULT_SCHEME_PORTS: dict[str, int] = {
+    "http": 80,
+    "https": 443,
+    "ws": 80,
+    "wss": 443,
+}
+
+
 def _parse_endpoint_url(raw_url: Any) -> tuple[str | None, int | None]:
     if raw_url is None or not (
         isinstance(raw_url, str) or hasattr(raw_url, "host")
@@ -1839,8 +1847,11 @@ def _parse_endpoint_url(raw_url: Any) -> tuple[str | None, int | None]:
         return None, None
     try:
         parsed = urllib.parse.urlparse(str(raw_url))
-        if parsed.scheme in ("http", "https", "ws", "wss") and parsed.hostname:
-            return parsed.hostname, safe_int(parsed.port)
+        if parsed.scheme in _DEFAULT_SCHEME_PORTS and parsed.hostname:
+            port = safe_int(parsed.port)
+            if port == _DEFAULT_SCHEME_PORTS[parsed.scheme]:
+                port = None
+            return parsed.hostname, port
     except Exception:
         pass
     return None, None
