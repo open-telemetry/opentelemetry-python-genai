@@ -28,7 +28,6 @@ from google.genai.types import (
     ContentUnion,
     ContentUnionDict,
     FunctionResponseOrDict,
-    GenerateContentResponseUsageMetadata,
     LiveConnectConfigOrDict,
     LiveServerContent,
     LiveServerMessage,
@@ -36,6 +35,7 @@ from google.genai.types import (
     ToolListUnion,
     ToolListUnionDict,
     ToolUnionDict,
+    UsageMetadata,
 )
 
 from opentelemetry.context import Context, get_current
@@ -193,23 +193,28 @@ def _extract_system_instruction(
 def _extract_tool_definitions(
     tools: ToolListUnion | ToolListUnionDict | None,
 ) -> list[ToolDefinition]:
-    if not tools or not isinstance(tools, Sequence):
+    if (
+        not tools
+        or not isinstance(tools, Sequence)
+        or isinstance(tools, (str, bytes, bytearray))
+    ):
         return []
     definitions: list[ToolDefinition] = []
     for item in tools:
         tool_item: object = item
+        if tool_item is None:
+            continue
         if isinstance(tool_item, Mapping):
             try:
-                tool_item = genai_types.Tool.model_validate(tool_item)
+                tool_item = Tool.model_validate(tool_item)
             except Exception:  # pylint: disable=broad-exception-caught
                 continue
-        if isinstance(tool_item, Tool) or callable(tool_item):
-            try:
-                definitions.extend(
-                    _to_tool_definition(cast(ToolUnionDict, tool_item))
-                )
-            except Exception:  # pylint: disable=broad-exception-caught
-                continue
+        try:
+            definitions.extend(
+                _to_tool_definition(cast(ToolUnionDict, tool_item))
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            continue
     return definitions
 
 
@@ -690,7 +695,7 @@ class _ActiveGeneration:
     output_text_deltas: list[str] = field(default_factory=list)
     output_thought_deltas: list[str] = field(default_factory=list)
     output_other_parts: list[MessagePart] = field(default_factory=list)
-    usage_metadata: GenerateContentResponseUsageMetadata | None = None
+    usage_metadata: UsageMetadata | None = None
     turn_complete_reason: str | None = None
     interrupted: bool = False
     generation_complete: bool = False
@@ -2708,59 +2713,45 @@ class _LiveSessionTracker:
 
         usage = active_gen.usage_metadata
         if usage is not None:
-            prompt_tokens = getattr(usage, "prompt_token_count", None)
-            if prompt_tokens is not None:
-                invocation.input_tokens = prompt_tokens
+            if usage.prompt_token_count is not None:
+                invocation.input_tokens = usage.prompt_token_count
 
-            thoughts_tokens = getattr(usage, "thoughts_token_count", None)
+            thoughts_tokens = usage.thoughts_token_count
             if thoughts_tokens is not None:
                 invocation.thinking_tokens = thoughts_tokens
 
-            response_tokens = getattr(usage, "response_token_count", None)
-            if response_tokens is not None:
+            if usage.response_token_count is not None:
                 # On Vertex Live, google-genai maps wire `candidatesTokenCount`
                 # (which excludes reasoning tokens) to `response_token_count`.
                 invocation.output_tokens = (
-                    response_tokens + (thoughts_tokens or 0)
+                    usage.response_token_count + (thoughts_tokens or 0)
                     if self.is_vertex
-                    else response_tokens
+                    else usage.response_token_count
                 )
-            else:
-                candidates_tokens = getattr(
-                    usage, "candidates_token_count", None
+            elif thoughts_tokens is not None:
+                invocation.output_tokens = thoughts_tokens
+
+            if usage.cached_content_token_count is not None:
+                invocation.cache_read_input_tokens = (
+                    usage.cached_content_token_count
                 )
-                if candidates_tokens is not None:
-                    invocation.output_tokens = candidates_tokens + (
-                        thoughts_tokens or 0
-                    )
-                elif thoughts_tokens is not None:
-                    invocation.output_tokens = thoughts_tokens
 
-            cached_tokens = getattr(usage, "cached_content_token_count", None)
-            if cached_tokens is not None:
-                invocation.cache_read_input_tokens = cached_tokens
-
-            prompt_details = getattr(usage, "prompt_tokens_details", None)
-            if prompt_details is not None:
+            if usage.prompt_tokens_details is not None:
                 invocation.set_input_tokens(
                     (detail.modality, detail.token_count)
-                    for detail in prompt_details
+                    for detail in usage.prompt_tokens_details
                 )
 
-            response_details = getattr(
-                usage, "response_tokens_details", None
-            ) or getattr(usage, "candidates_tokens_details", None)
-            if response_details is not None:
+            if usage.response_tokens_details is not None:
                 invocation.set_output_tokens(
                     (detail.modality, detail.token_count)
-                    for detail in response_details
+                    for detail in usage.response_tokens_details
                 )
 
-            cache_details = getattr(usage, "cache_tokens_details", None)
-            if cache_details is not None:
+            if usage.cache_tokens_details is not None:
                 invocation.set_cache_read_input_tokens(
                     (detail.modality, detail.token_count)
-                    for detail in cache_details
+                    for detail in usage.cache_tokens_details
                 )
 
         if error is not None:
@@ -2781,15 +2772,13 @@ class _LiveSessionTracker:
         vad_signal: object = getattr(
             message, "voice_activity_detection_signal", None
         )
-        server_content = getattr(message, "server_content", None)
-        tool_call = getattr(message, "tool_call", None)
-        tool_call_cancellation = getattr(
-            message, "tool_call_cancellation", None
-        )
-        usage_metadata = getattr(message, "usage_metadata", None)
+        server_content = message.server_content
+        tool_call = message.tool_call
+        tool_call_cancellation = message.tool_call_cancellation
+        usage_metadata = message.usage_metadata
 
         if tool_call_cancellation is not None:
-            cancelled_ids = getattr(tool_call_cancellation, "ids", None) or ()
+            cancelled_ids = tool_call_cancellation.ids or ()
             cancelled_set = {str(cid) for cid in cancelled_ids if cid}
             if cancelled_set:
                 seen_batches: set[int] = set()
@@ -2894,20 +2883,18 @@ class _LiveSessionTracker:
                 self._stop_user_speech()
 
         is_interrupted = bool(
-            server_content is not None
-            and getattr(server_content, "interrupted", False)
+            server_content is not None and server_content.interrupted
         )
         is_generation_complete = bool(
-            server_content is not None
-            and getattr(server_content, "generation_complete", False)
+            server_content is not None and server_content.generation_complete
         )
         if is_interrupted:
             self._mark_new_user_utterance()
 
         # Accumulate input transcription deltas without starting the generation span.
         if server_content is not None:
-            input_tx = getattr(server_content, "input_transcription", None)
-            if input_tx is not None and getattr(input_tx, "text", None):
+            input_tx = server_content.input_transcription
+            if input_tx is not None and input_tx.text:
                 if (
                     self._active_gen is not None
                     and self._active_gen.accepting_input_transcription
@@ -2937,14 +2924,12 @@ class _LiveSessionTracker:
             server_content is not None
             and (
                 (
-                    getattr(server_content, "output_transcription", None)
-                    and getattr(
-                        server_content.output_transcription, "text", None
-                    )
+                    server_content.output_transcription is not None
+                    and server_content.output_transcription.text
                 )
                 or (
-                    getattr(server_content, "model_turn", None)
-                    and getattr(server_content.model_turn, "parts", None)
+                    server_content.model_turn is not None
+                    and server_content.model_turn.parts
                 )
             )
         )
@@ -2958,8 +2943,7 @@ class _LiveSessionTracker:
             )
         )
         has_tool_call = bool(
-            tool_call is not None
-            and getattr(tool_call, "function_calls", None)
+            tool_call is not None and tool_call.function_calls
         )
 
         if (
@@ -3005,19 +2989,15 @@ class _LiveSessionTracker:
                 active_gen.turn_complete_reason = provider_reason
 
             if capture_content:
-                output_tx = getattr(
-                    server_content, "output_transcription", None
-                )
-                if output_tx is not None and getattr(output_tx, "text", None):
+                output_tx = server_content.output_transcription
+                if output_tx is not None and output_tx.text:
                     active_gen.output_transcript_deltas.append(
                         str(output_tx.text)
                     )
 
-                model_turn = getattr(server_content, "model_turn", None)
-                if model_turn is not None and getattr(
-                    model_turn, "parts", None
-                ):
-                    for part in model_turn.parts or []:
+                model_turn = server_content.model_turn
+                if model_turn is not None and model_turn.parts:
+                    for part in model_turn.parts:
                         converted = _to_part(
                             part, len(active_gen.output_other_parts)
                         )
@@ -3060,9 +3040,9 @@ class _LiveSessionTracker:
                         else:
                             active_gen.output_other_parts.append(converted)
 
-            if getattr(server_content, "interrupted", False):
+            if server_content.interrupted:
                 active_gen.interrupted = True
-            if getattr(server_content, "generation_complete", False):
+            if server_content.generation_complete:
                 active_gen.generation_complete = True
             if interaction_complete:
                 active_gen.turn_complete = True
@@ -3080,9 +3060,8 @@ class _LiveSessionTracker:
                 batch_ids: set[str] = set()
                 batch_unidentified = 0
                 for fc in tool_call.function_calls or []:
-                    fc_id = getattr(fc, "id", None)
-                    if fc_id is not None and str(fc_id):
-                        batch_ids.add(str(fc_id))
+                    if fc.id is not None and str(fc.id):
+                        batch_ids.add(str(fc.id))
                     else:
                         batch_unidentified += 1
                 if batch_ids or batch_unidentified:
@@ -3098,11 +3077,10 @@ class _LiveSessionTracker:
                 if capture_content:
                     tool_parts: list[MessagePart] = [
                         ToolCallRequestPart(
-                            id=getattr(fc, "id", None),
-                            name=getattr(fc, "name", None) or "",
+                            id=fc.id,
+                            name=fc.name or "",
                             arguments=dict(fc.args)
-                            if getattr(fc, "args", None) is not None
-                            and fc.args is not None
+                            if fc.args is not None
                             else {},
                         )
                         for fc in (tool_call.function_calls or [])

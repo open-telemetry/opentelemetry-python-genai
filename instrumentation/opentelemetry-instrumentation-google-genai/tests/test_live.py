@@ -1386,15 +1386,21 @@ async def test_live_generation_complete_before_turn_complete_preserves_end_times
             async with live.connect(
                 model="gemini-2.5-flash-native-audio-preview-12-2025",
             ) as session:
+                start_mono = time.monotonic()
                 await session._receive()
                 await session._receive()
+                after_gen_complete_ns = time.time_ns()
+                after_gen_complete_mono = time.monotonic()
                 # Delay between generation_complete and turn_complete must not inflate duration
                 await asyncio.sleep(0.06)
+                before_turn_complete_ns = time.time_ns()
+                before_turn_complete_mono = time.monotonic()
                 await session._receive()
 
     (span,) = span_exporter.get_finished_spans()
-    span_duration_s = (span.end_time - span.start_time) / 1e9
-    assert span_duration_s < 0.05
+    assert span.end_time is not None
+    assert span.end_time <= after_gen_complete_ns
+    assert span.end_time < before_turn_complete_ns
     assert span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 15
     assert span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
 
@@ -1408,7 +1414,8 @@ async def test_live_generation_complete_before_turn_complete_preserves_end_times
         for dp in m.data.data_points
     ]
     assert len(duration_dp) == 1
-    assert duration_dp[0].sum < 0.05
+    assert duration_dp[0].sum <= (after_gen_complete_mono - start_mono) + 0.005
+    assert duration_dp[0].sum < (before_turn_complete_mono - start_mono)
 
 
 @pytest.mark.asyncio
@@ -2909,16 +2916,20 @@ async def test_live_send_transport_error_during_active_generation_fails_inferenc
                                 data=b"\x01\x02", mime_type="audio/pcm"
                             )
                         )
+                after_send_error_ns = time.time_ns()
+                assert len(span_exporter.get_finished_spans()) == 1
                 # Delay before exiting session must not inflate span duration.
                 await asyncio.sleep(0.06)
+                before_exit_ns = time.time_ns()
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAI.GEN_AI_OPERATION_NAME] == "realtime_inference"
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
     assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("error",)
-    span_duration_s = (span.end_time - span.start_time) / 1e9
-    assert span_duration_s < 0.05
+    assert span.end_time is not None
+    assert span.end_time <= after_send_error_ns
+    assert span.end_time < before_exit_ns
 
     ended = next(
         log.log_record
@@ -8925,3 +8936,153 @@ async def test_live_capture_disabled_context_update_invalidates_cached_config(
     assert [t["name"] for t in attrs_b4[GenAI.GEN_AI_TOOL_DEFINITIONS]] == [
         "public_tool"
     ]
+
+
+@pytest.mark.asyncio
+async def test_live_mcp_tool_definitions_preserved_in_connect_and_context_update(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    import sys
+    import types as py_types
+
+    from google import genai
+    from pydantic import BaseModel
+
+    from opentelemetry.instrumentation.google_genai import (
+        generate_content as gc_module,
+    )
+
+    try:
+        from mcp.types import Tool as RealMcpTool
+
+        mcp_tool_cls: Any = RealMcpTool
+    except ImportError:
+        if not hasattr(genai_types, "_validate_tool_list"):
+            pytest.skip(
+                "google-genai SDK requires mcp installed before import for MCP tools"
+            )
+
+        class _StubMcpTool(BaseModel):
+            name: str
+            description: str | None = None
+            inputSchema: dict[str, Any] = {}
+
+        class _StubMcpClientSession:
+            pass
+
+        mcp_mod = py_types.ModuleType("mcp")
+        mcp_types_mod = py_types.ModuleType("mcp.types")
+        setattr(mcp_types_mod, "Tool", _StubMcpTool)
+        setattr(mcp_mod, "Tool", _StubMcpTool)
+        setattr(mcp_mod, "ClientSession", _StubMcpClientSession)
+        setattr(mcp_mod, "types", mcp_types_mod)
+        monkeypatch.setitem(sys.modules, "mcp", mcp_mod)
+        monkeypatch.setitem(sys.modules, "mcp.types", mcp_types_mod)
+        monkeypatch.setattr(gc_module, "_is_mcp_imported", True)
+        monkeypatch.setattr(gc_module, "McpTool", _StubMcpTool)
+        monkeypatch.setattr(
+            gc_module, "McpClientSession", _StubMcpClientSession
+        )
+        mcp_tool_cls = _StubMcpTool
+
+    mcp_tool_initial = mcp_tool_cls(
+        name="mcp_weather",
+        description="Get weather via MCP",
+        inputSchema={
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+        },
+    )
+    mcp_tool_updated = mcp_tool_cls(
+        name="mcp_calendar",
+        description="Search calendar via MCP",
+        inputSchema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        },
+    )
+
+    has_context_update = hasattr(
+        genai_types, "LiveClientContextUpdate"
+    ) and hasattr(genai_live.AsyncSession, "send_context_update")
+
+    frames: list[dict[str, Any]] = [
+        {"setupComplete": {}},
+        {
+            "serverContent": {
+                "modelTurn": {
+                    "role": "model",
+                    "parts": [{"text": "Initial MCP reply"}],
+                },
+                "turnComplete": True,
+            }
+        },
+    ]
+    if has_context_update:
+        frames.append(
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Updated MCP reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            }
+        )
+
+    fake_ws = _FakeWebSocket(frames)
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            config = genai_types.LiveConnectConfig(
+                response_modalities=[genai_types.Modality.TEXT],
+                tools=[mcp_tool_initial],
+            )
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+                config=config,
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Turn 1")],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+
+                if has_context_update:
+                    await session.send_context_update(tools=[mcp_tool_updated])
+                    await session.send_client_content(
+                        turns=genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="Turn 2")],
+                        ),
+                        turn_complete=True,
+                    )
+                    async for _ in session.receive():
+                        pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == (2 if has_context_update else 1)
+
+    tools_turn1 = spans[0].attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+    assert [t["name"] for t in tools_turn1] == ["mcp_weather"]
+    assert tools_turn1[0]["description"] == "Get weather via MCP"
+
+    if has_context_update:
+        tools_turn2 = spans[1].attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+        assert [t["name"] for t in tools_turn2] == ["mcp_calendar"]
+        assert tools_turn2[0]["description"] == "Search calendar via MCP"
