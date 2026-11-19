@@ -476,6 +476,7 @@ class _OutboundTurn:
     input_messages: list[InputMessage] = field(default_factory=list)
     input_transcript_deltas: list[str] = field(default_factory=list)
     accepting_input_transcription: bool = True
+    capture_content: bool = False
     media_bytes: int = 0
     system_instruction: list[SystemInstructionPart] | None = None
     system_instruction_rev: int = 0
@@ -984,6 +985,90 @@ class _LiveSessionTracker:
                 return turn
         return None
 
+    def _merge_outbound_turn(
+        self, target: _OutboundTurn, source: _OutboundTurn
+    ) -> None:
+        if target is source:
+            return
+        if target.pending_audio_chunks and (
+            source.input_messages
+            or (
+                source.pending_audio_chunks
+                and target.pending_audio_mime_type
+                and source.pending_audio_mime_type
+                and source.pending_audio_mime_type
+                != target.pending_audio_mime_type
+            )
+        ):
+            self._flush_pending_audio(turn=target, capture_content=True)
+        if source.input_messages:
+            target.input_messages.extend(source.input_messages)
+            target.media_bytes += source.media_bytes
+        if source.pending_audio_chunks:
+            target.pending_audio_chunks.extend(source.pending_audio_chunks)
+            target.pending_audio_bytes += source.pending_audio_bytes
+            if not target.pending_audio_mime_type:
+                target.pending_audio_mime_type = source.pending_audio_mime_type
+        if source.input_transcript_deltas:
+            target.input_transcript_deltas.extend(
+                source.input_transcript_deltas
+            )
+        target.accepting_input_transcription = (
+            target.accepting_input_transcription
+            or source.accepting_input_transcription
+        )
+        target.capture_content = (
+            target.capture_content or source.capture_content
+        )
+        if (
+            source.system_instruction is not None
+            and source.system_instruction_rev >= target.system_instruction_rev
+        ):
+            target.system_instruction = list(source.system_instruction)
+            target.system_instruction_rev = source.system_instruction_rev
+        if (
+            source.tool_definitions is not None
+            and source.tool_definitions_rev >= target.tool_definitions_rev
+        ):
+            target.tool_definitions = list(source.tool_definitions)
+            target.tool_definitions_rev = source.tool_definitions_rev
+        if source.staged_sends:
+            for staged in source.staged_sends:
+                staged.turn = target
+            target.staged_sends = deque(
+                sorted(
+                    [*target.staged_sends, *source.staged_sends],
+                    key=lambda s: s.seq,
+                )
+            )
+        target.has_confirmed_turn_complete = (
+            target.has_confirmed_turn_complete
+            or source.has_confirmed_turn_complete
+        )
+        target.has_confirmed_input_payload = (
+            target.has_confirmed_input_payload
+            or source.has_confirmed_input_payload
+        )
+        target.has_confirmed_non_silent_tool_response = (
+            target.has_confirmed_non_silent_tool_response
+            or source.has_confirmed_non_silent_tool_response
+        )
+        for batch in source.tool_batches:
+            batch.turn = target
+            if batch not in target.tool_batches:
+                target.tool_batches.append(batch)
+        source.input_messages.clear()
+        source.pending_audio_chunks.clear()
+        source.pending_audio_bytes = 0
+        source.pending_audio_mime_type = None
+        source.media_bytes = 0
+        source.input_transcript_deltas.clear()
+        source.staged_sends.clear()
+        source.tool_batches.clear()
+        if source in self._outbound_turns:
+            self._outbound_turns.remove(source)
+        self._enforce_pending_media_budget()
+
     def _target_turn(self) -> _OutboundTurn:
         if self._write_turn is not None:
             return self._write_turn
@@ -1110,18 +1195,22 @@ class _LiveSessionTracker:
                     self._pending_tool_call_batches.remove(batch)
                     staged.popped_tool_batch = True
 
-        existing_batch_turn: _OutboundTurn | None = None
-        for batch in matched_batches:
-            if (
-                batch.turn is not None
-                and batch.turn in self._outbound_turns
-                and not batch.turn.sealed
-                and batch.turn.bound_gen is None
-            ):
-                existing_batch_turn = batch.turn
-                break
-        if existing_batch_turn is not None:
-            turn = existing_batch_turn
+        matched_turn_set = {
+            batch.turn
+            for batch in matched_batches
+            if batch.turn is not None
+            and not batch.turn.sealed
+            and batch.turn.bound_gen is None
+        }
+        existing_turns = [
+            candidate_turn
+            for candidate_turn in self._outbound_turns
+            if candidate_turn in matched_turn_set
+        ]
+        if existing_turns:
+            turn = existing_turns[0]
+            for other_turn in existing_turns[1:]:
+                self._merge_outbound_turn(target=turn, source=other_turn)
         else:
             turn = self._current_open_turn()
         for batch in matched_batches:
@@ -1289,13 +1378,15 @@ class _LiveSessionTracker:
                     self._write_turn = turn
                     self._current_send_seq = staged.seq
                     self._active_gen = None
+                    staged_capture = staged.context.run(
+                        self._telemetry_handler.should_capture_realtime_content
+                    )
                     any_dep_capture = any(
                         dep.invocation.should_capture_content
                         for dep in staged.dependent_gens
                     )
                     self._capture_content_override = (
-                        any_dep_capture
-                        or self._telemetry_handler.should_capture_realtime_content()
+                        any_dep_capture or staged_capture
                     )
                     try:
                         staged.context.run(staged.commit_fn)
@@ -1316,16 +1407,20 @@ class _LiveSessionTracker:
                 saved_override = self._capture_content_override
                 self._write_turn = turn
                 self._current_send_seq = staged.seq
+                staged_capture = staged.context.run(
+                    self._telemetry_handler.should_capture_realtime_content
+                )
+                if staged_capture:
+                    turn.capture_content = True
+                any_dep_capture = any(
+                    dep.invocation.should_capture_content
+                    for dep in staged.dependent_gens
+                )
                 if detached_turn:
                     self._active_gen = None
-                    any_dep_capture = any(
-                        dep.invocation.should_capture_content
-                        for dep in staged.dependent_gens
-                    )
-                    self._capture_content_override = (
-                        any_dep_capture
-                        or self._telemetry_handler.should_capture_realtime_content()
-                    )
+                self._capture_content_override = (
+                    any_dep_capture or staged_capture
+                )
                 try:
                     staged.context.run(staged.commit_fn)
                 finally:
@@ -1347,6 +1442,7 @@ class _LiveSessionTracker:
         elif (
             not turn.staged_sends
             and not turn.sealed
+            and not turn.has_confirmed_input_payload
             and not turn.input_messages
             and not turn.pending_audio_chunks
             and not turn.input_transcript_deltas
@@ -1354,6 +1450,10 @@ class _LiveSessionTracker:
             and turn.tool_definitions is None
             and turn in self._outbound_turns
         ):
+            for batch in turn.tool_batches:
+                if batch.turn is turn:
+                    batch.turn = None
+            turn.tool_batches.clear()
             self._outbound_turns.remove(turn)
 
     def _detach_bound_turn(self, active_gen: _ActiveGeneration) -> None:
@@ -1602,9 +1702,14 @@ class _LiveSessionTracker:
                 and not turn.input_transcript_deltas
                 and not turn.staged_sends
                 and not turn.sealed
+                and not turn.has_confirmed_input_payload
                 and turn.system_instruction is None
                 and turn.tool_definitions is None
             ):
+                for batch in turn.tool_batches:
+                    if batch.turn is turn:
+                        batch.turn = None
+                turn.tool_batches.clear()
                 del self._outbound_turns[turn_idx]
             else:
                 turn_idx += 1
@@ -1646,7 +1751,7 @@ class _LiveSessionTracker:
         if not turn.pending_audio_chunks:
             return
         should_capture = (
-            self._should_capture_content()
+            (turn.capture_content or self._should_capture_content())
             if capture_content is None
             else capture_content
         )
@@ -2086,7 +2191,8 @@ class _LiveSessionTracker:
                 break
             turn = self._outbound_turns.popleft()
             if (
-                turn.input_messages
+                turn.has_confirmed_input_payload
+                or turn.input_messages
                 or turn.pending_audio_chunks
                 or turn.input_transcript_deltas
             ):
@@ -2412,7 +2518,8 @@ class _LiveSessionTracker:
                     open_turn = self._outbound_turns[-1]
                     self._flush_pending_audio(turn=open_turn)
                     if (
-                        open_turn.input_messages
+                        open_turn.has_confirmed_input_payload
+                        or open_turn.input_messages
                         or open_turn.pending_audio_chunks
                         or open_turn.input_transcript_deltas
                         or any(
@@ -2436,26 +2543,29 @@ class _LiveSessionTracker:
         if is_interrupted:
             self._mark_new_user_utterance()
 
-        capture_content = self._should_capture_content()
-
         # Accumulate input transcription deltas without starting the generation span.
-        if server_content is not None and capture_content:
+        if server_content is not None:
             input_tx = getattr(server_content, "input_transcription", None)
             if input_tx is not None and getattr(input_tx, "text", None):
                 if (
                     self._active_gen is not None
                     and self._active_gen.accepting_input_transcription
                 ):
-                    self._active_gen.input_transcript_deltas.append(
-                        str(input_tx.text)
-                    )
+                    if self._active_gen.invocation.should_capture_content:
+                        self._active_gen.input_transcript_deltas.append(
+                            str(input_tx.text)
+                        )
                 elif (
                     target_turn := self._target_transcript_turn()
                 ) is not None:
-                    target_turn.input_transcript_deltas.append(
-                        str(input_tx.text)
-                    )
-                else:
+                    if (
+                        target_turn.capture_content
+                        or self._telemetry_handler.should_capture_realtime_content()
+                    ):
+                        target_turn.input_transcript_deltas.append(
+                            str(input_tx.text)
+                        )
+                elif self._telemetry_handler.should_capture_realtime_content():
                     self._pending_input_transcript_deltas.append(
                         str(input_tx.text)
                     )

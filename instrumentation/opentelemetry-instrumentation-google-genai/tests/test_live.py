@@ -7536,3 +7536,564 @@ async def test_live_two_queued_audio_turns_preserve_distinct_transcripts_in_orde
             ),
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_live_gemini_2_mixed_tool_batch_send_reconciles_prior_buffered_and_staged_inputs(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    def _batch_frames() -> list[dict[str, Any]]:
+        return [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {"id": "call-a1", "name": "fn_a1", "args": {}},
+                        {"id": "call-a2", "name": "fn_a2", "args": {}},
+                    ]
+                }
+            },
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {"id": "call-b1", "name": "fn_b1", "args": {}},
+                        {"id": "call-b2", "name": "fn_b2", "args": {}},
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Combined tool reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Follow-up reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+
+    # Part A: Confirmed partial responses on two separate batches (`a1` on turn_a,
+    # `b1` on turn_b) followed by one combined send `[a2, b2]`.
+    ws_a = _FakeWebSocket(_batch_frames())
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_a)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Trigger batch A")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Trigger batch B")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-a1",
+                        name="fn_a1",
+                        response={"val": "a1"},
+                    )
+                )
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-b1",
+                        name="fn_b1",
+                        response={"val": "b1"},
+                    )
+                )
+                await session.send_tool_response(
+                    function_responses=[
+                        genai_types.FunctionResponse(
+                            id="call-a2",
+                            name="fn_a2",
+                            response={"val": "a2"},
+                        ),
+                        genai_types.FunctionResponse(
+                            id="call-b2",
+                            name="fn_b2",
+                            response={"val": "b2"},
+                        ),
+                    ]
+                )
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="After mixed batches")],
+                    ),
+                    turn_complete=True,
+                )
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans_a = span_exporter.get_finished_spans()
+    assert len(spans_a) == 4
+    combined_ids_a = [
+        part["id"]
+        for msg in spans_a[2].attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+        for part in msg["parts"]
+    ]
+    assert combined_ids_a == ["call-a1", "call-b1", "call-a2", "call-b2"]
+    assert spans_a[3].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "After mixed batches"},),
+        },
+    )
+
+    # Part B: Prior partial `b1` is still in flight in `ws.send` when the
+    # combined `[a2, b2]` send merges the matched turns and seals the combined
+    # response before Gen 3 completes.
+    span_exporter.clear()
+    b1_entered = asyncio.Event()
+    release_b1 = asyncio.Event()
+
+    class _SuspendB1WebSocket(_FakeWebSocket):
+        async def send(self, payload: Any) -> None:
+            if isinstance(payload, (str, bytes)):
+                text_payload = (
+                    payload.decode("utf-8", errors="ignore")
+                    if isinstance(payload, bytes)
+                    else payload
+                )
+                if '"call-b1"' in text_payload:
+                    b1_entered.set()
+                    await asyncio.wait_for(release_b1.wait(), timeout=5.0)
+            await super().send(payload)
+
+    ws_b = _SuspendB1WebSocket(_batch_frames())
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_b)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Trigger batch A")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Trigger batch B")],
+                    ),
+                    turn_complete=True,
+                )
+                assert (await session._receive()).tool_call is not None
+
+                await session.send_tool_response(
+                    function_responses=genai_types.FunctionResponse(
+                        id="call-a1",
+                        name="fn_a1",
+                        response={"val": "a1"},
+                    )
+                )
+                task_b1 = asyncio.create_task(
+                    session.send_tool_response(
+                        function_responses=genai_types.FunctionResponse(
+                            id="call-b1",
+                            name="fn_b1",
+                            response={"val": "b1"},
+                        )
+                    )
+                )
+                await asyncio.wait_for(b1_entered.wait(), timeout=5.0)
+
+                await session.send_tool_response(
+                    function_responses=[
+                        genai_types.FunctionResponse(
+                            id="call-a2",
+                            name="fn_a2",
+                            response={"val": "a2"},
+                        ),
+                        genai_types.FunctionResponse(
+                            id="call-b2",
+                            name="fn_b2",
+                            response={"val": "b2"},
+                        ),
+                    ]
+                )
+
+                # Server responds to the merged sealed turn while `b1` is still
+                # in flight; Gen 3 defers until `b1` and `[a2, b2]` drain.
+                async for _ in session.receive():
+                    pass
+
+                release_b1.set()
+                await task_b1
+
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="After staged merge")],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+
+    spans_b = span_exporter.get_finished_spans()
+    assert len(spans_b) == 4
+    combined_ids_b = [
+        part["id"]
+        for msg in spans_b[2].attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+        for part in msg["parts"]
+    ]
+    assert combined_ids_b == ["call-a1", "call-b1", "call-a2", "call-b2"]
+    assert spans_b[3].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "After staged merge"},),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_overlapping_turns_preserve_per_context_capture_policy_and_transcription_ownership(
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    # Part A: Active Turn 1 disables capture under EVENT_ONLY while overlapping
+    # Turn 2 enables capture in a different context. Turn 2 must keep its
+    # queued audio + barge-in input transcription without clearing active_gen.
+    ws_a = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Partial suppressed reply"}],
+                    },
+                    "turnComplete": False,
+                }
+            },
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Turn 1 ignored"},
+                }
+            },
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Turn 2 captured"},
+                }
+            },
+            {
+                "serverContent": {
+                    "interrupted": True,
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Captured reply 2"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_a)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="EVENT_ONLY",
+        ):
+            outer_handler = TelemetryHandler(
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+            )
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                gen1_active = asyncio.Event()
+                turn2_sent = asyncio.Event()
+                gen1_done = asyncio.Event()
+
+                async def _turn1_disabled() -> None:
+                    with outer_handler.inference(
+                        GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                        request_model="outer-disabled",
+                    ):
+                        await session.send_client_content(
+                            turns=genai_types.Content(
+                                role="user",
+                                parts=[
+                                    genai_types.Part(text="Suppressed turn 1")
+                                ],
+                            ),
+                            turn_complete=True,
+                        )
+                        await session._receive()
+                        await session._receive()
+                        gen1_active.set()
+                        await asyncio.wait_for(turn2_sent.wait(), timeout=5.0)
+                        await session._receive()
+                        await session._receive()
+                    gen1_done.set()
+
+                async def _turn2_enabled() -> None:
+                    await asyncio.wait_for(gen1_active.wait(), timeout=5.0)
+                    with outer_handler.inference(
+                        GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                        request_model="outer-enabled",
+                    ):
+                        ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+                        assert isinstance(ctx_data, InferenceData)
+                        ctx_data.capture_content = True
+                        await session.send_realtime_input(
+                            audio=genai_types.Blob(
+                                data=b"2222",
+                                mime_type="audio/pcm;rate=16000",
+                            )
+                        )
+                        await session.send_realtime_input(
+                            audio_stream_end=True
+                        )
+                        turn2_sent.set()
+                        await asyncio.wait_for(gen1_done.wait(), timeout=5.0)
+                        async for _ in session.receive():
+                            pass
+
+                await asyncio.gather(_turn1_disabled(), _turn2_enabled())
+
+    detail_events_a = [
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    ]
+    assert len(detail_events_a) == 2
+    disabled_attrs_a = dict(detail_events_a[0].attributes)
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in disabled_attrs_a
+    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in disabled_attrs_a
+
+    enabled_attrs_a = dict(detail_events_a[1].attributes)
+    assert enabled_attrs_a[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"2222",
+                },
+                {"type": "transcription", "content": "Turn 2 captured"},
+            ),
+        },
+    )
+    assert enabled_attrs_a[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "Captured reply 2"},),
+            "finish_reason": "stop",
+        },
+    )
+
+    # Part B: Reverse direction — Active Turn 1 enables capture while
+    # overlapping Turn 2 disables capture. Turn 1 retains its pre-barge-in
+    # transcription, stops accepting after Turn 2's send, and Turn 2 does not
+    # capture its input from Turn 1's policy.
+    log_exporter.clear()
+    ws_b = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Captured reply 1"}],
+                    },
+                    "turnComplete": False,
+                }
+            },
+            {
+                "serverContent": {
+                    "inputTranscription": {"text": "Turn 1 late transcript"},
+                }
+            },
+            {
+                "serverContent": {
+                    "inputTranscription": {
+                        "text": "Turn 2 barge-in transcript"
+                    },
+                }
+            },
+            {
+                "serverContent": {
+                    "interrupted": True,
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Reply 2"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_b)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="EVENT_ONLY",
+        ):
+            outer_handler = TelemetryHandler(
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+            )
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                gen1_active = asyncio.Event()
+                turn2_sent = asyncio.Event()
+                gen1_done = asyncio.Event()
+
+                async def _turn1_enabled() -> None:
+                    with outer_handler.inference(
+                        GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                        request_model="outer-enabled",
+                    ):
+                        ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+                        assert isinstance(ctx_data, InferenceData)
+                        ctx_data.capture_content = True
+                        await session.send_realtime_input(
+                            audio=genai_types.Blob(
+                                data=b"1111",
+                                mime_type="audio/pcm;rate=16000",
+                            )
+                        )
+                        await session.send_realtime_input(
+                            audio_stream_end=True
+                        )
+                        await session._receive()
+                        await session._receive()
+                        gen1_active.set()
+                        await asyncio.wait_for(turn2_sent.wait(), timeout=5.0)
+                        await session._receive()
+                        await session._receive()
+                    gen1_done.set()
+
+                async def _turn2_disabled() -> None:
+                    await asyncio.wait_for(gen1_active.wait(), timeout=5.0)
+                    with outer_handler.inference(
+                        GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
+                        request_model="outer-disabled",
+                    ):
+                        await session.send_client_content(
+                            turns=genai_types.Content(
+                                role="user",
+                                parts=[
+                                    genai_types.Part(
+                                        text="Suppressed barge-in"
+                                    )
+                                ],
+                            ),
+                            turn_complete=True,
+                        )
+                        turn2_sent.set()
+                        await asyncio.wait_for(gen1_done.wait(), timeout=5.0)
+                        async for _ in session.receive():
+                            pass
+
+                await asyncio.gather(_turn1_enabled(), _turn2_disabled())
+
+    detail_events_b = [
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    ]
+    assert len(detail_events_b) == 2
+    enabled_attrs_b = dict(detail_events_b[0].attributes)
+    assert enabled_attrs_b[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"1111",
+                },
+                {"type": "transcription", "content": "Turn 1 late transcript"},
+            ),
+        },
+    )
+    assert enabled_attrs_b[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "Captured reply 1"},),
+            "finish_reason": "interrupted",
+        },
+    )
+
+    disabled_attrs_b = dict(detail_events_b[1].attributes)
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in disabled_attrs_b
+    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in disabled_attrs_b
