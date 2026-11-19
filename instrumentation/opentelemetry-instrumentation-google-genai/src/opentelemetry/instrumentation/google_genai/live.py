@@ -771,7 +771,10 @@ class _LiveSessionTracker:
 
     def _start_user_speech(self) -> None:
         self._mark_new_user_utterance()
-        if self._speech_invocation is not None:
+        if (
+            self._speech_invocation is not None
+            or not self._telemetry_handler.should_emit_user_speech()
+        ):
             return
         self._speech_invocation = self._telemetry_handler.user_speech(
             provider=self.provider,
@@ -976,9 +979,11 @@ class _LiveSessionTracker:
         function_responses: FunctionResponseOrDict
         | Sequence[FunctionResponseOrDict]
         | None,
+        *,
+        omit_tool_response: bool = False,
     ) -> None:
         self._flush_pending_audio()
-        if (
+        if omit_tool_response or (
             self._active_gen is not None
             and self._active_gen.awaiting_tool_response
         ):
@@ -1008,6 +1013,8 @@ class _LiveSessionTracker:
         self,
         input_val: object = None,
         end_of_turn: bool = False,
+        *,
+        omit_tool_response: bool = False,
     ) -> None:
         if input_val is None:
             self._flush_pending_audio()
@@ -1052,7 +1059,9 @@ class _LiveSessionTracker:
                 | None,
                 _get_config_field(input_val, "function_responses"),
             )
-            self.on_send_tool_response(fn_resps)
+            self.on_send_tool_response(
+                fn_resps, omit_tool_response=omit_tool_response
+            )
             return
 
         if isinstance(input_val, genai_types.FunctionResponse) or (
@@ -1060,7 +1069,10 @@ class _LiveSessionTracker:
             and "name" in input_val
             and "response" in input_val
         ):
-            self.on_send_tool_response(cast(FunctionResponseOrDict, input_val))
+            self.on_send_tool_response(
+                cast(FunctionResponseOrDict, input_val),
+                omit_tool_response=omit_tool_response,
+            )
             return
 
         if isinstance(input_val, genai_types.LiveClientContent) or (
@@ -1091,7 +1103,8 @@ class _LiveSessionTracker:
                 for item in seq_val
             ):
                 self.on_send_tool_response(
-                    cast(Sequence[FunctionResponseOrDict], seq_val)
+                    cast(Sequence[FunctionResponseOrDict], seq_val),
+                    omit_tool_response=omit_tool_response,
                 )
                 return
             if seq_val and any(
@@ -1640,9 +1653,15 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
                 "function_responses", orig_send_tool_response, args, kwargs
             ),
         )
+        omit_tool_response = bool(
+            tracker._active_gen is not None
+            and tracker._active_gen.awaiting_tool_response
+        )
         await _run_transactional_send(
             tracker,
-            lambda: tracker.on_send_tool_response(function_responses),
+            lambda: tracker.on_send_tool_response(
+                function_responses, omit_tool_response=omit_tool_response
+            ),
             lambda: orig_send_tool_response(*args, **kwargs),  # pyright: ignore[reportArgumentType]
         )
 
@@ -1678,10 +1697,16 @@ def _wrap_session(session: AsyncSession, tracker: _LiveSessionTracker) -> None:
         async def wrapped_send(*args: object, **kwargs: object) -> object:
             input_val = get_argument("input", orig_send, args, kwargs)
             end_of_turn = get_argument("end_of_turn", orig_send, args, kwargs)
+            omit_tool_response = bool(
+                tracker._active_gen is not None
+                and tracker._active_gen.awaiting_tool_response
+            )
             return await _run_transactional_send(
                 tracker,
                 lambda: tracker.on_send(
-                    input_val, end_of_turn=bool(end_of_turn)
+                    input_val,
+                    end_of_turn=bool(end_of_turn),
+                    omit_tool_response=omit_tool_response,
                 ),
                 lambda: orig_send(*args, **kwargs),
             )

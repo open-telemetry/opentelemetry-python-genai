@@ -51,6 +51,8 @@ Instrumenting all clients
 When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create``, ``interactions.get``, and ``aio.live.connect`` operations.
 You can also optionally capture prompts and responses as log events.
 
+For Gemini Live (``aio.live.connect``), opt-in ``user_speech`` spans are disabled by default per the GenAI realtime semantic conventions. Set ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH=true`` before instrumenting to enable them.
+
 Make sure to configure OpenTelemetry tracing, logging, and metrics to capture all telemetry emitted by the instrumentation.
 
 .. code-block:: python

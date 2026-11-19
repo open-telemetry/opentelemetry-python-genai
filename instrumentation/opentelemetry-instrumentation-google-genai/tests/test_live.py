@@ -38,6 +38,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import SpanKind, StatusCode, get_current_span
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
@@ -152,6 +153,7 @@ async def test_live_voice_turn_spans_events_and_metrics(
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
+    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     messages: list[genai_types.LiveServerMessage | BaseException] = [
         *_server_vad_messages(),
         genai_types.LiveServerMessage(
@@ -661,6 +663,7 @@ async def test_live_user_speech_and_interrupted_and_session_error(
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
+    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     messages: list[genai_types.LiveServerMessage | BaseException] = [
         genai_types.LiveServerMessage(
             server_content=genai_types.LiveServerContent(
@@ -747,6 +750,7 @@ async def test_live_interleaved_events_speech_across_generations_and_error_spans
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
+    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     messages: list[genai_types.LiveServerMessage | BaseException] = [
         genai_types.LiveServerMessage(
             server_content=genai_types.LiveServerContent(
@@ -926,6 +930,7 @@ async def test_live_public_client_transport_replay_zero_settings_and_client_cont
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
+    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     server_frames: list[dict[str, Any] | BaseException] = [
         {"setupComplete": {}},
         {
@@ -1071,6 +1076,7 @@ async def test_live_no_content_capture_skips_payload_buffering_and_session_http_
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "NO_CONTENT"
     )
+    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     messages: list[genai_types.LiveServerMessage | BaseException] = [
         *_server_vad_messages(),
         genai_types.LiveServerMessage(
@@ -1937,6 +1943,7 @@ async def test_live_transactional_sends_failed_requests_retries_and_session_send
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
+    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     fake_ws = _FakeWebSocket(
         [
             {"setupComplete": {}},
@@ -3005,6 +3012,7 @@ async def test_live_setup_handshake_failure_and_receive_cancellation(
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
+            extra_env={OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"},
         ):
             client = genai.Client(api_key="test-key", vertexai=False)
             with tracer.start_as_current_span("caller-cancel") as caller_span:
@@ -3636,3 +3644,291 @@ async def test_live_completion_hook_capture_and_nested_upload_disabled(
             GenAI.GEN_AI_TOOL_DEFINITIONS,
         ):
             assert content_attr not in log.log_record.attributes
+
+
+@pytest.mark.asyncio
+async def test_live_user_speech_disabled_by_default_and_opt_in(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    from google import genai
+
+    monkeypatch.delenv(
+        OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, raising=False
+    )
+
+    def _make_vad_ws() -> _FakeWebSocket:
+        return _FakeWebSocket(
+            [
+                {"setupComplete": {}},
+                {
+                    "voiceActivityDetectionSignal": {
+                        "vadSignalType": "VAD_SIGNAL_TYPE_SOS"
+                    }
+                },
+                {
+                    "voiceActivityDetectionSignal": {
+                        "vadSignalType": "VAD_SIGNAL_TYPE_EOS"
+                    }
+                },
+                {
+                    "serverContent": {
+                        "modelTurn": {
+                            "role": "model",
+                            "parts": [{"text": "Speech reply"}],
+                        },
+                        "turnComplete": True,
+                    }
+                },
+            ]
+        )
+
+    # Default configuration: neither client activity_start/activity_end nor
+    # server VAD emits user_speech spans; realtime_inference still records
+    # the flushed audio input.
+    with patch(
+        "google.genai.live.ws_connect", _make_fake_ws_connect(_make_vad_ws())
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_realtime_input(
+                    activity_start=genai_types.ActivityStart()
+                )
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"\x01\x02\x03\x04",
+                        mime_type="audio/pcm;rate=16000",
+                    )
+                )
+                await session.send_realtime_input(
+                    activity_end=genai_types.ActivityEnd()
+                )
+                async for _ in session.receive():
+                    pass
+
+    default_spans = span_exporter.get_finished_spans()
+    assert [
+        s.attributes[GenAI.GEN_AI_OPERATION_NAME] for s in default_spans
+    ] == ["realtime_inference"]
+    assert default_spans[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"\x01\x02\x03\x04",
+                },
+            ),
+        },
+    )
+
+    # Opt-in enabled via OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH=true:
+    # user_speech spans are emitted for speech boundaries.
+    span_exporter.clear()
+    with patch(
+        "google.genai.live.ws_connect", _make_fake_ws_connect(_make_vad_ws())
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+            extra_env={OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"},
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_realtime_input(
+                    activity_start=genai_types.ActivityStart()
+                )
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"\x01\x02\x03\x04",
+                        mime_type="audio/pcm;rate=16000",
+                    )
+                )
+                await session.send_realtime_input(
+                    activity_end=genai_types.ActivityEnd()
+                )
+                async for _ in session.receive():
+                    pass
+
+    optin_ops = [
+        s.attributes[GenAI.GEN_AI_OPERATION_NAME]
+        for s in span_exporter.get_finished_spans()
+    ]
+    assert "user_speech" in optin_ops
+    assert optin_ops[-1] == "realtime_inference"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via_legacy_send", [False, True])
+async def test_live_gemini_3_tool_response_draining_after_turn_complete_omitted_from_next_turn(
+    via_legacy_send: bool,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    tool_resp_written = asyncio.Event()
+    release_tool_resp_send = asyncio.Event()
+
+    class _DrainingToolResponseWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            await super().send(payload)
+            frame = self.sent_frames[-1]
+            if (
+                "toolResponse" in frame or "tool_response" in frame
+            ) and not tool_resp_written.is_set():
+                # Frame written to wire; yield while draining so concurrent
+                # receive finishes Turn 1 and clears _active_gen first.
+                tool_resp_written.set()
+                await asyncio.wait_for(
+                    release_tool_resp_send.wait(), timeout=5.0
+                )
+
+        async def recv(self, decode: bool = True) -> bytes | str:
+            # Frame index 2 (2 remaining frames) is Turn 1's spoken answer +
+            # turnComplete after the tool response reaches the server.
+            if len(self._frames) == 2:
+                await asyncio.wait_for(tool_resp_written.wait(), timeout=5.0)
+            return await super().recv(decode=decode)
+
+    fake_ws = _DrainingToolResponseWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-g3-drain-1",
+                            "name": "get_weather",
+                            "args": {"city": "Seattle"},
+                        }
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "It is rainy in Seattle."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Sure, anything else?"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-3.1-flash-live-preview",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Weather in Seattle?")],
+                    ),
+                    turn_complete=True,
+                )
+
+                fn_resp = genai_types.FunctionResponse(
+                    id="call-g3-drain-1",
+                    name="get_weather",
+                    response={"weather": "rainy"},
+                )
+
+                # Receive Turn 1's tool call (sets awaiting_tool_response=True).
+                msg1 = await session._receive()
+                assert msg1.tool_call is not None
+
+                # Stage tool response send; ws.send writes frame then suspends.
+                if via_legacy_send:
+                    send_task = asyncio.create_task(
+                        session.send(input=fn_resp)
+                    )
+                else:
+                    send_task = asyncio.create_task(
+                        session.send_tool_response(
+                            function_responses=[fn_resp]
+                        )
+                    )
+
+                # Receive Turn 1's spoken answer + turnComplete BEFORE the tool
+                # response send returns, clearing tracker._active_gen.
+                msg2 = await session._receive()
+                assert msg2.server_content is not None
+                assert msg2.server_content.turn_complete is True
+
+                # Now let the tool response send finish draining.
+                release_tool_resp_send.set()
+                await send_task
+
+                # Turn 2 must NOT inherit Turn 1's intermediate tool response.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Follow-up question")],
+                    ),
+                    turn_complete=True,
+                )
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    span1, span2 = spans[0], spans[1]
+    assert span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Weather in Seattle?"},),
+        },
+    )
+    assert span1.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "It is rainy in Seattle."},),
+            "finish_reason": "stop",
+        },
+    )
+    assert span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Follow-up question"},),
+        },
+    )
