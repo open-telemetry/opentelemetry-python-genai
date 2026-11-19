@@ -489,6 +489,19 @@ def test_resolve_embedder_provider_unit() -> None:
             )
             == "gcp.vertex_ai"
         )
+        vertex_override_embedder = GeminiEmbedder(
+            api_key="fake",
+            client_params={
+                "vertexai": True,
+                "project": "test-project",
+                "location": "us-central1",
+            },
+        )
+        assert (
+            resolve_embedder_provider(vertex_override_embedder)
+            == "gcp.vertex_ai"
+        )
+        assert vertex_override_embedder.gemini_client is None
     else:
         gemini_stub = type("GeminiEmbedder", (Embedder,), {})
         assert resolve_embedder_provider(gemini_stub()) == "gcp.gemini"
