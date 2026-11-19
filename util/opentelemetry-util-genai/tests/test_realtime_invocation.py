@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from unittest.mock import patch
 
@@ -158,12 +157,12 @@ def test_realtime_session_events_and_invocations():
         == "realtime_inference"
     )
     assert inf_span.attributes["gen_ai.realtime_session.id"] == "sess-1"
-    in_msgs = json.loads(inf_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    in_msgs = inf_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert in_msgs[0]["parts"][1] == {
         "type": "transcription",
         "content": "Hello model",
     }
-    out_msgs = json.loads(inf_span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    out_msgs = inf_span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert out_msgs[0]["parts"][1] == {
         "type": "transcription",
         "content": "Hello human",

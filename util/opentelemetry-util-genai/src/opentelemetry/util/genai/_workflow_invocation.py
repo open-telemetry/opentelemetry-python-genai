@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 
 from opentelemetry._logs import Logger
 from opentelemetry.context import Context
@@ -24,7 +24,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    gen_ai_json_dumps,
+    object_to_any_value,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -141,13 +141,13 @@ class WorkflowInvocation(GenAIInvocation):
         optional_attrs = (
             (
                 GenAI.GEN_AI_INPUT_MESSAGES,
-                gen_ai_json_dumps([asdict(m) for m in self.input_messages])
+                object_to_any_value(self.input_messages)
                 if self.input_messages
                 else None,
             ),
             (
                 GenAI.GEN_AI_OUTPUT_MESSAGES,
-                gen_ai_json_dumps([asdict(m) for m in self.output_messages])
+                object_to_any_value(self.output_messages)
                 if self.output_messages
                 else None,
             ),

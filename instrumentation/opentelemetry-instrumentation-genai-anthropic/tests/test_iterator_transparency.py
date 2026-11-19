@@ -221,7 +221,7 @@ async def test_sdk_consumes_and_captures_request_iterators(
     tools = [{"name": "weather", "input_schema": {"type": "object"}}]
     messages = [{"role": "user", "content": iter(blocks)}]
     kwargs = {
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-5-5",
         "max_tokens": 32,
         "messages": iter(messages) if message_iterator else messages,
         "system": iter(system),
