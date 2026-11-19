@@ -5614,3 +5614,317 @@ async def test_live_gemini_2_separate_tool_responses_grouped_in_single_turn(
             "parts": ({"type": "text", "content": "After cancel prompt"},),
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_live_deferred_media_commits_enforce_single_generation_byte_budget(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    first_written = asyncio.Event()
+    release_first = asyncio.Event()
+    media_send_count = 0
+
+    class _DeferredMediaWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            nonlocal media_send_count
+            await super().send(payload)
+            frame = self.sent_frames[-1]
+            if (
+                "realtimeInput" in frame
+                or "realtime_input" in frame
+                or "clientContent" in frame
+                or "client_content" in frame
+            ):
+                media_send_count += 1
+                if media_send_count == 1:
+                    first_written.set()
+                    await asyncio.wait_for(release_first.wait(), timeout=5.0)
+
+    fake_ws = _DeferredMediaWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Bounded deferred media reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    with (
+        patch.object(live_module, "_MAX_BUFFERED_MEDIA_BYTES", 16),
+        patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)),
+    ):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # Send 1 pauses while draining; subsequent video, interleaved
+                # audio, and image sends join the same turn and drain into the
+                # bound generation after it starts and completes.
+                first_task = asyncio.create_task(
+                    session.send_realtime_input(
+                        video=genai_types.Blob(
+                            data=b"VVVVVVVV", mime_type="image/jpeg"
+                        )
+                    )
+                )
+                await asyncio.wait_for(first_written.wait(), timeout=5.0)
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"11111111", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session.send_realtime_input(
+                    video=genai_types.Blob(
+                        data=b"WWWWWWWW", mime_type="image/jpeg"
+                    )
+                )
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"22222222", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[
+                            genai_types.Part(
+                                inline_data=genai_types.Blob(
+                                    data=b"IIIIIIII", mime_type="image/png"
+                                )
+                            )
+                        ],
+                    ),
+                    turn_complete=True,
+                )
+
+                # Generation starts and reaches turnComplete while sends drain.
+                async for _ in session.receive():
+                    pass
+
+                release_first.set()
+                await first_task
+
+    (span,) = span_exporter.get_finished_spans()
+    in_msgs = span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    total_blob_bytes = sum(
+        len(part["content"])
+        for msg in in_msgs
+        for part in msg["parts"]
+        if part.get("type") == "blob"
+    )
+    assert total_blob_bytes <= 16
+    assert in_msgs == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/pcm;rate=16000",
+                    "content": b"22222222",
+                },
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "content": b"IIIIIIII",
+                },
+            ),
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via_legacy_send", [False, True])
+async def test_live_gemini_2_tool_batch_rollback_and_retry_keeps_responses_in_single_turn(
+    via_legacy_send: bool,
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    from google import genai
+
+    call_a_entered = asyncio.Event()
+    fail_call_a = asyncio.Event()
+    call_a_attempts = 0
+
+    class _FailFirstToolAWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            nonlocal call_a_attempts
+            raw = (
+                payload.decode("utf-8")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
+            if "call-rb-a" in raw and call_a_attempts == 0:
+                call_a_attempts += 1
+                call_a_entered.set()
+                await asyncio.wait_for(fail_call_a.wait(), timeout=5.0)
+                raise ConnectionError("transient tool A send error")
+            await super().send(payload)
+
+    fake_ws = _FailFirstToolAWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-rb-a",
+                            "name": "get_weather",
+                            "args": {"city": "Tokyo"},
+                        },
+                        {
+                            "id": "call-rb-b",
+                            "name": "get_time",
+                            "args": {"city": "Tokyo"},
+                        },
+                    ]
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Tokyo weather and time reply."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Follow-up reply after retry."}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
+
+    async def _send_tool_resp(
+        session: Any, resp: genai_types.FunctionResponse
+    ) -> None:
+        if via_legacy_send:
+            await session.send(input=resp)
+        else:
+            await session.send_tool_response(function_responses=resp)
+
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_AND_EVENT",
+        ):
+            client = genai.Client(api_key="test-key", vertexai=False)
+            async with client.aio.live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[
+                            genai_types.Part(text="Weather and time in Tokyo?")
+                        ],
+                    ),
+                    turn_complete=True,
+                )
+                msg1 = await session._receive()
+                assert msg1.tool_call is not None
+
+                resp_a = genai_types.FunctionResponse(
+                    id="call-rb-a",
+                    name="get_weather",
+                    response={"temp_c": 18},
+                )
+                resp_b = genai_types.FunctionResponse(
+                    id="call-rb-b",
+                    name="get_time",
+                    response={"time": "09:00"},
+                )
+
+                # Start A (pauses inside ws.send), then B confirms and pops the
+                # batch + seals the turn while A is still pending.
+                task_a = asyncio.create_task(_send_tool_resp(session, resp_a))
+                await asyncio.wait_for(call_a_entered.wait(), timeout=5.0)
+                await _send_tool_resp(session, resp_b)
+
+                # Now A fails; rollback must restore the batch AND unseal the
+                # turn so retrying A joins the same turn as B.
+                fail_call_a.set()
+                with pytest.raises(
+                    ConnectionError, match="transient tool A send error"
+                ):
+                    await task_a
+
+                # Retry A -> completes batch and seals the single turn [B, A].
+                await _send_tool_resp(session, resp_a)
+
+                # Queue a follow-up turn before reading either buffered reply.
+                await session.send_client_content(
+                    turns=genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text="Follow-up after retry")],
+                    ),
+                    turn_complete=True,
+                )
+
+                async for _ in session.receive():
+                    pass
+                async for _ in session.receive():
+                    pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    gen1, gen2, gen3 = spans
+
+    assert gen1.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    gen2_inputs = gen2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
+    assert [m["parts"][0]["id"] for m in gen2_inputs] == [
+        "call-rb-b",
+        "call-rb-a",
+    ]
+    assert gen3.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Follow-up after retry"},),
+        },
+    )
+
+    ended = next(
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name == "gen_ai.client.realtime_session.ended"
+    )
+    assert ended.severity_number == SeverityNumber.INFO
+    assert ErrorAttributes.ERROR_TYPE not in ended.attributes
