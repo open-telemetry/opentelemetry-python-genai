@@ -1,0 +1,76 @@
+interactions:
+- request:
+    body: '{"contents": [{"parts": [{"text": "Write a short 3-sentence summary of
+      why OpenTelemetry is useful."}], "role": "user"}], "generationConfig": {"temperature":
+      0.2, "maxOutputTokens": 1024}}'
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '188'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/3.6.1 gl-python/3.14.3
+      x-goog-api-client:
+      - google-genai-sdk/3.6.1 gl-python/3.14.3
+      x-goog-api-key:
+      - test_google_genai_api_key
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse
+  response:
+    body:
+      string: "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"OpenTelemetry
+        provides a standardized, vendor-agnostic\"}],\"role\": \"model\"},\"index\":
+        0}],\"usageMetadata\": {\"promptTokenCount\": 16,\"candidatesTokenCount\":
+        10,\"totalTokenCount\": 826,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\":
+        16}],\"thoughtsTokenCount\": 800,\"serviceTier\": \"standard\"},\"modelVersion\":
+        \"gemini-2.5-flash\",\"responseId\": \"blb_asWMOcCfiLMPiaCd8Q4\"}\r\n\r\ndata:
+        {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \" way to collect
+        telemetry data\u2014traces, metrics, and logs\u2014from your applications.
+        This allows developers to instrument their code once and export that data
+        to any compatible observability backend without vendor lock-in. Ultimately,
+        it simplifies monitoring and troubleshooting complex\"}],\"role\": \"model\"},\"index\":
+        0}],\"usageMetadata\": {\"promptTokenCount\": 16,\"candidatesTokenCount\":
+        58,\"totalTokenCount\": 874,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\":
+        16}],\"thoughtsTokenCount\": 800,\"serviceTier\": \"standard\"},\"modelVersion\":
+        \"gemini-2.5-flash\",\"responseId\": \"blb_asWMOcCfiLMPiaCd8Q4\"}\r\n\r\ndata:
+        {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \" distributed systems
+        by offering a unified approach to understanding their behavior.\"}],\"role\":
+        \"model\"},\"finishReason\": \"STOP\",\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\":
+        16,\"candidatesTokenCount\": 70,\"totalTokenCount\": 886,\"promptTokensDetails\":
+        [{\"modality\": \"TEXT\",\"tokenCount\": 16}],\"thoughtsTokenCount\": 800,\"serviceTier\":
+        \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"blb_asWMOcCfiLMPiaCd8Q4\"}\r\n\r\n"
+    headers:
+      content-disposition:
+      - attachment
+      content-type:
+      - text/event-stream
+      date:
+      - Thu, 19 Nov 2026 20:05:07 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=4507
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

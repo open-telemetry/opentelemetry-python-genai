@@ -1753,40 +1753,64 @@ def _knowledge_asearch(
     return traced_method
 
 
-def _get_request_setting(instance: Model, *names: str) -> Any:
-    req_params = getattr(instance, "request_params", None)
-    typed_params = (
-        cast(Mapping[str, Any], req_params)
-        if isinstance(req_params, Mapping)
-        else None
-    )
-    if typed_params is not None:
+def _lookup_request_setting(
+    source: Any,
+    names: tuple[str, ...],
+    excluded: set[str],
+) -> tuple[Any, bool]:
+    """Look up the first matching setting in a mapping or object.
+
+    Any key explicitly present with a ``None`` value in a mapping is added to
+    ``excluded`` so lower-precedence sources do not resurrect a cleared setting.
+    """
+    if isinstance(source, Mapping):
+        typed = cast(Mapping[str, Any], source)
         for name in names:
-            if (
-                name in typed_params
-                and (val := typed_params[name]) is not None
-            ):
-                return val
+            if name in excluded or name not in typed:
+                continue
+            val = typed[name]
+            if val is not None:
+                return val, True
+            excluded.add(name)
+        return None, False
+    if source is not None:
+        for name in names:
+            if name in excluded:
+                continue
+            if (val := getattr(source, name, None)) is not None:
+                return val, True
+    return None, False
+
+
+def _get_request_setting(instance: Model, *names: str) -> Any:
+    excluded: set[str] = set()
+    req_params = getattr(instance, "request_params", None)
+    if isinstance(req_params, Mapping):
+        typed_params = cast(Mapping[str, Any], req_params)
+        val, found = _lookup_request_setting(typed_params, names, excluded)
+        if found:
+            return val
         if "config" in typed_params:
-            cfg = typed_params["config"]
-            if isinstance(cfg, Mapping):
-                typed_cfg = cast(Mapping[str, Any], cfg)
-                for name in names:
-                    if (
-                        name in typed_cfg
-                        and (val := typed_cfg[name]) is not None
-                    ):
-                        return val
-            elif cfg is not None:
-                for name in names:
-                    if (val := getattr(cfg, name, None)) is not None:
-                        return val
-            return None
+            cfg_val, _ = _lookup_request_setting(
+                typed_params["config"], names, set()
+            )
+            return cfg_val
+
     for name in names:
-        if typed_params is not None and name in typed_params:
+        if name in excluded:
             continue
         if (val := getattr(instance, name, None)) is not None:
             return val
+
+    # Agno's Gemini adapter builds its outgoing config in order:
+    # generation_config -> generative_model_kwargs -> non-None direct fields
+    # -> request_params (which replaces config above).
+    for attr in ("generative_model_kwargs", "generation_config"):
+        source = getattr(instance, attr, None)
+        if source is not None:
+            val, found = _lookup_request_setting(source, names, excluded)
+            if found:
+                return val
     return None
 
 

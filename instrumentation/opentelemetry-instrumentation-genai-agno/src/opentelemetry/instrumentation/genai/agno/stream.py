@@ -9,8 +9,7 @@ import contextlib
 import inspect
 from collections.abc import Awaitable, Callable, Iterator
 from contextvars import ContextVar
-from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agno.agent import RunOutput
@@ -169,23 +168,6 @@ class _AgentStreamMixin:
         self._finalize(error)
 
 
-class _AsyncAgnoStreamWrapper(AsyncStreamWrapper[Any]):
-    """AsyncStreamWrapper that preserves body exceptions if cleanup raises BaseException."""
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> Literal[False]:
-        try:
-            return await super().__aexit__(exc_type, exc_val, exc_tb)
-        except BaseException:
-            if exc_val is not None:
-                return False
-            raise
-
-
 class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncStreamWrapper[Any]):
     """Synchronous stream wrapper for Agno Agent and Team runs."""
 
@@ -203,7 +185,7 @@ class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncStreamWrapper[Any]):
         self._self_finish_reason = "stop"
 
 
-class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, _AsyncAgnoStreamWrapper):
+class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
     """Asynchronous stream wrapper for Agno Agent and Team runs."""
 
     def __init__(
@@ -341,7 +323,7 @@ class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
 
 
 class AsyncAgnoWorkflowStreamWrapper(
-    _WorkflowStreamMixin, _AsyncAgnoStreamWrapper
+    _WorkflowStreamMixin, AsyncStreamWrapper[Any]
 ):
     """Asynchronous stream wrapper for Agno Workflow runs."""
 
@@ -484,7 +466,7 @@ def register_model_delegate_stream(model: Any, stream: Any) -> None:
         current._register_delegate_stream(stream)
 
 
-class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, _AsyncAgnoStreamWrapper):
+class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
     """Stream wrapper for asynchronous Agno model responses."""
 
     def __init__(
@@ -605,7 +587,7 @@ class AgnoOuterSyncStreamWrapper(_OuterStreamMixin, SyncStreamWrapper[Any]):
             inner.__exit__(type(error), error, error.__traceback__)
 
 
-class AsyncAgnoOuterStreamWrapper(_OuterStreamMixin, _AsyncAgnoStreamWrapper):
+class AsyncAgnoOuterStreamWrapper(_OuterStreamMixin, AsyncStreamWrapper[Any]):
     """Stream wrapper for Model.aresponse_stream that propagates finalization to the inner stream wrapper."""
 
     def __init__(self, stream: Any) -> None:
