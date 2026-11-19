@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import inspect
 import mimetypes
 import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -86,15 +87,16 @@ def populate_provider_data(
     provider_data: Any,
 ) -> None:
     """Populate response_id and response_model_name from provider_data dict."""
-    if not isinstance(provider_data, dict):
+    if not isinstance(provider_data, Mapping):
         return
-    if (
-        resp_id := _get_property_value(provider_data, "id")
-    ) is not None and not invocation.response_id:
+    typed_data = cast(Mapping[str, Any], provider_data)
+    resp_id = typed_data.get("id")
+    if resp_id is None or resp_id == "":
+        resp_id = typed_data.get("response_id")
+    if resp_id is not None and str(resp_id):
         invocation.response_id = str(resp_id)
-    if (
-        resp_model := _get_property_value(provider_data, "model")
-    ) is not None and not invocation.response_model_name:
+    resp_model = typed_data.get("model")
+    if resp_model is not None and str(resp_model):
         invocation.response_model_name = str(resp_model)
 
 
@@ -476,6 +478,42 @@ _CLASS_NAME_TO_PROVIDER: dict[str, str] = {
 }
 
 
+def _uses_vertex_ai(instance: Model | Embedder) -> bool:
+    # Inspect an already-attached client without invoking lazy properties
+    # (e.g. GeminiEmbedder.client constructs genai.Client on access).
+    for attr in ("gemini_client", "client"):
+        raw: object = inspect.getattr_static(instance, attr, None)
+        if raw is not None and not hasattr(type(raw), "__get__"):
+            client_vertexai = getattr(raw, "vertexai", None)
+            if isinstance(client_vertexai, bool):
+                return client_vertexai
+
+    env_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in (
+        "true",
+        "1",
+    )
+    # Agno merges instance.client_params last before genai.Client(**params),
+    # overriding instance.vertexai and env defaults.
+    client_params = getattr(instance, "client_params", None)
+    if isinstance(client_params, Mapping):
+        typed_params = cast(Mapping[str, Any], client_params)
+        if "vertexai" in typed_params:
+            override = typed_params["vertexai"]
+            if override is not None:
+                return bool(override)
+            return env_vertexai
+
+    return bool(getattr(instance, "vertexai", False)) or env_vertexai
+
+
+def _resolve_google_provider(instance: Model | Embedder) -> str:
+    return (
+        GenAiProviderNameValues.GCP_VERTEX_AI.value
+        if _uses_vertex_ai(instance)
+        else GenAiProviderNameValues.GCP_GEMINI.value
+    )
+
+
 def _resolve_provider(
     instance: Model | Embedder,
     *,
@@ -484,13 +522,6 @@ def _resolve_provider(
     stop_classes: tuple[str, ...],
     allow_provider_attr: bool = True,
 ) -> str:
-    google_provider = (
-        GenAiProviderNameValues.GCP_VERTEX_AI.value
-        if getattr(instance, "vertexai", False)
-        or (os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true")
-        else GenAiProviderNameValues.GCP_GEMINI.value
-    )
-
     # 1. Check the class hierarchy (most derived first)
     for cls in type(instance).__mro__:
         cls_name = cls.__name__
@@ -503,7 +534,7 @@ def _resolve_provider(
             if cls_mod == "agno.models.azure.claude":
                 return GenAiProviderNameValues.AZURE_AI_INFERENCE.value
         if cls_name in google_classes:
-            return google_provider
+            return _resolve_google_provider(instance)
         if cls_name in stop_classes:
             if getattr(instance, "provider", None) == getattr(
                 cls, "provider", None
@@ -519,7 +550,7 @@ def _resolve_provider(
         if isinstance(provider_attr, str) and provider_attr.strip():
             p_name = provider_attr.strip().lower()
             if p_name in ("google", "gemini"):
-                return google_provider
+                return _resolve_google_provider(instance)
             p_clean = "".join(c for c in p_name if c.isalnum())
             return (
                 _KNOWN_PROVIDERS.get(p_name)
@@ -953,7 +984,9 @@ def _extract_tool_call_parts(
     if not tool_calls:
         return parts
     for tc in tool_calls:
-        tc_id = _get_property_value(tc, "id")
+        tc_id = _get_property_value(tc, "call_id")
+        if tc_id is None or tc_id == "":
+            tc_id = _get_property_value(tc, "id")
         fn = _get_property_value(tc, "function")
         target = fn if fn is not None else tc
         fn_name_val = _get_property_value(target, "name")
@@ -1246,6 +1279,7 @@ def format_model_input_messages(
 ) -> list[InputMessage]:
     """Format an iterable of Agno Message objects into InputMessage list."""
     result: list[InputMessage] = []
+    fc_id_to_call_id: dict[str, str] = {}
     for msg in messages:
         raw_role = str(msg.role).strip().lower() if msg.role else ""
         normalized_role = (
@@ -1259,11 +1293,17 @@ def format_model_input_messages(
 
         # Tool response message
         if normalized_role == Role.TOOL.value or msg.tool_call_id is not None:
+            raw_tool_call_id = (
+                str(msg.tool_call_id) if msg.tool_call_id is not None else None
+            )
+            resolved_tool_call_id = (
+                fc_id_to_call_id.get(raw_tool_call_id, raw_tool_call_id)
+                if raw_tool_call_id is not None
+                else None
+            )
             parts.append(
                 ToolCallResponsePart(
-                    id=str(msg.tool_call_id)
-                    if msg.tool_call_id is not None
-                    else None,
+                    id=resolved_tool_call_id,
                     response=object_to_any_value(msg.content),
                 )
             )
@@ -1278,6 +1318,17 @@ def format_model_input_messages(
             parts.append(ReasoningPart(content=str(msg.reasoning_content)))
 
         # Tool calls requested by assistant in history
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                raw_id = _get_property_value(tc, "id")
+                call_id = _get_property_value(tc, "call_id")
+                if (
+                    raw_id is not None
+                    and call_id is not None
+                    and str(raw_id)
+                    and str(call_id)
+                ):
+                    fc_id_to_call_id[str(raw_id)] = str(call_id)
         parts.extend(_extract_tool_call_parts(msg.tool_calls))
 
         media_parts = _extract_media_parts(msg)

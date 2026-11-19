@@ -3590,3 +3590,905 @@ def test_model_async_stream_delegate_close_error_still_closes_remaining_delegate
     assert spans[0].attributes.get(ERROR_TYPE) == "RuntimeError"
     assert spans[1].status.status_code == StatusCode.ERROR
     assert spans[1].attributes.get(ERROR_TYPE) == "ConnectionError"
+
+
+def test_model_async_stream_cancelled_inner_cleanup_preserves_original_error(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """CancelledError raised during inner-stream cleanup after an iteration or athrow error preserves the original error."""
+    from agno.models.base import Model
+
+    events: list[str] = []
+
+    class _BaseCancelledCleanupStreamModel(Model):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="unused")
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="unused")
+
+        def invoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> Iterator[ModelResponse]:
+            yield ModelResponse(content="unused")
+
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            try:
+                yield ModelResponse(content="chunk1")
+                yield ModelResponse(content="chunk2")
+            finally:
+                await asyncio.sleep(0)
+                events.append("cleanup_cancelled")
+                raise asyncio.CancelledError("cleanup cancelled")
+
+        def _parse_provider_response(
+            self, response: Any, **kwargs: Any
+        ) -> ModelResponse:
+            return response
+
+        def _parse_provider_response_delta(
+            self, response: Any
+        ) -> ModelResponse:
+            return response
+
+    class _SubFailingMidStreamModel(_BaseCancelledCleanupStreamModel):
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            async for delta in super().ainvoke_stream(*args, **kwargs):
+                yield delta
+                raise ConnectionError("stream failed mid-iteration")
+
+    async def _next_content_chunk(stream: Any) -> Any:
+        chunk = await anext(stream)
+        while getattr(chunk, "content", None) is None:
+            chunk = await anext(stream)
+        return chunk
+
+    async def _run() -> None:
+        # 1. Mid-iteration provider error while base delegate is still open;
+        #    inner-stream cleanup raises CancelledError, original ConnectionError must survive.
+        model_mid = _SubFailingMidStreamModel(
+            id="cancel-cleanup-mid", provider="Custom"
+        )
+        stream_mid = model_mid.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        )
+        first = await _next_content_chunk(stream_mid)
+        assert getattr(first, "content", None) == "chunk1"
+        with pytest.raises(
+            ConnectionError, match="stream failed mid-iteration"
+        ):
+            await anext(stream_mid)
+        assert events == ["cleanup_cancelled"]
+
+        # 2. Caller athrow() failure with CancelledError during inner cleanup
+        events.clear()
+        model_throw = _BaseCancelledCleanupStreamModel(
+            id="cancel-cleanup-throw", provider="Custom"
+        )
+        stream_throw = model_throw.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        )
+        first2 = await _next_content_chunk(stream_throw)
+        assert getattr(first2, "content", None) == "chunk1"
+        with pytest.raises(RuntimeError, match="caller abort"):
+            await stream_throw.athrow(RuntimeError("caller abort"))
+        assert events == ["cleanup_cancelled"]
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes.get(ERROR_TYPE) == "ConnectionError"
+    assert spans[1].status.status_code == StatusCode.ERROR
+    assert spans[1].attributes.get(ERROR_TYPE) == "RuntimeError"
+
+
+def test_openai_responses_preserves_response_id_sync_async_and_streaming(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """OpenAIResponses stores response_id in provider_data['response_id']; sync, async, and streaming preserve gen_ai.response.id."""
+    import httpx
+    import openai
+    from agno.models.openai.responses import OpenAIResponses
+
+    def _response_payload(resp_id: str, text: str) -> dict[str, Any]:
+        return {
+            "id": resp_id,
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": text,
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+            "parallel_tool_calls": True,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "usage": {
+                "input_tokens": 10,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 5,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 15,
+            },
+        }
+
+    def _sse_body(resp_id: str, text: str) -> bytes:
+        completed = _response_payload(resp_id, text)
+        created = {
+            **completed,
+            "status": "in_progress",
+            "output": [],
+            "usage": None,
+        }
+        events_sse = [
+            f"event: response.created\ndata: {json.dumps({'type': 'response.created', 'sequence_number': 0, 'response': created})}",
+            f"event: response.output_text.delta\ndata: {json.dumps({'type': 'response.output_text.delta', 'sequence_number': 1, 'item_id': 'msg_1', 'output_index': 0, 'content_index': 0, 'delta': text, 'logprobs': []})}",
+            f"event: response.completed\ndata: {json.dumps({'type': 'response.completed', 'sequence_number': 2, 'response': completed})}",
+        ]
+        return ("\n\n".join(events_sse) + "\n\n").encode("utf-8")
+
+    sync_client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda req: (
+                    httpx.Response(
+                        200,
+                        headers={"content-type": "text/event-stream"},
+                        content=_sse_body(
+                            "resp_stream_sync_1", "hello sync stream"
+                        ),
+                    )
+                    if json.loads(req.content.decode("utf-8")).get("stream")
+                    else httpx.Response(
+                        200,
+                        json=_response_payload("resp_sync_1", "hello sync"),
+                    )
+                )
+            )
+        ),
+    )
+    async_client = openai.AsyncOpenAI(
+        api_key="test-key",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: (
+                    httpx.Response(
+                        200,
+                        headers={"content-type": "text/event-stream"},
+                        content=_sse_body(
+                            "resp_stream_async_1", "hello async stream"
+                        ),
+                    )
+                    if json.loads(req.content.decode("utf-8")).get("stream")
+                    else httpx.Response(
+                        200,
+                        json=_response_payload("resp_async_1", "hello async"),
+                    )
+                )
+            )
+        ),
+    )
+
+    model = OpenAIResponses(
+        id="gpt-4o", client=sync_client, async_client=async_client
+    )
+
+    # 1. Sync non-streaming
+    model.response(messages=[Message(role="user", content="hi sync")])
+    # 2. Sync streaming
+    list(
+        model.response_stream(
+            messages=[Message(role="user", content="hi sync stream")]
+        )
+    )
+
+    # 3. Async non-streaming + 4. Async streaming
+    async def _run_async() -> None:
+        await model.aresponse(
+            messages=[Message(role="user", content="hi async")]
+        )
+        async for _ in model.aresponse_stream(
+            messages=[Message(role="user", content="hi async stream")]
+        ):
+            pass
+
+    asyncio.run(_run_async())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 4
+    assert [
+        span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        for span in spans
+    ] == [
+        "resp_sync_1",
+        "resp_stream_sync_1",
+        "resp_async_1",
+        "resp_stream_async_1",
+    ]
+
+
+def test_openai_responses_tool_call_correlates_via_call_id(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """OpenAIResponses tool loops correlate tool_call and tool_call_response parts using call_id when id and call_id differ."""
+    import httpx
+    import openai
+    from agno.models.openai.responses import OpenAIResponses
+    from agno.tools.function import Function
+
+    def get_weather(city: str) -> str:
+        """Get weather for a city."""
+        return f"Sunny in {city}"
+
+    turn = 0
+
+    def _handler(_req: httpx.Request) -> httpx.Response:
+        nonlocal turn
+        turn += 1
+        if turn == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "resp_tool_turn_1",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-4o",
+                    "output": [
+                        {
+                            "id": "fc_weather_1",
+                            "call_id": "call_weather_1",
+                            "type": "function_call",
+                            "status": "completed",
+                            "name": "get_weather",
+                            "arguments": '{"city": "Paris"}',
+                        }
+                    ],
+                    "parallel_tool_calls": True,
+                    "temperature": 1.0,
+                    "tool_choice": "auto",
+                    "tools": [],
+                    "top_p": 1.0,
+                    "usage": {
+                        "input_tokens": 12,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens": 6,
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                        "total_tokens": 18,
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_tool_turn_2",
+                "object": "response",
+                "created_at": 1700000001,
+                "status": "completed",
+                "model": "gpt-4o",
+                "output": [
+                    {
+                        "id": "msg_2",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "It is sunny in Paris.",
+                                "annotations": [],
+                            }
+                        ],
+                    }
+                ],
+                "parallel_tool_calls": True,
+                "temperature": 1.0,
+                "tool_choice": "auto",
+                "tools": [],
+                "top_p": 1.0,
+                "usage": {
+                    "input_tokens": 20,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 8,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 28,
+                },
+            },
+        )
+
+    client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(transport=httpx.MockTransport(_handler)),
+    )
+    model = OpenAIResponses(id="gpt-4o", client=client)
+    resp = model.response(
+        messages=[Message(role="user", content="Weather in Paris?")],
+        tools=[Function.from_callable(get_weather)],
+    )
+    assert resp.content == "It is sunny in Paris."
+
+    chat_spans = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
+    ]
+    assert len(chat_spans) == 2
+    turn1_span, turn2_span = chat_spans
+
+    assert (
+        turn1_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp_tool_turn_1"
+    )
+    assert (
+        turn2_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp_tool_turn_2"
+    )
+
+    turn1_output: Any = turn1_span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    turn1_tool_calls = [
+        part
+        for msg in turn1_output
+        for part in msg["parts"]
+        if part.get("type") == "tool_call"
+    ]
+    assert len(turn1_tool_calls) == 1
+    assert turn1_tool_calls[0]["id"] == "call_weather_1"
+    assert turn1_tool_calls[0]["name"] == "get_weather"
+    assert turn1_tool_calls[0]["arguments"] == {"city": "Paris"}
+
+    turn2_input: Any = turn2_span.attributes.get(
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    turn2_tool_calls = [
+        part
+        for msg in turn2_input
+        for part in msg["parts"]
+        if part.get("type") == "tool_call"
+    ]
+    turn2_tool_responses = [
+        part
+        for msg in turn2_input
+        for part in msg["parts"]
+        if part.get("type") == "tool_call_response"
+    ]
+    assert len(turn2_tool_calls) == 1
+    assert len(turn2_tool_responses) == 1
+    assert turn2_tool_calls[0]["id"] == "call_weather_1"
+    assert turn2_tool_responses[0]["id"] == "call_weather_1"
+    assert turn2_tool_responses[0]["response"] == "Sunny in Paris"
+
+    # Also verify streaming Responses tool loop correlates using call_id
+    span_exporter.clear()
+    stream_turn = 0
+
+    def _stream_handler(_req: httpx.Request) -> httpx.Response:
+        nonlocal stream_turn
+        stream_turn += 1
+        base_resp: dict[str, Any] = {
+            "id": f"resp_stream_tool_{stream_turn}",
+            "object": "response",
+            "created_at": 1700000000 + stream_turn,
+            "status": "in_progress",
+            "model": "gpt-4o",
+            "output": [],
+            "parallel_tool_calls": True,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "usage": None,
+        }
+        if stream_turn == 1:
+            fc_item = {
+                "id": "fc_stream_weather_1",
+                "call_id": "call_stream_weather_1",
+                "type": "function_call",
+                "status": "in_progress",
+                "name": "get_weather",
+                "arguments": "",
+            }
+            fc_done = {
+                **fc_item,
+                "status": "completed",
+                "arguments": '{"city": "London"}',
+            }
+            completed = {
+                **base_resp,
+                "status": "completed",
+                "output": [fc_done],
+                "usage": {
+                    "input_tokens": 10,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 5,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 15,
+                },
+            }
+            args_delta = '{"city": "London"}'
+            sse = [
+                f"event: response.created\ndata: {json.dumps({'type': 'response.created', 'sequence_number': 0, 'response': base_resp})}",
+                f"event: response.output_item.added\ndata: {json.dumps({'type': 'response.output_item.added', 'sequence_number': 1, 'output_index': 0, 'item': fc_item})}",
+                f"event: response.function_call_arguments.delta\ndata: {json.dumps({'type': 'response.function_call_arguments.delta', 'sequence_number': 2, 'item_id': 'fc_stream_weather_1', 'output_index': 0, 'delta': args_delta})}",
+                f"event: response.output_item.done\ndata: {json.dumps({'type': 'response.output_item.done', 'sequence_number': 3, 'output_index': 0, 'item': fc_done})}",
+                f"event: response.completed\ndata: {json.dumps({'type': 'response.completed', 'sequence_number': 4, 'response': completed})}",
+            ]
+        else:
+            completed = {
+                **base_resp,
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "msg_stream_2",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "It is sunny in London.",
+                                "annotations": [],
+                            }
+                        ],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 18,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 6,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 24,
+                },
+            }
+            sse = [
+                f"event: response.created\ndata: {json.dumps({'type': 'response.created', 'sequence_number': 0, 'response': base_resp})}",
+                f"event: response.output_text.delta\ndata: {json.dumps({'type': 'response.output_text.delta', 'sequence_number': 1, 'item_id': 'msg_stream_2', 'output_index': 0, 'content_index': 0, 'delta': 'It is sunny in London.', 'logprobs': []})}",
+                f"event: response.completed\ndata: {json.dumps({'type': 'response.completed', 'sequence_number': 2, 'response': completed})}",
+            ]
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=("\n\n".join(sse) + "\n\n").encode("utf-8"),
+        )
+
+    stream_client = openai.OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(_stream_handler)
+        ),
+    )
+    stream_model = OpenAIResponses(id="gpt-4o", client=stream_client)
+    list(
+        stream_model.response_stream(
+            messages=[Message(role="user", content="Weather in London?")],
+            tools=[Function.from_callable(get_weather)],
+        )
+    )
+    stream_chat_spans = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
+    ]
+    assert len(stream_chat_spans) == 2
+    s_turn1, s_turn2 = stream_chat_spans
+    assert (
+        s_turn1.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp_stream_tool_1"
+    )
+    assert (
+        s_turn2.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp_stream_tool_2"
+    )
+    s_turn1_calls = [
+        part
+        for msg in (
+            s_turn1.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+            or ()
+        )
+        for part in msg["parts"]
+        if part.get("type") == "tool_call"
+    ]
+    s_turn2_calls = [
+        part
+        for msg in (
+            s_turn2.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES) or ()
+        )
+        for part in msg["parts"]
+        if part.get("type") == "tool_call"
+    ]
+    s_turn2_responses = [
+        part
+        for msg in (
+            s_turn2.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES) or ()
+        )
+        for part in msg["parts"]
+        if part.get("type") == "tool_call_response"
+    ]
+    assert len(s_turn1_calls) == 1
+    assert len(s_turn2_calls) == 1
+    assert len(s_turn2_responses) == 1
+    assert s_turn1_calls[0]["id"] == "call_stream_weather_1"
+    assert s_turn2_calls[0]["id"] == "call_stream_weather_1"
+    assert s_turn2_responses[0]["id"] == "call_stream_weather_1"
+    assert s_turn2_responses[0]["response"] == "Sunny in London"
+
+
+def test_model_stream_retry_refreshes_response_metadata(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+) -> None:
+    """Partial-stream retries replace response_id and response_model with the successful retry's metadata."""
+    from agno.exceptions import ModelProviderError
+
+    class _RetryingStreamModel(MockModel):
+        sync_attempts: int = 0
+        async_attempts: int = 0
+        id_key: str = "id"
+
+        def invoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> Iterator[ModelResponse]:
+            self.sync_attempts += 1
+            if self.sync_attempts == 1:
+                yield ModelResponse(
+                    content="partial sync ",
+                    provider_data={
+                        self.id_key: "resp-sync-attempt-1",
+                        "model": "model-sync-attempt-1",
+                    },
+                )
+                raise ModelProviderError(
+                    message="transient sync stream failure",
+                    model_name=self.name,
+                    model_id=self.id,
+                )
+            yield ModelResponse(
+                provider_data={
+                    self.id_key: "resp-sync-attempt-2",
+                    "model": "model-sync-attempt-2",
+                },
+            )
+            yield ModelResponse(
+                content="recovered sync",
+                provider_data={
+                    self.id_key: "resp-sync-attempt-2",
+                    "model": "model-sync-attempt-2",
+                    "finish_reason": "stop",
+                },
+                response_usage=MessageMetrics(
+                    input_tokens=11, output_tokens=7
+                ),
+            )
+
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            self.async_attempts += 1
+            if self.async_attempts == 1:
+                yield ModelResponse(
+                    content="partial async ",
+                    provider_data={
+                        self.id_key: "resp-async-attempt-1",
+                        "model": "model-async-attempt-1",
+                    },
+                )
+                raise ModelProviderError(
+                    message="transient async stream failure",
+                    model_name=self.name,
+                    model_id=self.id,
+                )
+            yield ModelResponse(
+                provider_data={
+                    self.id_key: "resp-async-attempt-2",
+                    "model": "model-async-attempt-2",
+                },
+            )
+            yield ModelResponse(
+                content="recovered async",
+                provider_data={
+                    self.id_key: "resp-async-attempt-2",
+                    "model": "model-async-attempt-2",
+                    "finish_reason": "stop",
+                },
+                response_usage=MessageMetrics(
+                    input_tokens=13, output_tokens=9
+                ),
+            )
+
+    model = _RetryingStreamModel(
+        id="retry-model",
+        provider="OpenAI",
+        retries=1,
+        delay_between_retries=0,
+    )
+
+    list(model.response_stream(messages=[Message(role="user", content="go")]))
+
+    async def _consume_async(target: _RetryingStreamModel) -> None:
+        async for _ in target.aresponse_stream(
+            messages=[Message(role="user", content="go async")]
+        ):
+            pass
+
+    asyncio.run(_consume_async(model))
+
+    assert model.sync_attempts == 2
+    assert model.async_attempts == 2
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    sync_span, async_span = spans
+
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp-sync-attempt-2"
+    )
+    assert (
+        sync_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL)
+        == "model-sync-attempt-2"
+    )
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp-async-attempt-2"
+    )
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL)
+        == "model-async-attempt-2"
+    )
+
+    # Also verify retry refreshes metadata when using provider_data["response_id"]
+    span_exporter.clear()
+    responses_retry_model = _RetryingStreamModel(
+        id="retry-responses-model",
+        provider="OpenAI",
+        retries=1,
+        delay_between_retries=0,
+    )
+    responses_retry_model.id_key = "response_id"
+    list(
+        responses_retry_model.response_stream(
+            messages=[Message(role="user", content="go responses")]
+        )
+    )
+    asyncio.run(_consume_async(responses_retry_model))
+    resp_spans = span_exporter.get_finished_spans()
+    assert len(resp_spans) == 2
+    assert (
+        resp_spans[0].attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp-sync-attempt-2"
+    )
+    assert (
+        resp_spans[1].attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+        == "resp-async-attempt-2"
+    )
+
+    metrics_data = metric_reader.get_metrics_data()
+    duration_models: set[Any] = set()
+    token_models: set[Any] = set()
+    for resource_metric in metrics_data.resource_metrics:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                if metric.name == "gen_ai.client.operation.duration":
+                    for dp in metric.data.data_points:
+                        duration_models.add(
+                            dp.attributes.get(
+                                GenAIAttributes.GEN_AI_RESPONSE_MODEL
+                            )
+                        )
+                elif metric.name == "gen_ai.client.token.usage":
+                    for dp in metric.data.data_points:
+                        token_models.add(
+                            dp.attributes.get(
+                                GenAIAttributes.GEN_AI_RESPONSE_MODEL
+                            )
+                        )
+    expected_models = {"model-sync-attempt-2", "model-async-attempt-2"}
+    assert expected_models.issubset(duration_models)
+    assert expected_models.issubset(token_models)
+
+
+def test_gemini_provider_resolved_from_effective_client_settings(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+    monkeypatch,
+) -> None:
+    """Gemini provider resolution respects client_params and pre-built client settings without constructing a client for telemetry."""
+    import httpx
+    from agno.models.google import Gemini
+    from google import genai
+    from google.genai.types import HttpOptions
+    from google.oauth2.credentials import Credentials
+
+    for env_var in (
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+
+    payload = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello from Gemini!"}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+    }
+
+    vertex_urls: list[str] = []
+    vertex_http = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda req: (
+                vertex_urls.append(str(req.url)),
+                httpx.Response(200, json=payload),
+            )[1]
+        )
+    )
+
+    real_genai_client = genai.Client
+    constructed_kwargs: list[dict[str, Any]] = []
+
+    def _spied_client(*args: Any, **kwargs: Any) -> Any:
+        constructed_kwargs.append(dict(kwargs))
+        return real_genai_client(*args, **kwargs)
+
+    monkeypatch.setattr(genai, "Client", _spied_client)
+
+    # 1. client_params={"vertexai": True, ...} overrides default vertexai=False without eagerly constructing client
+    vertex_override_model = Gemini(
+        id="gemini-2.5-flash",
+        client_params={
+            "vertexai": True,
+            "project": "test-project",
+            "location": "us-central1",
+            "credentials": Credentials(token="test-token"),
+            "http_options": {"httpx_client": vertex_http},
+        },
+    )
+    assert resolve_model_provider(vertex_override_model) == "gcp.vertex_ai"
+    assert constructed_kwargs == []
+    assert vertex_override_model.client is None
+
+    vertex_override_model.response(
+        messages=[Message(role="user", content="vertex via client_params")]
+    )
+    assert len(constructed_kwargs) == 1
+    assert constructed_kwargs[0].get("vertexai") is True
+    assert any("aiplatform.googleapis.com" in u for u in vertex_urls)
+
+    (vertex_span,) = span_exporter.get_finished_spans()
+    assert (
+        vertex_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+        == "gcp.vertex_ai"
+    )
+
+    def _metric_providers() -> tuple[set[Any], set[Any]]:
+        data = metric_reader.get_metrics_data()
+        duration_p: set[Any] = set()
+        token_p: set[Any] = set()
+        for rm in data.resource_metrics:
+            for sm in rm.scope_metrics:
+                for m in sm.metrics:
+                    if m.name == "gen_ai.client.operation.duration":
+                        for dp in m.data.data_points:
+                            duration_p.add(
+                                dp.attributes.get(
+                                    GenAIAttributes.GEN_AI_PROVIDER_NAME
+                                )
+                            )
+                    elif m.name == "gen_ai.client.token.usage":
+                        for dp in m.data.data_points:
+                            token_p.add(
+                                dp.attributes.get(
+                                    GenAIAttributes.GEN_AI_PROVIDER_NAME
+                                )
+                            )
+        return duration_p, token_p
+
+    duration_providers, token_providers = _metric_providers()
+    assert duration_providers == {"gcp.vertex_ai"}
+    assert token_providers == {"gcp.vertex_ai"}
+
+    # 2. client_params={"vertexai": False, ...} overrides vertexai=True
+    span_exporter.clear()
+    gemini_urls: list[str] = []
+    gemini_http = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda req: (
+                gemini_urls.append(str(req.url)),
+                httpx.Response(200, json=payload),
+            )[1]
+        )
+    )
+    gemini_override_model = Gemini(
+        id="gemini-2.5-flash",
+        vertexai=True,
+        client_params={
+            "vertexai": False,
+            "api_key": "test-key",
+            "project": None,
+            "location": None,
+            "http_options": {"httpx_client": gemini_http},
+        },
+    )
+    assert resolve_model_provider(gemini_override_model) == "gcp.gemini"
+    assert len(constructed_kwargs) == 1
+    gemini_override_model.response(
+        messages=[Message(role="user", content="gemini via client_params")]
+    )
+    assert len(constructed_kwargs) == 2
+    assert any("generativelanguage.googleapis.com" in u for u in gemini_urls)
+    (gemini_span,) = span_exporter.get_finished_spans()
+    assert (
+        gemini_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+        == "gcp.gemini"
+    )
+
+    # 3. Pre-built genai.Client(vertexai=True, ...) passed directly overrides default vertexai=False
+    span_exporter.clear()
+    prebuilt_vertex_client = real_genai_client(
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+        credentials=Credentials(token="test-token"),
+        http_options=HttpOptions(httpx_client=vertex_http),
+    )
+    prebuilt_model = Gemini(
+        id="gemini-2.5-flash",
+        client=prebuilt_vertex_client,
+    )
+    prebuilt_model.response(
+        messages=[Message(role="user", content="vertex via prebuilt client")]
+    )
+    (prebuilt_span,) = span_exporter.get_finished_spans()
+    assert (
+        prebuilt_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+        == "gcp.vertex_ai"
+    )
+
+    # 4. client_params={"vertexai": None} defers to env var instead of adapter flag
+    none_override_model = Gemini(
+        id="gemini-2.5-flash",
+        vertexai=True,
+        client_params={"vertexai": None},
+    )
+    assert resolve_model_provider(none_override_model) == "gcp.gemini"
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    assert resolve_model_provider(none_override_model) == "gcp.vertex_ai"

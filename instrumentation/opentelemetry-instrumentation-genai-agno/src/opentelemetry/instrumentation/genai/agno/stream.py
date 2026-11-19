@@ -613,7 +613,7 @@ class AsyncAgnoOuterStreamWrapper(_OuterStreamMixin, AsyncStreamWrapper[Any]):
             if self._self_inner_stream is not None:
                 try:
                     await self._self_inner_stream._close_stream()
-                except Exception:
+                except BaseException:
                     pass
             raise
 
