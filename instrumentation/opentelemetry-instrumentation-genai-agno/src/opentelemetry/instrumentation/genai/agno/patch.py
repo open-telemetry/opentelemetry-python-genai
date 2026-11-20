@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
     from agno.knowledge.knowledge import Knowledge
+    from agno.media import Audio, File, Image, Video
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
     from wrapt import BoundFunctionWrapper, FunctionWrapper
@@ -58,9 +59,12 @@ from opentelemetry.instrumentation.genai.agno.stream import (
 )
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
+    extract_media_parts,
     extract_session_id,
     format_content,
     format_retrieval_document,
+    is_agno_message,
+    is_workflow_execution_input,
     prepare_tool_definitions,
     resolve_embedder_provider,
     safe_int,
@@ -84,6 +88,7 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     Error,
     InputMessage,
+    MessagePart,
     OutputMessage,
     Role,
     SystemInstructionPart,
@@ -635,6 +640,42 @@ def _set_tool_invocation_output(
         )
 
 
+def _build_user_input_messages(
+    input_val: object,
+    *,
+    images: Sequence[Image] | None = None,
+    audio: Sequence[Audio] | None = None,
+    videos: Sequence[Video] | None = None,
+    files: Sequence[File] | None = None,
+) -> list[InputMessage]:
+    role = Role.USER.value
+    if is_agno_message(input_val):
+        role = input_val.role or Role.USER.value
+        text = (
+            format_content(input_val.content)
+            if input_val.content is not None
+            else ""
+        )
+        images, audio, videos, files = (
+            input_val.images,
+            input_val.audio,
+            input_val.videos,
+            input_val.files,
+        )
+    else:
+        text = (
+            _extract_input_content(input_val) if input_val is not None else ""
+        )
+
+    parts: list[MessagePart] = [TextPart(content=text)] if text else []
+    parts.extend(
+        extract_media_parts(
+            images=images, audio=audio, videos=videos, files=files
+        )
+    )
+    return [InputMessage(role=role, parts=parts)] if parts else []
+
+
 def _set_invocation_input(
     invocation: LocalAgentInvocation | WorkflowInvocation,
     instance: Any,
@@ -643,15 +684,37 @@ def _set_invocation_input(
     capture_content: bool,
     wrapped: Callable[..., Any],
 ) -> None:
-    if capture_content:
-        input_val = get_argument("input", wrapped, args, kwargs)
-        if input_val is not None:
-            content_str = _extract_input_content(input_val)
-            invocation.input_messages = [
-                InputMessage(
-                    role=Role.USER.value, parts=[TextPart(content=content_str)]
-                )
-            ]
+    if not capture_content:
+        return
+    bound = bind_arguments(wrapped, args, kwargs)
+    messages = _build_user_input_messages(
+        bound.get("input"),
+        images=cast("Sequence[Image] | None", bound.get("images")),
+        audio=cast("Sequence[Audio] | None", bound.get("audio")),
+        videos=cast("Sequence[Video] | None", bound.get("videos")),
+        files=cast("Sequence[File] | None", bound.get("files")),
+    )
+    if messages:
+        invocation.input_messages = messages
+
+
+def _set_workflow_execution_input_messages(
+    invocation: WorkflowInvocation,
+    input_val: object,
+    exec_input: object,
+) -> None:
+    if is_workflow_execution_input(exec_input):
+        messages = _build_user_input_messages(
+            input_val,
+            images=exec_input.images,
+            audio=exec_input.audio,
+            videos=exec_input.videos,
+            files=exec_input.files,
+        )
+    else:
+        messages = _build_user_input_messages(input_val)
+    if messages:
+        invocation.input_messages = messages
 
 
 def _to_tool_executions(raw_tools: object) -> list[ToolExecution]:
@@ -1394,15 +1457,10 @@ def _start_background_workflow_invocation(
         conversation_id=session_id,
     )
 
-    if capture_content and input_val is not None:
-        content_str = _extract_input_content(input_val)
-        if content_str:
-            invocation.input_messages = [
-                InputMessage(
-                    role=Role.USER.value,
-                    parts=[TextPart(content=content_str)],
-                )
-            ]
+    if capture_content:
+        _set_workflow_execution_input_messages(
+            invocation, input_val, exec_input
+        )
 
     return invocation
 
@@ -1512,15 +1570,10 @@ def _workflow_aexecute_workflow_agent(
             conversation_id=session_id,
         )
 
-        if capture_content and user_input is not None:
-            content_str = _extract_input_content(user_input)
-            if content_str:
-                invocation.input_messages = [
-                    InputMessage(
-                        role=Role.USER.value,
-                        parts=[TextPart(content=content_str)],
-                    )
-                ]
+        if capture_content:
+            _set_workflow_execution_input_messages(
+                invocation, user_input, bound_args.get("execution_input")
+            )
 
         if run_id:
             _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
