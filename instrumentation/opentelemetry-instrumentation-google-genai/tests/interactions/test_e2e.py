@@ -1093,29 +1093,52 @@ def test_sync_interactions_get_resumed_stream(
 
 _INLINE_DOCUMENT_BYTES = b"%PDF-1.4\ninline document"
 _INLINE_DOCUMENT_B64 = base64.b64encode(_INLINE_DOCUMENT_BYTES).decode("ascii")
+_INLINE_IMAGE_BYTES = b"\x89PNG\r\n\x1a\ninline image"
+_INLINE_IMAGE_B64 = base64.b64encode(_INLINE_IMAGE_BYTES).decode("ascii")
+_INLINE_AUDIO_BYTES = b"RIFFinline audio"
+_INLINE_AUDIO_B64 = base64.b64encode(_INLINE_AUDIO_BYTES).decode("ascii")
+_INLINE_VIDEO_BYTES = b"\x00\x00\x00\x18ftypinline video"
+_INLINE_VIDEO_B64 = base64.b64encode(_INLINE_VIDEO_BYTES).decode("ascii")
+
+
+def _uses_legacy_interactions_sdk() -> bool:
+    try:
+        from google.genai._interactions.resources.interactions import (  # noqa: F401
+            InteractionsResource,
+        )
+
+        return True
+    except ImportError:
+        return False
 
 
 def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
     try:
         from google.genai._interactions.types import (
+            AudioContent,
             DocumentContent,
             Function,
             FunctionResultStep,
+            ImageContent,
             TextContent,
             UserInputStep,
+            VideoContent,
         )
         from google.genai._interactions.types.tool import GoogleSearch
 
         null_result: Any = {"answer": None, "ok": True}
     except ImportError:
         from google.genai._gaos.types.interactions import (
+            AudioContent,
             DocumentContent,
             Function,
             FunctionResultStep,
             FunctionResultStepResult,
             GoogleSearch,
+            ImageContent,
             TextContent,
             UserInputStep,
+            VideoContent,
         )
 
         null_result = FunctionResultStepResult(answer=None, ok=True)
@@ -1135,6 +1158,36 @@ def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
                     mime_type="application/pdf",
                     data=_INLINE_DOCUMENT_B64,
                 ),
+                ImageContent(
+                    type="image",
+                    mime_type="image/png",
+                    uri="https://example.com/paris.png",
+                ),
+                ImageContent(
+                    type="image",
+                    mime_type="image/png",
+                    data=_INLINE_IMAGE_B64,
+                ),
+                AudioContent(
+                    type="audio",
+                    mime_type="audio/wav",
+                    uri="https://example.com/paris.wav",
+                ),
+                AudioContent(
+                    type="audio",
+                    mime_type="audio/wav",
+                    data=_INLINE_AUDIO_B64,
+                ),
+                VideoContent(
+                    type="video",
+                    mime_type="video/mp4",
+                    uri="https://example.com/paris.mp4",
+                ),
+                VideoContent(
+                    type="video",
+                    mime_type="video/mp4",
+                    data=_INLINE_VIDEO_B64,
+                ),
             ],
         ),
         {
@@ -1150,6 +1203,36 @@ def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
                     "type": "document",
                     "mime_type": "application/pdf",
                     "data": _INLINE_DOCUMENT_B64,
+                },
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "uri": "https://example.com/london.png",
+                },
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "data": _INLINE_IMAGE_B64,
+                },
+                {
+                    "type": "audio",
+                    "mime_type": "audio/wav",
+                    "uri": "https://example.com/london.wav",
+                },
+                {
+                    "type": "audio",
+                    "mime_type": "audio/wav",
+                    "data": _INLINE_AUDIO_B64,
+                },
+                {
+                    "type": "video",
+                    "mime_type": "video/mp4",
+                    "uri": "https://example.com/london.mp4",
+                },
+                {
+                    "type": "video",
+                    "mime_type": "video/mp4",
+                    "data": _INLINE_VIDEO_B64,
                 },
             ],
         },
@@ -1231,6 +1314,13 @@ def _assert_create_tool_call_and_steps_span(
             },
         },
     ]
+    expected_text_result: dict[str, Any] = {
+        "type": "text",
+        "text": "22C and Sunny",
+    }
+    if _uses_legacy_interactions_sdk():
+        expected_text_result["annotations"] = None
+
     assert get_content_attribute(
         span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
     ) == [
@@ -1250,6 +1340,42 @@ def _assert_create_tool_call_and_steps_span(
                     "mime_type": "application/pdf",
                     "content": _INLINE_DOCUMENT_BYTES,
                 },
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "uri": "https://example.com/paris.png",
+                },
+                {
+                    "type": "blob",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "content": _INLINE_IMAGE_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "uri": "https://example.com/paris.wav",
+                },
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "content": _INLINE_AUDIO_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "video",
+                    "mime_type": "video/mp4",
+                    "uri": "https://example.com/paris.mp4",
+                },
+                {
+                    "type": "blob",
+                    "modality": "video",
+                    "mime_type": "video/mp4",
+                    "content": _INLINE_VIDEO_BYTES,
+                },
                 {"type": "text", "content": "And in London?"},
                 {
                     "type": "uri",
@@ -1264,9 +1390,45 @@ def _assert_create_tool_call_and_steps_span(
                     "content": _INLINE_DOCUMENT_BYTES,
                 },
                 {
+                    "type": "uri",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "uri": "https://example.com/london.png",
+                },
+                {
+                    "type": "blob",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "content": _INLINE_IMAGE_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "uri": "https://example.com/london.wav",
+                },
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "content": _INLINE_AUDIO_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "video",
+                    "mime_type": "video/mp4",
+                    "uri": "https://example.com/london.mp4",
+                },
+                {
+                    "type": "blob",
+                    "modality": "video",
+                    "mime_type": "video/mp4",
+                    "content": _INLINE_VIDEO_BYTES,
+                },
+                {
                     "type": "tool_call_response",
                     "id": "call-123",
-                    "response": [{"type": "text", "text": "22C and Sunny"}],
+                    "response": [expected_text_result],
                 },
                 {
                     "type": "tool_call_response",
@@ -1297,21 +1459,17 @@ def _assert_create_tool_call_and_steps_span(
 
 
 def _expected_malformed_input_exception() -> type[Exception]:
-    try:
+    if _uses_legacy_interactions_sdk():
         from google.genai._interactions import BadRequestError
-        from google.genai._interactions.resources.interactions import (  # noqa: F401
-            InteractionsResource,
-        )
 
         return BadRequestError
-    except ImportError:
-        from pydantic import ValidationError
+    from pydantic import ValidationError
 
-        return ValidationError
+    return ValidationError
 
 
 def _assert_malformed_input_span(
-    otel_mocker: OTelMocker, exc: BaseException, content_mode: str
+    otel_mocker: OTelMocker, exc: BaseException
 ) -> None:
     from pydantic import ValidationError
 
@@ -1335,12 +1493,7 @@ def _assert_malformed_input_span(
             in str(exc)
         )
         assert span.attributes["error.type"] == "400"
-    if content_mode == "no_content_capture":
-        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
-    else:
-        assert get_content_attribute(
-            span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
-        ) == [{"role": "user", "parts": []}]
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.vcr
@@ -1362,7 +1515,7 @@ def test_sync_interactions_create_malformed_input(
             input=[None, {"type": "user_input", "content": [None]}],
         )
 
-    _assert_malformed_input_span(otel_mocker, exc_info.value, content_mode)
+    _assert_malformed_input_span(otel_mocker, exc_info.value)
 
 
 @pytest.mark.vcr
@@ -1385,7 +1538,7 @@ async def test_async_interactions_create_malformed_input(
             input=[None, {"type": "user_input", "content": [None]}],
         )
 
-    _assert_malformed_input_span(otel_mocker, exc_info.value, content_mode)
+    _assert_malformed_input_span(otel_mocker, exc_info.value)
 
 
 @pytest.mark.vcr
