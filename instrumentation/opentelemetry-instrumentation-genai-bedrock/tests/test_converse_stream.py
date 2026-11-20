@@ -8,8 +8,10 @@ from unittest import mock
 import pytest
 from botocore.eventstream import EventStream
 from botocore.exceptions import ClientError, EventStreamError
+from botocore.stub import Stubber
 
 from opentelemetry import trace
+from opentelemetry.instrumentation.genai.bedrock import BedrockInstrumentor
 from opentelemetry.instrumentation.genai.bedrock.stream import (
     BedrockConverseStreamWrapper,
 )
@@ -22,6 +24,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
 
@@ -416,7 +419,7 @@ def test_stream_wrapper_no_content(tracer_provider) -> None:
     assert invocation.input_tokens == 22
     assert invocation.output_tokens == 5
     assert invocation.cache_read_input_tokens == 4
-    assert invocation.cache_creation_input_tokens == 8
+    assert invocation.cache_write_input_tokens == 8
 
 
 def test_stream_wrapper_with_reasoning(tracer_provider) -> None:
@@ -543,3 +546,58 @@ def test_converse_stream_span_is_not_current_between_reads(
 
     (span,) = span_exporter.get_finished_spans()
     assert seen == [span.context.span_id]
+
+
+@pytest.mark.parametrize("content_capture", ["SPAN_ONLY", "NO_CONTENT"])
+def test_converse_stream_prompt_variables(
+    content_capture: str,
+    bedrock_client,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    params = {
+        "modelId": "amazon.nova-micro-v1:0",
+        "messages": [{"role": "user", "content": [{"text": "Hello"}]}],
+        "promptVariables": {
+            "user_name": {"text": "Alice"},
+            "language": {"text": "French"},
+        },
+    }
+    events = [
+        {"messageStart": {"role": "assistant"}},
+        {
+            "contentBlockDelta": {
+                "contentBlockIndex": 0,
+                "delta": {"text": "Hi"},
+            }
+        },
+        {"messageStop": {"stopReason": "end_turn"}},
+        {"metadata": {"usage": {"inputTokens": 1, "outputTokens": 1}}},
+    ]
+    with Stubber(bedrock_client) as stubber:
+        stubber._validate_response = lambda *args, **kwargs: None
+        stubber.add_response(
+            "converse_stream", {"stream": iter(events)}, params
+        )
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture=content_capture,
+        ):
+            response = bedrock_client.converse_stream(**params)
+            assert list(response["stream"]) == events
+
+    (span,) = span_exporter.get_finished_spans()
+    attrs = span.attributes or {}
+    assert not any(k.startswith("gen_ai.prompt.variable.") for k in attrs)
+    if content_capture == "SPAN_ONLY":
+        assert attrs["gen_ai.prompt.variables"] == {
+            "user_name": "Alice",
+            "language": "French",
+        }
+    else:
+        assert "gen_ai.prompt.variables" not in attrs

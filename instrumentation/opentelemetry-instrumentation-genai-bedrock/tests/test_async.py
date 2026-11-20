@@ -214,6 +214,96 @@ async def test_async_converse_success(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("capture_enabled", [True, False])
+async def test_async_converse_prompt_variables(
+    capture_enabled: bool,
+    async_bedrock_client,
+    span_exporter,
+    request: pytest.FixtureRequest,
+) -> None:
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_enabled
+        else "instrument_no_content"
+    )
+    messages = [{"role": "user", "content": [{"text": "Hello"}]}]
+    prompt_variables = {
+        "user_name": {"text": "Alice"},
+        "language": {"text": "French"},
+    }
+    with _stub(
+        async_bedrock_client,
+        "converse",
+        CONVERSE_RESPONSE,
+        modelId=NOVA_MODEL_ID,
+        messages=messages,
+        promptVariables=prompt_variables,
+    ):
+        await async_bedrock_client.converse(
+            modelId=NOVA_MODEL_ID,
+            messages=messages,
+            promptVariables=prompt_variables,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    attrs = span.attributes or {}
+    assert not any(k.startswith("gen_ai.prompt.variable.") for k in attrs)
+    if capture_enabled:
+        assert attrs["gen_ai.prompt.variables"] == {
+            "user_name": "Alice",
+            "language": "French",
+        }
+    else:
+        assert "gen_ai.prompt.variables" not in attrs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_enabled", [True, False])
+async def test_async_converse_stream_prompt_variables(
+    capture_enabled: bool,
+    async_bedrock_client,
+    span_exporter,
+    request: pytest.FixtureRequest,
+) -> None:
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_enabled
+        else "instrument_no_content"
+    )
+    messages = [{"role": "user", "content": [{"text": "Hello"}]}]
+    prompt_variables = {
+        "user_name": {"text": "Alice"},
+        "language": {"text": "French"},
+    }
+    with _stub(
+        async_bedrock_client,
+        "converse_stream",
+        {"stream": _MockAsyncEventStream(CONVERSE_STREAM_EVENTS)},
+        modelId=NOVA_MODEL_ID,
+        messages=messages,
+        promptVariables=prompt_variables,
+    ):
+        response = await async_bedrock_client.converse_stream(
+            modelId=NOVA_MODEL_ID,
+            messages=messages,
+            promptVariables=prompt_variables,
+        )
+        chunks = [chunk async for chunk in response["stream"]]
+        assert len(chunks) == len(CONVERSE_STREAM_EVENTS)
+
+    (span,) = span_exporter.get_finished_spans()
+    attrs = span.attributes or {}
+    assert not any(k.startswith("gen_ai.prompt.variable.") for k in attrs)
+    if capture_enabled:
+        assert attrs["gen_ai.prompt.variables"] == {
+            "user_name": "Alice",
+            "language": "French",
+        }
+    else:
+        assert "gen_ai.prompt.variables" not in attrs
+
+
+@pytest.mark.asyncio
 async def test_async_converse_client_error(
     async_bedrock_client,
     instrument_with_content,
@@ -948,7 +1038,7 @@ async def test_async_invoke_model_stream_success(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 20
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 25
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 8
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]

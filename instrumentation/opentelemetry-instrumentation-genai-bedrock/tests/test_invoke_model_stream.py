@@ -120,9 +120,7 @@ def test_stream_wrapper_anthropic_messages(
         "stop",
     )
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     parts = output_msgs[0]["parts"]
     assert len(parts) == 2
@@ -190,9 +188,7 @@ def test_stream_wrapper_titan_with_metrics(
         "stop",
     )
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["parts"][0]["content"] == "Here is the response."
 
@@ -232,9 +228,7 @@ def test_stream_wrapper_llama_and_mistral(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert output_msgs[0]["parts"][0]["content"] == "Llama says hi"
 
 
@@ -467,7 +461,7 @@ def test_stream_wrapper_anthropic_with_cache_tokens(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 90
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
@@ -579,9 +573,7 @@ def test_stream_wrapper_anthropic_tool_calls(
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 30
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 25
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     parts = output_msgs[0]["parts"]
     assert len(parts) == 1
@@ -771,7 +763,7 @@ def test_invoke_model_with_response_stream_end_to_end_stubber(
     )
     assert span.attributes[ServerAttributes.SERVER_PORT] == 443
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 20
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
@@ -781,8 +773,6 @@ def test_invoke_model_with_response_stream_end_to_end_stubber(
         "stop",
     )
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["parts"][0]["content"] == "Hello world!"

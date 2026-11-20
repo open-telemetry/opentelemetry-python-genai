@@ -8,9 +8,9 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from types import TracebackType
-from typing import Any, ClassVar, Self, TypeAlias, cast
+from typing import Any, ClassVar, Final, Self, TypeAlias, cast
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import (
@@ -53,13 +53,12 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    gen_ai_json_dumps,
     get_content_capturing_mode,
     object_to_any_value,
 )
 from opentelemetry.util.types import AttributeValue
 
-_GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
+_GEN_AI_PROMPT_VARIABLES: Final = "gen_ai.prompt.variables"
 
 
 ContextToken: TypeAlias = Token[Context]
@@ -333,7 +332,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def _detach(self) -> None:
         token, self._context_token = self._context_token, None
-        if token is not None:
+        # Finishing inside a still-active nested scope: detaching here would
+        # replace that scope's context with the caller's while it runs.
+        if token is not None and get_current() is self._span_context:
             detach(token)
 
     @contextmanager
@@ -554,20 +555,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 detach(token)
 
 
-def _json_dumps_unless_str(value: object) -> str | None:
-    if value is None or isinstance(value, str):
-        return value
-    try:
-        return gen_ai_json_dumps(value, allow_nan=False)
-    except (TypeError, ValueError, RecursionError):
-        pass
-    # Callers may set objects (e.g. models) that weren't converted to AnyValue.
-    converted = object_to_any_value(value)
-    if converted is None or isinstance(converted, str):
-        return converted
-    return gen_ai_json_dumps(converted)
-
-
 def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
@@ -577,18 +564,19 @@ def get_content_attributes(
     prompt_variables: Mapping[str, object] | None = None,
     for_span: bool,
     content_capturing_mode: ContentCapturingMode | None = None,
-) -> dict[str, Any]:
-    """Serialize messages, system instructions, and tool definitions into attributes.
+) -> dict[str, AttributeValue]:
+    """Build structured content attributes for spans or events.
 
     Args:
-        input_messages: Input messages to serialize.
-        output_messages: Output messages to serialize.
-        system_instruction: System instructions to serialize. Passing ``MessagePart``
+        input_messages: Input messages to convert.
+        output_messages: Output messages to convert.
+        system_instruction: System instructions to convert. Passing ``MessagePart``
             is deprecated; use ``SystemInstructionPart``.
-        tool_definitions: Tool definitions to serialize (may be None).
-        prompt_variables: Prompt template variables to serialize (may be None).
-        for_span: If True, serialize for span attributes (JSON string);
-                  if False, serialize for event attributes (list of dicts).
+        tool_definitions: Tool definitions to convert (may be None).
+        prompt_variables: Prompt template variables to record as
+            ``gen_ai.prompt.variables`` (may be None).
+        for_span: If True, check span content capturing modes;
+                  if False, check event content capturing modes.
         content_capturing_mode: Configured content capturing mode; if None,
                                 reads from environment.
     """
@@ -609,35 +597,39 @@ def get_content_attributes(
         )
     )
 
-    def serialize(items: Sequence[Any]) -> Any:
-        dicts = [asdict(item) for item in items]
-        return gen_ai_json_dumps(dicts) if for_span else dicts
-
     if mode not in allowed_modes:
         return {}
 
     optional_attrs = (
         (
             GenAI.GEN_AI_INPUT_MESSAGES,
-            serialize(input_messages) if input_messages else None,
+            object_to_any_value(list(input_messages))
+            if input_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_OUTPUT_MESSAGES,
-            serialize(output_messages) if output_messages else None,
+            object_to_any_value(list(output_messages))
+            if output_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
-            serialize(system_instruction) if system_instruction else None,
+            object_to_any_value(list(system_instruction))
+            if system_instruction
+            else None,
         ),
         (
             GenAI.GEN_AI_TOOL_DEFINITIONS,
-            serialize(tool_definitions) if tool_definitions else None,
+            object_to_any_value(list(tool_definitions))
+            if tool_definitions
+            else None,
+        ),
+        (
+            _GEN_AI_PROMPT_VARIABLES,
+            (object_to_any_value(prompt_variables) or None)
+            if prompt_variables
+            else None,
         ),
     )
-    result = {key: value for key, value in optional_attrs if value is not None}
-    if prompt_variables:
-        for k, v in prompt_variables.items():
-            serialized = _json_dumps_unless_str(v)
-            if serialized is not None:
-                result[f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}"] = serialized
-    return result
+    return {key: value for key, value in optional_attrs if value is not None}

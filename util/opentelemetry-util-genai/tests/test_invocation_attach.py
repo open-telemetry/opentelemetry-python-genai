@@ -377,3 +377,30 @@ def test_finish_inside_child_span_restores_caller_context(
         assert get_current_span() is invocation.span
 
     assert get_current_span() is caller_span
+
+
+@pytest.mark.parametrize("finish", ["activate_error", "stop", "fail"])
+def test_finish_attached_invocation_inside_child_span_keeps_child_current(
+    handler: TelemetryHandler,
+    caller_span: Any,
+    caplog: pytest.LogCaptureFixture,
+    finish: str,
+) -> None:
+    invocation = handler.inference("prov")
+
+    with handler._tracer.start_as_current_span("child") as child:
+        if finish == "activate_error":
+            with pytest.raises(ValueError):
+                with invocation.activate():
+                    raise ValueError("boom")
+        elif finish == "stop":
+            invocation.stop()
+        else:
+            invocation.fail(ValueError("boom"))
+        assert invocation._finished
+        assert get_current_span() is child
+
+    # The child restores the context it was started in; nothing is left to
+    # restore the caller's.
+    assert get_current_span() is invocation.span
+    assert _no_context_errors(caplog)

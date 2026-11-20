@@ -78,7 +78,7 @@ def test_agent_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "chunk 1 chunk 2" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "chunk 1 chunk 2"
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
         == "mock-model"
@@ -239,7 +239,10 @@ def test_agent_arun_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async chunk 1 async chunk 2" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"]
+        == "async chunk 1 async chunk 2"
+    )
 
 
 def test_agent_arun_stream_content_capture_disabled(
@@ -382,7 +385,10 @@ def test_team_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "team chunk 1 team chunk 2" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"]
+        == "team chunk 1 team chunk 2"
+    )
 
 
 def test_team_arun_stream_spans(
@@ -432,7 +438,10 @@ def test_team_arun_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async team chunk 1 async team chunk 2" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"]
+        == "async team chunk 1 async team chunk 2"
+    )
 
 
 def test_workflow_run_stream_spans(
@@ -471,7 +480,7 @@ def test_workflow_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "step1 stream output" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "step1 stream output"
 
 
 def test_workflow_run_stream_caller_error(
@@ -574,7 +583,7 @@ def test_workflow_arun_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async step1 output" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "async step1 output"
 
 
 def test_workflow_arun_stream_caller_error(
@@ -690,8 +699,7 @@ def test_agent_run_stream_structured_pydantic_output(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    parsed_messages = json.loads(output_messages)
-    content_str = parsed_messages[0]["parts"][0]["content"]
+    content_str = output_messages[0]["parts"][0]["content"]
     assert json.loads(content_str) == {
         "title": "Inception",
         "year": 2010,
@@ -722,9 +730,13 @@ def test_agent_stream_tool_completed_event_preserves_final_content(
     output_messages = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages is not None
-    assert "final answer" in output_messages
-    assert "tool output" not in output_messages
+    assert output_messages == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "final answer"},),
+            "finish_reason": "stop",
+        },
+    )
 
 
 def test_agent_stream_no_llm_client_metrics(
@@ -774,8 +786,13 @@ def test_workflow_stream_step_completed_event_preserves_final_content(
     output_messages = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages is not None
-    assert "final workflow output" in output_messages
+    assert output_messages == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "final workflow output"},),
+            "finish_reason": "stop",
+        },
+    )
 
 
 def test_agent_continue_run_stream_spans(
@@ -824,7 +841,7 @@ def test_agent_continue_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "continued stream" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "continued stream"
 
 
 def test_agent_acontinue_run_stream_spans(
@@ -876,7 +893,9 @@ def test_agent_acontinue_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async continued stream" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"] == "async continued stream"
+    )
 
 
 def test_team_continue_run_stream_spans(
@@ -927,7 +946,7 @@ def test_team_continue_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "team cont stream" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "team cont stream"
 
 
 def test_team_acontinue_run_stream_spans(
@@ -981,7 +1000,9 @@ def test_team_acontinue_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async team cont stream" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"] == "async team cont stream"
+    )
 
 
 def test_workflow_continue_run_stream_spans(
