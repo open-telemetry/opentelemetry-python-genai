@@ -21,6 +21,7 @@ from opentelemetry.util.genai.environment_variables import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
@@ -45,11 +46,12 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
             SimpleLogRecordProcessor(self.log_exporter)
         )
 
-    def _make_handler(self, hook=None):
+    def _make_handler(self, hook=None, content_capturing_mode=None):
         return TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
             completion_hook=hook,
+            content_capturing_mode=content_capturing_mode,
         )
 
     def test_hook_called_on_stop(self):
@@ -363,6 +365,28 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
                 self.assertEqual(
                     handler.should_capture_content(), expected_content_capture
                 )
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "NO_CONTENT"},
+    )
+    def test_programmatic_content_mode_overrides_environment(self):
+        handler = self._make_handler(
+            content_capturing_mode=ContentCapturingMode.SPAN_ONLY
+        )
+
+        self.assertTrue(handler.should_capture_content())
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+    )
+    def test_programmatic_no_content_overrides_environment(self):
+        handler = self._make_handler(
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT
+        )
+
+        self.assertFalse(handler.should_capture_content())
 
     @patch.dict(
         os.environ,
