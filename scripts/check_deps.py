@@ -355,60 +355,100 @@ def has_upper_bound(req: Requirement) -> bool:
 
 def extract_instruments_from_package_py(
     package_py_path: Path,
-) -> tuple[tuple[str, ...], str | None]:
-    """Parse package.py with AST and extract _instruments value."""
+) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
+    """Parse package.py with AST and extract _instruments and _instruments_any values."""
     try:
         tree = ast.parse(
             package_py_path.read_text(encoding="utf-8"),
             filename=str(package_py_path),
         )
     except Exception as exc:
-        return (), f"failed to parse {package_py_path}: {exc}"
+        return (), (), f"failed to parse {package_py_path}: {exc}"
+
+    str_vars: dict[str, str] = {}
+    for stmt in tree.body:
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+        ):
+            name = stmt.targets[0].id
+            if isinstance(stmt.value, ast.Constant) and isinstance(
+                stmt.value.value, str
+            ):
+                str_vars[name] = stmt.value.value
+
+    def _eval_tuple_or_list(node: ast.expr) -> tuple[str, ...] | None:
+        if isinstance(node, (ast.Tuple, ast.List)):
+            items: list[str] = []
+            for elt in node.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    items.append(elt.value)
+                elif isinstance(elt, ast.Name) and elt.id in str_vars:
+                    items.append(str_vars[elt.id])
+                else:
+                    return None
+            return tuple(items)
+        return None
+
+    instruments: tuple[str, ...] | None = None
+    instruments_any: tuple[str, ...] | None = None
 
     for stmt in tree.body:
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
-                if (
-                    isinstance(target, ast.Name)
-                    and target.id == "_instruments"
-                ):
-                    try:
-                        val = ast.literal_eval(stmt.value)
-                    except Exception as exc:
-                        return (
-                            (),
-                            f"failed to evaluate _instruments in {package_py_path}: {exc}",
-                        )
-                    if not isinstance(val, (list, tuple)):
-                        return (
-                            (),
-                            f"_instruments in {package_py_path} must be a tuple or list",
-                        )
-                    return tuple(val), None
-    return (), f"_instruments definition not found in {package_py_path}"
+                if isinstance(target, ast.Name):
+                    if target.id == "_instruments":
+                        instruments = _eval_tuple_or_list(stmt.value)
+                        if instruments is None:
+                            try:
+                                val = ast.literal_eval(stmt.value)
+                                if isinstance(val, (list, tuple)):
+                                    instruments = tuple(val)
+                            except Exception:
+                                pass
+                    elif target.id == "_instruments_any":
+                        instruments_any = _eval_tuple_or_list(stmt.value)
+                        if instruments_any is None:
+                            try:
+                                val = ast.literal_eval(stmt.value)
+                                if isinstance(val, (list, tuple)):
+                                    instruments_any = tuple(val)
+                            except Exception:
+                                pass
+
+    if instruments is None and instruments_any is None:
+        return (), (), f"_instruments definition not found in {package_py_path}"
+
+    return instruments or (), instruments_any or (), None
 
 
 def check_instruments_match(pkg_dir: Path, pyproject: dict) -> list[str]:
-    """Verify that package.py _instruments matches pyproject.toml [project.optional-dependencies] instruments."""
+    """Verify that package.py _instruments/_instruments_any match pyproject.toml [project.optional-dependencies] instruments/instruments-any."""
     errors: list[str] = []
-    pyproject_instruments_raw = (
-        pyproject.get("project", {})
-        .get("optional-dependencies", {})
-        .get("instruments", None)
+    optional_deps = (
+        pyproject.get("project", {}).get("optional-dependencies", {})
     )
+    pyproject_instruments_raw = optional_deps.get("instruments", None)
+    pyproject_instruments_any_raw = optional_deps.get("instruments-any", None)
 
     package_py_files = sorted((pkg_dir / "src").glob("**/package.py"))
 
-    if pyproject_instruments_raw is None and not package_py_files:
+    has_pyproject = (
+        pyproject_instruments_raw is not None
+        or pyproject_instruments_any_raw is not None
+    )
+
+    if not has_pyproject and not package_py_files:
         return errors
 
-    if pyproject_instruments_raw is not None and not package_py_files:
+    if has_pyproject and not package_py_files:
         errors.append(
-            f"{pkg_dir.name}: pyproject.toml declares instruments extra, but no package.py found under src/"
+            f"{pkg_dir.name}: pyproject.toml declares instruments/instruments-any extra, but no package.py found under src/"
         )
         return errors
 
-    if pyproject_instruments_raw is None and package_py_files:
+    if not has_pyproject and package_py_files:
         errors.append(
             f"{pkg_dir.name}: package.py found under src/, but pyproject.toml is missing [project.optional-dependencies] instruments"
         )
@@ -422,44 +462,55 @@ def check_instruments_match(pkg_dir: Path, pyproject: dict) -> list[str]:
         return errors
 
     package_py_path = package_py_files[0]
-    pkg_instruments_raw, parse_err = extract_instruments_from_package_py(
-        package_py_path
+    pkg_instruments_raw, pkg_instruments_any_raw, parse_err = (
+        extract_instruments_from_package_py(package_py_path)
     )
     if parse_err:
         errors.append(f"{pkg_dir.name}: {parse_err}")
         return errors
 
-    try:
-        pyproject_reqs = {Requirement(r) for r in pyproject_instruments_raw}
-    except Exception as exc:
-        errors.append(
-            f"{pkg_dir.name}: invalid requirement in pyproject.toml instruments extra: {exc}"
-        )
-        return errors
+    for extra_name, pyproject_list, pkg_tuple in (
+        ("instruments", pyproject_instruments_raw, pkg_instruments_raw),
+        (
+            "instruments-any",
+            pyproject_instruments_any_raw,
+            pkg_instruments_any_raw,
+        ),
+    ):
+        if pyproject_list is None and not pkg_tuple:
+            continue
 
-    try:
-        pkg_reqs = {Requirement(r) for r in pkg_instruments_raw}
-    except Exception as exc:
-        errors.append(
-            f"{pkg_dir.name}: invalid requirement in package.py _instruments: {exc}"
-        )
-        return errors
-
-    if pyproject_reqs != pkg_reqs:
-        errors.append(
-            f"{pkg_dir.name}: package.py _instruments ({list(pkg_instruments_raw)}) "
-            f"does not match pyproject.toml instruments extra ({pyproject_instruments_raw})."
-        )
-
-    for req in sorted(pyproject_reqs, key=lambda r: str(r)):
-        if not has_lower_bound(req):
+        try:
+            pyproject_reqs = {Requirement(r) for r in (pyproject_list or [])}
+        except Exception as exc:
             errors.append(
-                f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing a lower bound (e.g. '>= x.y.z')."
+                f"{pkg_dir.name}: invalid requirement in pyproject.toml {extra_name} extra: {exc}"
             )
-        if not has_upper_bound(req):
+            return errors
+
+        try:
+            pkg_reqs = {Requirement(r) for r in pkg_tuple}
+        except Exception as exc:
             errors.append(
-                f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing an upper bound (e.g. '< 2')."
+                f"{pkg_dir.name}: invalid requirement in package.py _{extra_name.replace('-', '_')}: {exc}"
             )
+            return errors
+
+        if pyproject_reqs != pkg_reqs:
+            errors.append(
+                f"{pkg_dir.name}: package.py _{extra_name.replace('-', '_')} ({list(pkg_tuple)}) "
+                f"does not match pyproject.toml {extra_name} extra ({pyproject_list})."
+            )
+
+        for req in sorted(pyproject_reqs, key=lambda r: str(r)):
+            if not has_lower_bound(req):
+                errors.append(
+                    f"{pkg_dir.name}: requirement '{req}' in pyproject.toml {extra_name} extra is missing a lower bound (e.g. '>= x.y.z')."
+                )
+            if not has_upper_bound(req):
+                errors.append(
+                    f"{pkg_dir.name}: requirement '{req}' in pyproject.toml {extra_name} extra is missing an upper bound (e.g. '< 2')."
+                )
 
     return errors
 
@@ -499,10 +550,11 @@ def check_latest_requirements(pkg_dir: Path, pyproject: dict) -> list[str]:
     if not latest_path.exists():
         return errors
 
-    instruments_raw = (
-        pyproject.get("project", {})
-        .get("optional-dependencies", {})
-        .get("instruments", [])
+    optional_deps = (
+        pyproject.get("project", {}).get("optional-dependencies", {})
+    )
+    instruments_raw = optional_deps.get("instruments", []) + optional_deps.get(
+        "instruments-any", []
     )
     if not instruments_raw:
         return errors

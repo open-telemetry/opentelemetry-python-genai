@@ -30,8 +30,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-instruments = [
+instruments = []
+instruments-any = [
   "langchain >= 0.3.22, < 2",
+  "langchain-core >= 0.3.49, < 2",
 ]
 
 [project.entry-points.opentelemetry_instrumentor]

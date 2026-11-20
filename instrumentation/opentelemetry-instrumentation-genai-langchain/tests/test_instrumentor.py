@@ -15,4 +15,4 @@ def test_instrumentation_dependencies() -> None:
     instrumentor = LangChainInstrumentor()
     dependencies = instrumentor.instrumentation_dependencies()
 
-    assert dependencies == ("langchain-core >= 0.3.49, < 2",)
+    assert dependencies == ()
