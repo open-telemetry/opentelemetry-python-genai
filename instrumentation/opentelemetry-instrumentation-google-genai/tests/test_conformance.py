@@ -27,8 +27,9 @@ from .conformance.embedding import EmbeddingScenario
 from .conformance.fetch_response import FetchResponseScenario
 from .conformance.generate_content import GenerateContentScenario
 from .conformance.inference import InferenceScenario
-from .conformance.interactions_document_input import (
+from .conformance.interactions_media_input import (
     InteractionsDocumentInputScenario,
+    InteractionsMediaInputScenario,
 )
 from .conformance.server_tool_calling import (
     GenerateContentServerToolCallingScenario,
@@ -42,6 +43,7 @@ from .conformance.tool_calling import ToolCallingScenario
     [
         InferenceScenario(),
         InteractionsDocumentInputScenario(),
+        InteractionsMediaInputScenario(),
         EmbeddingScenario(),
         GenerateContentScenario(),
         ToolCallingScenario(),
