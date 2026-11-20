@@ -48,8 +48,10 @@ Check out the `manual example <examples/manual>`_ for more details.
 Instrumenting all clients
 *************************
 
-When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create`` and ``interactions.get`` operations.
+When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create``, ``interactions.get``, and ``aio.live.connect`` operations.
 You can also optionally capture prompts and responses as log events.
+
+For Gemini Live (``aio.live.connect``), opt-in ``user_speech`` spans are disabled by default per the GenAI realtime semantic conventions. Set ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH=true`` before instrumenting to enable them.
 
 Make sure to configure OpenTelemetry tracing, logging, and metrics to capture all telemetry emitted by the instrumentation.
 
@@ -89,6 +91,17 @@ This controls whether the following content is captured on spans and/or events:
 - Output messages from the LLM.
 - System Instructions
 - The result of tool calls and the tool call parameters (other tool call details and tool definitions are always captured).
+
+Truncating binary payloads (e.g. audio / image blobs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Inline binary media (such as realtime PCM audio chunks or inline images) is only buffered and recorded when content capture is enabled, and is stored on ``BlobPart.content`` as raw ``bytes``. For Gemini Live (``aio.live.connect``), ``realtime_inference`` spans do not emit a ``gen_ai.client.inference.operation.details`` log event and the ``gen_ai.client.realtime_session.started`` / ``ended`` events carry no message payload, so Live message and audio content is buffered and recorded only in ``SPAN_ONLY`` or ``SPAN_AND_EVENT`` mode, when a ``CompletionHook`` is configured, or when an enclosing outer inference context opts into content capture. Pending input media buffered prior to generation start and streamed output audio are also bounded in memory per turn (retaining the most recent pending input bytes during prolonged silence) so always-on sessions cannot grow memory unboundedly.
+
+When content capture is enabled, ``BlobPart.content`` is passed to the OpenTelemetry SDK as raw ``bytes`` inside structured ``AnyValue`` maps/lists on both spans and log events. You can cap the size of each binary payload (and string field) without corrupting the surrounding message structure by configuring ``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT``, ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` / ``SpanLimits(max_span_attribute_length=...)``, or ``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`` / ``LoggerProvider(log_record_limits=LogRecordLimits(max_log_record_attribute_length=...))``.
+
+.. note::
+
+   Truncating ``bytes`` and ``bytearray`` attribute values requires `open-telemetry/opentelemetry-python#5855 <https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased version of ``opentelemetry-api``).
 
 
 Configuration recording
