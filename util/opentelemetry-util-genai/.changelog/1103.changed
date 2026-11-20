@@ -1,0 +1,1 @@
+Record workflow names as `gen_ai.agent.name` and workflow durations in `gen_ai.invoke_agent.duration`, replacing `gen_ai.workflow.name` and `gen_ai.invoke_workflow.duration`; `gen_ai.invoke_agent.*` metrics now include `gen_ai.operation.name`.

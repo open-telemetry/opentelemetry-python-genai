@@ -57,11 +57,6 @@ from opentelemetry.util.genai.utils import (
     tool_arguments_to_any_value,
 )
 
-# Non-semconv attribute: surfaces the workflow name on the workflow span
-# so callers can query/filter by it. util-genai's WorkflowInvocation
-# only puts the name in the span name, not as an attribute.
-_WORKFLOW_NAME_ATTR = "gen_ai.workflow.name"
-
 
 class GenAITracingProcessor(TracingProcessor):
     """Translate agents-library tracing into util-genai invocations.
@@ -97,8 +92,6 @@ class GenAITracingProcessor(TracingProcessor):
             name=trace.name,
             conversation_id=group_id,
         )
-        if trace.name:
-            invocation.attributes[_WORKFLOW_NAME_ATTR] = trace.name
         self._invocations[trace] = invocation
 
     def on_trace_end(self, trace: Trace) -> None:

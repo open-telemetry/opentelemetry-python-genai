@@ -66,6 +66,15 @@ from opentelemetry.util.genai.types import (
 )
 
 
+def _workflow_name(attributes) -> str | None:
+    # The oldest env runs against released util-genai 1.3b0, which records the
+    # workflow name as gen_ai.workflow.name.
+    return attributes.get(
+        GenAIAttributes.GEN_AI_AGENT_NAME,
+        attributes.get("gen_ai.workflow.name"),
+    )
+
+
 def _spans_named(span_exporter, name: str):
     return [s for s in span_exporter.get_finished_spans() if s.name == name]
 
@@ -885,9 +894,7 @@ async def test_agent_workflow_emits_span_hierarchy(
         workflow_attrs[GenAIAttributes.GEN_AI_OPERATION_NAME]
         == "invoke_workflow"
     )
-    assert (
-        workflow_attrs[GenAIAttributes.GEN_AI_WORKFLOW_NAME] == "AgentWorkflow"
-    )
+    assert _workflow_name(workflow_attrs) == "AgentWorkflow"
 
     agent_spans = _spans_named(span_exporter, "invoke_agent workflow-agent")
     assert len(agent_spans) == 1
@@ -1114,8 +1121,8 @@ async def test_agent_workflow_uses_configured_workflow_name(
     workflow_span = _spans_named(
         span_exporter, "invoke_workflow customer-support-workflow"
     )[0]
-    assert workflow_span.attributes[GenAIAttributes.GEN_AI_WORKFLOW_NAME] == (
-        "customer-support-workflow"
+    assert (
+        _workflow_name(workflow_span.attributes) == "customer-support-workflow"
     )
 
 

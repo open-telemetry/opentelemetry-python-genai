@@ -71,9 +71,7 @@ def test_langgraph_ainvoke_cancellation_records_error(
         span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
         == gen_ai_attributes.GenAiOperationNameValues.INVOKE_WORKFLOW.value
     )
-    assert (
-        span.attributes[gen_ai_attributes.GEN_AI_WORKFLOW_NAME] == "LangGraph"
-    )
+    assert span.attributes[gen_ai_attributes.GEN_AI_AGENT_NAME] == "LangGraph"
     assert (
         span.attributes[error_attributes.ERROR_TYPE]
         == "asyncio.exceptions.CancelledError"
@@ -123,9 +121,7 @@ def test_langgraph_astream_cancellation_records_error(
         span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
         == gen_ai_attributes.GenAiOperationNameValues.INVOKE_WORKFLOW.value
     )
-    assert (
-        span.attributes[gen_ai_attributes.GEN_AI_WORKFLOW_NAME] == "LangGraph"
-    )
+    assert span.attributes[gen_ai_attributes.GEN_AI_AGENT_NAME] == "LangGraph"
     assert (
         span.attributes[error_attributes.ERROR_TYPE]
         == "asyncio.exceptions.CancelledError"
@@ -177,8 +173,7 @@ def test_langgraph_named_workflow_cancellation_records_error(
         == gen_ai_attributes.GenAiOperationNameValues.INVOKE_WORKFLOW.value
     )
     assert (
-        span.attributes[gen_ai_attributes.GEN_AI_WORKFLOW_NAME]
-        == "CustomGraph"
+        span.attributes[gen_ai_attributes.GEN_AI_AGENT_NAME] == "CustomGraph"
     )
     assert (
         span.attributes[error_attributes.ERROR_TYPE]
@@ -230,9 +225,7 @@ def test_langgraph_multinode_cancellation_records_error(
         span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
         == gen_ai_attributes.GenAiOperationNameValues.INVOKE_WORKFLOW.value
     )
-    assert (
-        span.attributes[gen_ai_attributes.GEN_AI_WORKFLOW_NAME] == "LangGraph"
-    )
+    assert span.attributes[gen_ai_attributes.GEN_AI_AGENT_NAME] == "LangGraph"
     assert (
         span.attributes[error_attributes.ERROR_TYPE]
         == "asyncio.exceptions.CancelledError"

@@ -427,7 +427,7 @@ def test_workflow_run_spans(
         == "invoke_workflow"
     )
     assert (
-        span.attributes.get(GenAIAttributes.GEN_AI_WORKFLOW_NAME)
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
         == "test-workflow"
     )
 
@@ -494,7 +494,7 @@ def test_workflow_arun_spans(
         == "invoke_workflow"
     )
     assert (
-        span.attributes.get(GenAIAttributes.GEN_AI_WORKFLOW_NAME)
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
         == "test-workflow-async"
     )
 

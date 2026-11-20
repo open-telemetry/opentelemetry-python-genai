@@ -52,7 +52,7 @@ pytest_plugins = [
 _DURATION_METRICS = {
     "execute_tool": "gen_ai.execute_tool.duration",
     "invoke_agent": "gen_ai.invoke_agent.duration",
-    "invoke_workflow": "gen_ai.invoke_workflow.duration",
+    "invoke_workflow": "gen_ai.invoke_agent.duration",
     "retrieval": gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION,
     "chat": gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION,
 }

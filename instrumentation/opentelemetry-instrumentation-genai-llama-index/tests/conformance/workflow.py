@@ -20,7 +20,10 @@ from opentelemetry.instrumentation.genai.llama_index import (
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
+from opentelemetry.test_util_genai.conformance import (
+    ExpectedViolation,
+    Scenario,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
@@ -31,9 +34,20 @@ class WorkflowScenario(Scenario):
         "execute_tool": 1,
     }
     expected_metrics = (
-        "gen_ai.invoke_workflow.duration",
         "gen_ai.invoke_agent.duration",
         "gen_ai.execute_tool.duration",
+    )
+    expected_violations = (
+        # The pinned semconv registry predates workflow names moving from
+        # `gen_ai.workflow.name` to `gen_ai.agent.name`.
+        ExpectedViolation(
+            advice_id="genai_expected_attribute_missing",
+            message_substring="gen_ai.workflow.name",
+        ),
+        ExpectedViolation(
+            advice_id="genai_span_name_format",
+            message_substring="gen_ai.workflow.name",
+        ),
     )
 
     def run(
