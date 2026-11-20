@@ -871,13 +871,11 @@ def test_invoke_model_openai(
     )
 
     if content_capture.name == "SPAN_ONLY":
-        (message,) = json.loads(
-            span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-        )
+        (message,) = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
         assert message["role"] == "user"
-        assert message["parts"] == [
-            {"type": "text", "content": "Write a haiku"}
-        ]
+        assert message["parts"] == (
+            {"type": "text", "content": "Write a haiku"},
+        )
     else:
         assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
 
