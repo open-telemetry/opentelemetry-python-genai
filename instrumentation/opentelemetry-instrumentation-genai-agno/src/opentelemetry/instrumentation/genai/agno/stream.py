@@ -494,6 +494,16 @@ def record_model_stream_usage(model: Any, usage: Any) -> None:
         current._record_chunk_usage(usage)
 
 
+def get_active_model_stream_invocation(
+    model: Any,
+) -> InferenceInvocation | None:
+    """Return the active stream InferenceInvocation for ``model``, if any."""
+    current = _CURRENT_MODEL_STREAM.get()
+    if current is not None and current._self_model is model:
+        return current._ensure_invocation()
+    return None
+
+
 def register_model_delegate_stream(model: Any, stream: Any) -> None:
     """Register an async delegate stream on the active model stream wrapper."""
     current = _CURRENT_MODEL_STREAM.get()

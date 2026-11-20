@@ -979,6 +979,7 @@ class ChatOpenAIResponsesScenario(Scenario):
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
+        "gen_ai.execute_tool.duration",
     )
     expected_violations = _OPENAI_CHAT_GAPS
 

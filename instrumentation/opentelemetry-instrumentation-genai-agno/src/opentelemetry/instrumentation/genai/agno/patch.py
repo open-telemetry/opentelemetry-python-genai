@@ -14,7 +14,6 @@ import logging
 import sys
 import threading
 import urllib.parse
-import weakref
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -64,6 +63,7 @@ from opentelemetry.instrumentation.genai.agno.stream import (
     AsyncAgnoModelStreamWrapper,
     AsyncAgnoOuterStreamWrapper,
     AsyncAgnoWorkflowStreamWrapper,
+    get_active_model_stream_invocation,
     record_model_stream_usage,
     register_model_delegate_stream,
 )
@@ -132,6 +132,8 @@ _AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
 _KNOWLEDGE_CLASS = "Knowledge"
 _AGNO_MODELS_MODULE = "agno.models.base"
 _MODEL_CLASS = "Model"
+_AGNO_GEMINI_MODULE = "agno.models.google.gemini"
+_GEMINI_CLASS = "Gemini"
 
 _ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
 _PATCHED_MODEL_STREAM_CLASSES: set[type[Any]] = set()
@@ -175,6 +177,9 @@ _is_instrumented: bool = False
 _in_async_embedding: ContextVar[bool] = ContextVar(
     "_in_async_embedding", default=False
 )
+_CURRENT_MODEL_INVOCATION: ContextVar[
+    tuple[Model, InferenceInvocation] | None
+] = ContextVar("_CURRENT_MODEL_INVOCATION", default=None)
 
 
 class _ContextPreservingBoundWrapper(_BoundFunctionWrapperBase):
@@ -417,6 +422,12 @@ def patch_agent(handler: TelemetryHandler) -> None:
         _model_populate_stream_data,
         current_generation,
     )
+    _safe_wrap_function(
+        _AGNO_GEMINI_MODULE,
+        f"{_GEMINI_CLASS}.get_request_params",
+        _gemini_get_request_params,
+        current_generation,
+    )
 
     embedder_wrappers = [
         (method_name, factory(handler))
@@ -522,6 +533,15 @@ def unpatch_agent() -> None:
                 "_populate_stream_data",
             ):
                 _safe_unwrap(agno.models.base.Model, attr)
+        except ImportError:
+            pass
+    if _AGNO_GEMINI_MODULE in sys.modules:
+        try:
+            import agno.models.google.gemini
+
+            _safe_unwrap(
+                agno.models.google.gemini.Gemini, "get_request_params"
+            )
         except ImportError:
             pass
 
@@ -1795,52 +1815,6 @@ def _lookup_request_setting(
     return None, False
 
 
-_GEMINI_CONFIG_FALLBACK_CACHE: weakref.WeakKeyDictionary[type[Any], bool] = (
-    weakref.WeakKeyDictionary()
-)
-
-
-def _preserves_gemini_config_fallbacks(model_cls: type[Any]) -> bool:
-    """Return True if ``model_cls.get_request_params`` retains config fallbacks when direct fields are ``None``.
-
-    Agno 2.3.x's ``Gemini.get_request_params`` unconditionally overwrites keys
-    from ``generation_config`` and ``generative_model_kwargs`` with direct model
-    fields (defaulting to ``None``), so those fallbacks are not sent on the wire.
-    """
-    owner: type[Any] | None = None
-    for cls in model_cls.__mro__:
-        if "get_request_params" in cls.__dict__:
-            owner = cls
-            break
-    if owner is None:
-        return True
-    cached = _GEMINI_CONFIG_FALLBACK_CACHE.get(owner)
-    if cached is not None:
-        return cached
-    result: bool = True
-    try:
-        probe = owner(
-            id="_otel_probe",
-            generation_config={"temperature": 0.5},
-        )
-        params: Any = probe.get_request_params()
-        cfg: Any = (
-            cast(Mapping[str, Any], params).get("config")
-            if isinstance(params, Mapping)
-            else None
-        )
-        temp: Any = (
-            cast(Mapping[str, Any], cfg).get("temperature")
-            if isinstance(cfg, Mapping)
-            else getattr(cfg, "temperature", None)
-        )
-        result = bool(temp == 0.5)
-    except Exception:
-        result = True
-    _GEMINI_CONFIG_FALLBACK_CACHE[owner] = result
-    return result
-
-
 def _get_request_setting(instance: Model, *names: str) -> Any:
     excluded: set[str] = set()
     req_params = getattr(instance, "request_params", None)
@@ -1860,22 +1834,70 @@ def _get_request_setting(instance: Model, *names: str) -> Any:
             continue
         if (val := getattr(instance, name, None)) is not None:
             return val
-
-    # Agno >= 3.x Gemini builds its outgoing config in order:
-    # generation_config -> generative_model_kwargs -> non-None direct fields
-    # -> request_params (which replaces config above). Earlier Agno 2.3.x
-    # overwrites those sources with None direct fields so they are not sent.
-    generative_kwargs = getattr(instance, "generative_model_kwargs", None)
-    generation_config = getattr(instance, "generation_config", None)
-    if (
-        generative_kwargs is not None or generation_config is not None
-    ) and _preserves_gemini_config_fallbacks(type(instance)):
-        for source in (generative_kwargs, generation_config):
-            if source is not None:
-                val, found = _lookup_request_setting(source, names, excluded)
-                if found:
-                    return val
     return None
+
+
+def _get_active_model_invocation(
+    instance: Model,
+) -> InferenceInvocation | None:
+    active = _CURRENT_MODEL_INVOCATION.get()
+    if active is not None and active[0] is instance:
+        return active[1]
+    return get_active_model_stream_invocation(instance)
+
+
+def _apply_request_settings_from_config(
+    invocation: InferenceInvocation,
+    cfg: Any,
+) -> None:
+    """Sync request settings on ``invocation`` with the effective outgoing Gemini config."""
+    temp, _ = _lookup_request_setting(cfg, ("temperature",), set())
+    invocation.temperature = safe_float(temp)
+    top_p, _ = _lookup_request_setting(cfg, ("top_p",), set())
+    invocation.top_p = safe_float(top_p)
+    top_k, _ = _lookup_request_setting(cfg, ("top_k",), set())
+    invocation.top_k = safe_int(top_k)
+    max_tokens, _ = _lookup_request_setting(
+        cfg,
+        ("max_tokens", "max_completion_tokens", "max_output_tokens"),
+        set(),
+    )
+    invocation.max_tokens = safe_int(max_tokens)
+    freq_penalty, _ = _lookup_request_setting(
+        cfg, ("frequency_penalty",), set()
+    )
+    invocation.frequency_penalty = safe_float(freq_penalty)
+    pres_penalty, _ = _lookup_request_setting(
+        cfg, ("presence_penalty",), set()
+    )
+    invocation.presence_penalty = safe_float(pres_penalty)
+    stop, _ = _lookup_request_setting(cfg, ("stop_sequences", "stop"), set())
+    if isinstance(stop, str):
+        invocation.stop_sequences = [stop]
+    elif isinstance(stop, (list, tuple)):
+        stop_seqs = cast(Sequence[object], stop)
+        invocation.stop_sequences = [str(s) for s in stop_seqs]
+    else:
+        invocation.stop_sequences = None
+    seed, _ = _lookup_request_setting(cfg, ("seed",), set())
+    invocation.seed = safe_int(seed)
+
+
+def _gemini_get_request_params(
+    wrapped: Callable[..., Any],
+    instance: Model,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    result: Any = wrapped(*args, **kwargs)
+    invocation = _get_active_model_invocation(instance)
+    if invocation is not None and isinstance(result, Mapping):
+        typed_result = cast(Mapping[str, Any], result)
+        _apply_request_settings_from_config(
+            invocation, typed_result.get("config")
+        )
+        return typed_result
+    return result
 
 
 def _extract_client_base_url(client: Any) -> Any:
@@ -2126,7 +2148,11 @@ def _model_process_response(
             handler, instance, args, kwargs, wrapped=wrapped
         )
         with invocation:
-            result = wrapped(*args, **kwargs)
+            token = _CURRENT_MODEL_INVOCATION.set((instance, invocation))
+            try:
+                result = wrapped(*args, **kwargs)
+            finally:
+                _CURRENT_MODEL_INVOCATION.reset(token)
             _populate_model_response_telemetry(
                 invocation,
                 assistant_message=assistant_message,
@@ -2150,7 +2176,11 @@ def _model_aprocess_response(
             handler, instance, args, kwargs, wrapped=wrapped, is_async=True
         )
         with invocation:
-            result = await wrapped(*args, **kwargs)
+            token = _CURRENT_MODEL_INVOCATION.set((instance, invocation))
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                _CURRENT_MODEL_INVOCATION.reset(token)
             _populate_model_response_telemetry(
                 invocation,
                 assistant_message=assistant_message,
