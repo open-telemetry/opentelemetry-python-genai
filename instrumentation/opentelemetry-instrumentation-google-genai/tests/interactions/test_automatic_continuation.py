@@ -417,6 +417,43 @@ async def test_raw_response_records_request_only_span(
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
+async def test_stream_closed_early_ends_span(
+    instrumented: None,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+) -> None:
+    # The SDK replaces the stream's `close` to stop continuation; closing must
+    # not recurse through the instrumentation wrapper (#1032).
+    server = _Server()
+    params = {
+        "model": "gemini-2.5-flash",
+        "input": "Say hello",
+        "stream": True,
+    }
+    if asynchronous:
+        async with _async_client(server) as client:
+            stream = await client.aio.interactions.create(**params)
+            async for _ in stream:
+                break
+            await stream.close()
+    else:
+        with _sync_client(server) as client:
+            stream = client.interactions.create(**params)
+            for _ in stream:
+                break
+            stream.close()
+
+    assert len(server.requests) == 1
+    span = _only_span(span_exporter)
+    attributes = span.attributes
+    assert attributes is not None
+    assert span.name == "interactions.create gemini-2.5-flash"
+    assert span.status.status_code == StatusCode.UNSET
+    assert ERROR_TYPE not in attributes
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
 async def test_untyped_content_blocks_are_recorded_as_text(
     instrumented: None,
     span_exporter: InMemorySpanExporter,
