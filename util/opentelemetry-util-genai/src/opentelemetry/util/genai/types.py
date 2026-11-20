@@ -94,8 +94,6 @@ class ToolCallRequestPart(_AnyValueMapping):
     Use this for tool calls in message history. For execution tracking with spans
     and metrics, use ToolInvocation instead.
 
-    Its mapping view omits unset fields.
-
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallRequestPart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
@@ -157,7 +155,7 @@ class ServerToolCallResponsePart:
 
 
 @dataclass()
-class TextPart:
+class TextPart(_AnyValueMapping):
     """Represents text content sent to or received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - TextPart
@@ -169,7 +167,7 @@ class TextPart:
 
 
 @dataclass()
-class ReasoningPart:
+class ReasoningPart(_AnyValueMapping):
     """Represents reasoning/thinking content received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - ReasoningPart

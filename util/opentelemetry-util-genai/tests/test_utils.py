@@ -1689,6 +1689,27 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
+    def test_typed_parts_are_mappings_without_conversion(self):
+        cases = [
+            (TextPart(content="hello"), "text"),
+            (TextPart(content=""), "text"),
+            (ReasoningPart(content="thinking"), "reasoning"),
+            (ReasoningPart(content=""), "reasoning"),
+        ]
+        with patch(
+            "opentelemetry.util.genai.utils.object_to_any_value"
+        ) as convert:
+            for part, part_type in cases:
+                with self.subTest(part=part):
+                    self.assertIsInstance(part, Mapping)
+                    self.assertEqual(
+                        dict(part),
+                        {"content": part.content, "type": part_type},
+                    )
+                    self.assertIs(part["content"], part.content)
+                    self.assertEqual(len(part), 2)
+            convert.assert_not_called()
+
     def test_tool_call_request_mapping(self):
         part = ToolCallRequestPart(
             arguments={"count": 0}, name="tool", id=None
