@@ -1689,6 +1689,64 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
+    def test_tool_call_request_mapping(self):
+        part = ToolCallRequestPart(
+            arguments={"count": 0}, name="tool", id=None
+        )
+        self.assertIsInstance(part, Mapping)
+        self.assertEqual(
+            dict(part),
+            {
+                "arguments": {"count": 0},
+                "name": "tool",
+                "type": "tool_call",
+            },
+        )
+        self.assertEqual(list(part), ["arguments", "name", "type"])
+        self.assertEqual(len(part), 3)
+        with self.assertRaises(KeyError):
+            part["missing"]
+
+    def test_tool_call_request_mapping_omits_none_fields(self):
+        part = ToolCallRequestPart(arguments=None, name="tool", id=None)
+        with patch(
+            "opentelemetry.util.genai.utils.object_to_any_value"
+        ) as convert:
+            self.assertEqual(dict(part), {"name": "tool", "type": "tool_call"})
+            self.assertEqual(len(part), 2)
+            self.assertTrue(part)
+            with self.assertRaises(KeyError):
+                part["id"]
+            part.id = ""
+            self.assertEqual(part["id"], "")
+            self.assertEqual(len(part), 3)
+            convert.assert_not_called()
+
+    def test_tool_call_request_mapping_keeps_unconvertible_arguments(self):
+        arguments = object()
+        part = ToolCallRequestPart(arguments=arguments, name="tool", id=None)
+        with patch(
+            "opentelemetry.util.genai.utils.object_to_any_value",
+            wraps=object_to_any_value,
+        ) as convert:
+            self.assertEqual(
+                dict(part),
+                {"arguments": None, "name": "tool", "type": "tool_call"},
+            )
+            convert.assert_called_once_with(arguments)
+
+    def test_empty_content_mapping_is_truthy(self):
+        from opentelemetry.util.genai.types import _AnyValueMapping
+
+        @dataclass
+        class EmptyModel(_AnyValueMapping):
+            value: str | None = None
+
+        model = EmptyModel()
+        self.assertEqual(dict(model), {})
+        self.assertEqual(len(model), 0)
+        self.assertTrue(model)
+
     def test_output_message_optional_finish_reason(self):
         message = OutputMessage(
             role=Role.ASSISTANT,

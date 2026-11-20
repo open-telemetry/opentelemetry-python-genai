@@ -3,16 +3,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import Field, dataclass, fields
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Literal,
     TypeAlias,
     Union,
 )
+
+from opentelemetry.util.types import AnyValue
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=useless-import-alias
@@ -34,6 +37,39 @@ class ContentCapturingMode(Enum):
     SPAN_AND_EVENT = 3
 
 
+class _AnyValueMapping(Mapping[str, AnyValue]):
+    __dataclass_fields__: ClassVar[dict[str, Field[object]]]
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset()
+
+    def __getitem__(self, key: str) -> AnyValue:
+        if key not in self._present_fields():
+            raise KeyError(key)
+        value = getattr(self, key)
+        if key in self._SANITIZE:
+            from opentelemetry.util.genai.utils import (  # pylint: disable=import-outside-toplevel
+                object_to_any_value,
+            )
+
+            return object_to_any_value(value)
+        return value
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._present_fields())
+
+    def __len__(self) -> int:
+        return len(self._present_fields())
+
+    def _present_fields(self) -> list[str]:
+        return [
+            field.name
+            for field in fields(self)
+            if getattr(self, field.name) is not None
+        ]
+
+    def __bool__(self) -> bool:
+        return True
+
+
 @dataclass()
 class GenericPart:
     """Represents an arbitrary message part with any type and properties.
@@ -52,15 +88,19 @@ class GenericPart:
 
 
 @dataclass()
-class ToolCallRequestPart:
+class ToolCallRequestPart(_AnyValueMapping):
     """Represents a tool call requested by the model (message part only).
 
     Use this for tool calls in message history. For execution tracking with spans
     and metrics, use ToolInvocation instead.
 
+    Its mapping view omits unset fields.
+
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallRequestPart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
+
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset({"arguments"})
 
     arguments: Any
     name: str
