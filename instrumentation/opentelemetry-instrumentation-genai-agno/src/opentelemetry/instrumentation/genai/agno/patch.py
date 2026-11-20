@@ -14,6 +14,7 @@ import logging
 import sys
 import threading
 import urllib.parse
+import weakref
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -1794,6 +1795,52 @@ def _lookup_request_setting(
     return None, False
 
 
+_GEMINI_CONFIG_FALLBACK_CACHE: weakref.WeakKeyDictionary[type[Any], bool] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _preserves_gemini_config_fallbacks(model_cls: type[Any]) -> bool:
+    """Return True if ``model_cls.get_request_params`` retains config fallbacks when direct fields are ``None``.
+
+    Agno 2.3.x's ``Gemini.get_request_params`` unconditionally overwrites keys
+    from ``generation_config`` and ``generative_model_kwargs`` with direct model
+    fields (defaulting to ``None``), so those fallbacks are not sent on the wire.
+    """
+    owner: type[Any] | None = None
+    for cls in model_cls.__mro__:
+        if "get_request_params" in cls.__dict__:
+            owner = cls
+            break
+    if owner is None:
+        return True
+    cached = _GEMINI_CONFIG_FALLBACK_CACHE.get(owner)
+    if cached is not None:
+        return cached
+    result: bool = True
+    try:
+        probe = owner(
+            id="_otel_probe",
+            generation_config={"temperature": 0.5},
+        )
+        params: Any = probe.get_request_params()
+        cfg: Any = (
+            cast(Mapping[str, Any], params).get("config")
+            if isinstance(params, Mapping)
+            else None
+        )
+        temp: Any = (
+            cast(Mapping[str, Any], cfg).get("temperature")
+            if isinstance(cfg, Mapping)
+            else getattr(cfg, "temperature", None)
+        )
+        result = bool(temp == 0.5)
+    except Exception:
+        result = True
+    _GEMINI_CONFIG_FALLBACK_CACHE[owner] = result
+    return result
+
+
 def _get_request_setting(instance: Model, *names: str) -> Any:
     excluded: set[str] = set()
     req_params = getattr(instance, "request_params", None)
@@ -1814,15 +1861,20 @@ def _get_request_setting(instance: Model, *names: str) -> Any:
         if (val := getattr(instance, name, None)) is not None:
             return val
 
-    # Agno's Gemini adapter builds its outgoing config in order:
+    # Agno >= 3.x Gemini builds its outgoing config in order:
     # generation_config -> generative_model_kwargs -> non-None direct fields
-    # -> request_params (which replaces config above).
-    for attr in ("generative_model_kwargs", "generation_config"):
-        source = getattr(instance, attr, None)
-        if source is not None:
-            val, found = _lookup_request_setting(source, names, excluded)
-            if found:
-                return val
+    # -> request_params (which replaces config above). Earlier Agno 2.3.x
+    # overwrites those sources with None direct fields so they are not sent.
+    generative_kwargs = getattr(instance, "generative_model_kwargs", None)
+    generation_config = getattr(instance, "generation_config", None)
+    if (
+        generative_kwargs is not None or generation_config is not None
+    ) and _preserves_gemini_config_fallbacks(type(instance)):
+        for source in (generative_kwargs, generation_config):
+            if source is not None:
+                val, found = _lookup_request_setting(source, names, excluded)
+                if found:
+                    return val
     return None
 
 

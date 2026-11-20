@@ -5865,7 +5865,8 @@ def test_gemini_generation_config_and_generative_model_kwargs_precedence(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Gemini generation_config and generative_model_kwargs are honored with Agno's override precedence."""
+    """Gemini request settings telemetry matches outgoing wire generationConfig across supported Agno versions."""
+    import importlib.metadata
     import json
 
     import httpx
@@ -5873,6 +5874,7 @@ def test_gemini_generation_config_and_generative_model_kwargs_precedence(
     from google import genai
     from google.genai.types import GenerateContentConfig, HttpOptions
 
+    is_agno_v2 = importlib.metadata.version("agno").startswith("2.")
     captured_gen_configs: list[dict[str, Any]] = []
     gemini_payload = {
         "candidates": [
@@ -5911,6 +5913,30 @@ def test_gemini_generation_config_and_generative_model_kwargs_precedence(
             ),
         )
 
+    def _assert_telemetry_matches_wire(
+        span: Any,
+        wire_cfg: dict[str, Any],
+    ) -> None:
+        field_map = (
+            ("temperature", GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE),
+            ("maxOutputTokens", GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS),
+            ("topP", GenAIAttributes.GEN_AI_REQUEST_TOP_P),
+            ("topK", GenAIAttributes.GEN_AI_REQUEST_TOP_K),
+            ("seed", GenAIAttributes.GEN_AI_REQUEST_SEED),
+        )
+        for wire_key, attr_key in field_map:
+            if wire_key in wire_cfg:
+                assert span.attributes.get(attr_key) == wire_cfg[wire_key]
+            else:
+                assert attr_key not in span.attributes
+        stop_key = GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES
+        if "stopSequences" in wire_cfg:
+            assert list(span.attributes.get(stop_key) or ()) == list(
+                wire_cfg["stopSequences"]
+            )
+        else:
+            assert stop_key not in span.attributes
+
     # 1. Dict generation_config
     dict_cfg_model = Gemini(
         id="gemini-2.5-flash",
@@ -5928,28 +5954,19 @@ def test_gemini_generation_config_and_generative_model_kwargs_precedence(
         messages=[Message(role="user", content="dict cfg")]
     )
     (dict_span,) = span_exporter.get_finished_spans()
-    assert (
-        dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
-        == 0.3
-    )
-    assert (
-        dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
-        == 128
-    )
-    assert (
-        dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.8
-    )
-    assert dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 32
-    assert list(
-        dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES)
-        or ()
-    ) == ["END"]
-    assert dict_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_SEED) == 9
-    # On Agno >= 3.2, verify outgoing wire generationConfig matches telemetry
-    last_cfg = captured_gen_configs[-1]
-    if "temperature" in last_cfg:
-        assert last_cfg["temperature"] == 0.3
-        assert last_cfg["maxOutputTokens"] == 128
+    wire1 = captured_gen_configs[-1]
+    _assert_telemetry_matches_wire(dict_span, wire1)
+    if is_agno_v2:
+        # Agno 2.3.x overwrites generation_config with None direct fields so
+        # none of these settings are sent on the wire or recorded in telemetry.
+        assert wire1 == {}
+    else:
+        assert wire1["temperature"] == 0.3
+        assert wire1["maxOutputTokens"] == 128
+        assert wire1["topP"] == 0.8
+        assert wire1["topK"] == 32
+        assert wire1["stopSequences"] == ["END"]
+        assert wire1["seed"] == 9
 
     span_exporter.clear()
 
@@ -5969,17 +5986,14 @@ def test_gemini_generation_config_and_generative_model_kwargs_precedence(
         )
     )
     (typed_span,) = span_exporter.get_finished_spans()
-    assert (
-        typed_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
-        == 0.35
-    )
-    assert (
-        typed_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
-        == 200
-    )
-    assert (
-        typed_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 24
-    )
+    wire2 = captured_gen_configs[-1]
+    _assert_telemetry_matches_wire(typed_span, wire2)
+    if is_agno_v2:
+        assert wire2 == {}
+    else:
+        assert wire2["temperature"] == 0.35
+        assert wire2["maxOutputTokens"] == 200
+        assert wire2["topK"] == 24
 
     span_exporter.clear()
 
@@ -6005,22 +6019,21 @@ def test_gemini_generation_config_and_generative_model_kwargs_precedence(
         messages=[Message(role="user", content="precedence")]
     )
     (prec_span,) = span_exporter.get_finished_spans()
+    wire3 = captured_gen_configs[-1]
+    _assert_telemetry_matches_wire(prec_span, wire3)
+    assert wire3["temperature"] == 0.8
     assert (
         prec_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
         == 0.8
     )
-    assert (
-        prec_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.75
-    )
-    assert (
-        prec_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
-        == 128
-    )
-    assert GenAIAttributes.GEN_AI_REQUEST_TOP_K not in prec_span.attributes
+    assert "topK" not in wire3
+    if not is_agno_v2:
+        assert wire3["topP"] == 0.75
+        assert wire3["maxOutputTokens"] == 128
 
     span_exporter.clear()
 
-    # 4. request_params['config'] still replaces all lower-precedence config sources
+    # 4. request_params['config'] replaces all lower-precedence config sources across all versions
     req_override_model = Gemini(
         id="gemini-2.5-flash",
         generation_config={"temperature": 0.3, "max_output_tokens": 128},
@@ -6033,6 +6046,9 @@ def test_gemini_generation_config_and_generative_model_kwargs_precedence(
         messages=[Message(role="user", content="request_params override")]
     )
     (req_span,) = span_exporter.get_finished_spans()
+    wire4 = captured_gen_configs[-1]
+    _assert_telemetry_matches_wire(req_span, wire4)
+    assert wire4["temperature"] == 0.15
     assert (
         req_span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
         == 0.15
@@ -6327,3 +6343,193 @@ def test_concurrent_first_use_ainvoke_stream_wrapping_and_uninstrument(
         assert not hasattr(
             _RaceUninstrumentModel.__dict__["ainvoke_stream"], "__wrapped__"
         )
+
+
+def test_litellm_resolves_routed_provider_instead_of_framework_name(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+    monkeypatch,
+) -> None:
+    """Agno LiteLLM adapters emit the routed provider (or 'unknown'), never 'litellm'."""
+    import sys
+    import types
+
+    import httpx
+    import openai
+
+    if "litellm" not in sys.modules:
+        fake_litellm = types.ModuleType("litellm")
+
+        def _validate_environment(**_kwargs: Any) -> dict[str, Any]:
+            return {"keys_in_environment": True}
+
+        def _completion(**_kwargs: Any) -> Any:
+            return types.SimpleNamespace(
+                id="chatcmpl-litellm-sdk",
+                model="cohere-model",
+                choices=[
+                    types.SimpleNamespace(
+                        message=types.SimpleNamespace(
+                            role="assistant",
+                            content="ok from litellm",
+                            tool_calls=None,
+                            audio=None,
+                            reasoning_content=None,
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=types.SimpleNamespace(
+                    prompt_tokens=6,
+                    completion_tokens=3,
+                    total_tokens=9,
+                    prompt_tokens_details=None,
+                    completion_tokens_details=None,
+                ),
+            )
+
+        fake_litellm.validate_environment = _validate_environment  # type: ignore[attr-defined]
+        fake_litellm.completion = _completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+        for mod_name in (
+            "agno.models.litellm",
+            "agno.models.litellm.chat",
+            "agno.models.litellm.litellm_openai",
+        ):
+            monkeypatch.delitem(sys.modules, mod_name, raising=False)
+
+    from agno.models.litellm.chat import LiteLLM
+    from agno.models.litellm.litellm_openai import LiteLLMOpenAI
+
+    payload = {
+        "id": "chatcmpl-litellm",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 2,
+            "total_tokens": 7,
+        },
+    }
+
+    def _make_sync_client() -> openai.OpenAI:
+        return openai.OpenAI(
+            api_key="test-key",
+            base_url="http://litellm-proxy.internal:4000",
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _req: httpx.Response(200, json=payload)
+                )
+            ),
+        )
+
+    def _make_async_client() -> openai.AsyncOpenAI:
+        return openai.AsyncOpenAI(
+            api_key="test-key",
+            base_url="http://litellm-proxy.internal:4000",
+            http_client=httpx.AsyncClient(
+                transport=httpx.MockTransport(
+                    lambda _req: httpx.Response(200, json=payload)
+                )
+            ),
+        )
+
+    cases: list[tuple[dict[str, Any], str]] = [
+        # Default LiteLLMOpenAI(id="gpt-4o", provider="LiteLLM") routes to OpenAI
+        ({}, "openai"),
+        ({"id": "anthropic/claude-3-5-sonnet-20241022"}, "anthropic"),
+        (
+            {"id": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"},
+            "aws.bedrock",
+        ),
+        ({"id": "vertex_ai/gemini-2.5-flash"}, "gcp.vertex_ai"),
+        ({"id": "litellm_proxy/groq/llama-3.3-70b-versatile"}, "groq"),
+        ({"id": "my-custom-alias", "provider": "Mistral"}, "mistral_ai"),
+        # Unresolvable alias or non-provider org/model slug falls back to "unknown"
+        ({"id": "my-custom-alias"}, "unknown"),
+        ({"id": "meta-llama/Llama-3-8B"}, "unknown"),
+    ]
+
+    for model_kwargs, expected_provider in cases:
+        span_exporter.clear()
+        model = LiteLLMOpenAI(
+            api_key="test-key",
+            client=_make_sync_client(),
+            **model_kwargs,
+        )
+        model.response(messages=[Message(role="user", content="ping")])
+        (span,) = span_exporter.get_finished_spans()
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == expected_provider
+        )
+
+    # Also test LiteLLM SDK adapter with default id="gpt-4o" and custom_llm_provider
+    for sdk_kwargs, expected_provider in (
+        ({}, "openai"),
+        (
+            {
+                "id": "my-deployment",
+                "request_params": {"custom_llm_provider": "cohere"},
+            },
+            "cohere",
+        ),
+        ({"id": "my-unknown-deployment"}, "unknown"),
+    ):
+        span_exporter.clear()
+        sdk_model = LiteLLM(api_key="test-key", **sdk_kwargs)
+        sdk_model.response(messages=[Message(role="user", content="ping sdk")])
+        (sdk_span,) = span_exporter.get_finished_spans()
+        assert (
+            sdk_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == expected_provider
+        )
+
+    # Also verify async path with default LiteLLMOpenAI(id="gpt-4o")
+    span_exporter.clear()
+    async_model = LiteLLMOpenAI(
+        api_key="test-key",
+        async_client=_make_async_client(),
+    )
+    asyncio.run(
+        async_model.aresponse(
+            messages=[Message(role="user", content="ping async")]
+        )
+    )
+    (async_span,) = span_exporter.get_finished_spans()
+    assert (
+        async_span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+        == "openai"
+    )
+
+    metric_providers: set[Any] = set()
+    for rm in metric_reader.get_metrics_data().resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                if metric.name == "gen_ai.client.operation.duration":
+                    for dp in metric.data.data_points:
+                        metric_providers.add(
+                            dp.attributes.get(
+                                GenAIAttributes.GEN_AI_PROVIDER_NAME
+                            )
+                        )
+    assert "litellm" not in metric_providers
+    assert {
+        "openai",
+        "anthropic",
+        "aws.bedrock",
+        "gcp.vertex_ai",
+        "groq",
+        "cohere",
+        "mistral_ai",
+        "unknown",
+    }.issubset(metric_providers)

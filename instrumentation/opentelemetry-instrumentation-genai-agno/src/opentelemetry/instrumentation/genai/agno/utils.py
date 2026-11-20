@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import mimetypes
 import os
+import sys
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
@@ -431,12 +432,14 @@ _KNOWN_PROVIDERS: dict[str, str] = {
     "aws_bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
     "aws-bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
     "amazon_bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "bedrock_converse": GenAiProviderNameValues.AWS_BEDROCK.value,
     "anthropic": GenAiProviderNameValues.ANTHROPIC.value,
     "cohere": GenAiProviderNameValues.COHERE.value,
     "google": GenAiProviderNameValues.GCP_GEMINI.value,
     "gemini": GenAiProviderNameValues.GCP_GEMINI.value,
     "google_generativeai": GenAiProviderNameValues.GCP_GEMINI.value,
     "vertex_ai": GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "vertex_ai_beta": GenAiProviderNameValues.GCP_VERTEX_AI.value,
     "vertexai": GenAiProviderNameValues.GCP_VERTEX_AI.value,
     "google_vertexai": GenAiProviderNameValues.GCP_VERTEX_AI.value,
     "gcp_vertex_ai": GenAiProviderNameValues.GCP_VERTEX_AI.value,
@@ -462,7 +465,6 @@ _KNOWN_PROVIDERS: dict[str, str] = {
     "dashscope": "dashscope",
     "deepinfra": "deepinfra",
     "internlm": "internlm",
-    "litellm": "litellm",
     "llama_cpp": "llama_cpp",
     "lmstudio": "lmstudio",
     "minimax": "minimax",
@@ -531,6 +533,128 @@ def _resolve_google_provider(instance: Model | Embedder) -> str:
     )
 
 
+_LITELLM_CLASSES = frozenset({"LiteLLM", "LiteLLMOpenAI"})
+_LITELLM_ROUTING_NAMES = frozenset(
+    {"litellm", "litellm_proxy", "openai_compatible", "custom_openai"}
+)
+_MODEL_PREFIX_TO_PROVIDER: tuple[tuple[str, str], ...] = (
+    ("gpt-", GenAiProviderNameValues.OPENAI.value),
+    ("chatgpt-", GenAiProviderNameValues.OPENAI.value),
+    ("o1-", GenAiProviderNameValues.OPENAI.value),
+    ("o3-", GenAiProviderNameValues.OPENAI.value),
+    ("o4-", GenAiProviderNameValues.OPENAI.value),
+    ("text-embedding-", GenAiProviderNameValues.OPENAI.value),
+    ("dall-e-", GenAiProviderNameValues.OPENAI.value),
+    ("whisper-", GenAiProviderNameValues.OPENAI.value),
+    ("tts-", GenAiProviderNameValues.OPENAI.value),
+    ("claude-", GenAiProviderNameValues.ANTHROPIC.value),
+    ("mistral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("codestral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("pixtral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("ministral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("mixtral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("command-", GenAiProviderNameValues.COHERE.value),
+    ("deepseek-", GenAiProviderNameValues.DEEPSEEK.value),
+    ("grok-", GenAiProviderNameValues.X_AI.value),
+    ("sonar-", GenAiProviderNameValues.PERPLEXITY.value),
+)
+_EXACT_MODEL_TO_PROVIDER: dict[str, str] = {
+    "o1": GenAiProviderNameValues.OPENAI.value,
+    "o3": GenAiProviderNameValues.OPENAI.value,
+    "o4": GenAiProviderNameValues.OPENAI.value,
+    "sonar": GenAiProviderNameValues.PERPLEXITY.value,
+}
+
+
+def _normalize_provider_name(
+    raw: str,
+    instance: Model | Embedder,
+    *,
+    known_only: bool = False,
+) -> str | None:
+    p_name = raw.strip().lower()
+    if not p_name or p_name in _LITELLM_ROUTING_NAMES:
+        return None
+    if p_name in ("google", "gemini", "google_genai"):
+        return _resolve_google_provider(instance)
+    p_clean = "".join(c for c in p_name if c.isalnum())
+    if (mapped := _KNOWN_PROVIDERS.get(p_name)) is not None:
+        return mapped
+    if (mapped := _KNOWN_PROVIDERS.get(p_clean)) is not None:
+        return mapped
+    return None if known_only else p_name
+
+
+def _resolve_litellm_provider(instance: Model | Embedder) -> str:
+    """Resolve the routed provider behind an Agno LiteLLM adapter, or ``unknown``."""
+    provider_attr = getattr(instance, "provider", None)
+    if isinstance(provider_attr, str) and provider_attr.strip():
+        resolved = _normalize_provider_name(provider_attr, instance)
+        if resolved is not None:
+            return resolved
+
+    req_params = getattr(instance, "request_params", None)
+    custom_provider: str | None = None
+    if isinstance(req_params, Mapping):
+        raw_custom = cast(Mapping[str, Any], req_params).get(
+            "custom_llm_provider"
+        )
+        if isinstance(raw_custom, str) and raw_custom.strip():
+            custom_provider = raw_custom.strip()
+            resolved = _normalize_provider_name(custom_provider, instance)
+            if resolved is not None:
+                return resolved
+
+    model_id = getattr(instance, "id", None)
+    if isinstance(model_id, str) and model_id.strip():
+        candidate = model_id.strip()
+        if candidate.lower().startswith("litellm_proxy/"):
+            candidate = candidate.split("/", 1)[1].strip()
+        if "/" in candidate:
+            prefix = candidate.split("/", 1)[0]
+            resolved = _normalize_provider_name(
+                prefix, instance, known_only=True
+            )
+            if resolved is not None:
+                return resolved
+
+        litellm_mod = sys.modules.get("litellm")
+        get_llm_provider = (
+            getattr(litellm_mod, "get_llm_provider", None)
+            if litellm_mod is not None
+            else None
+        )
+        if callable(get_llm_provider):
+            try:
+                provider_result: Any = get_llm_provider(
+                    model=candidate,
+                    custom_llm_provider=custom_provider,
+                )
+                if isinstance(provider_result, tuple):
+                    typed_result = cast(tuple[Any, ...], provider_result)
+                    if len(typed_result) >= 2 and isinstance(
+                        typed_result[1], str
+                    ):
+                        resolved = _normalize_provider_name(
+                            typed_result[1], instance
+                        )
+                        if resolved is not None:
+                            return resolved
+            except Exception:
+                pass
+
+        lower_id = candidate.lower()
+        if lower_id.startswith("gemini-"):
+            return _resolve_google_provider(instance)
+        if lower_id in _EXACT_MODEL_TO_PROVIDER:
+            return _EXACT_MODEL_TO_PROVIDER[lower_id]
+        for prefix, provider in _MODEL_PREFIX_TO_PROVIDER:
+            if lower_id.startswith(prefix):
+                return provider
+
+    return _UNKNOWN_PROVIDER
+
+
 def _resolve_provider(
     instance: Model | Embedder,
     *,
@@ -552,6 +676,8 @@ def _resolve_provider(
                 return GenAiProviderNameValues.AZURE_AI_INFERENCE.value
         if cls_name in google_classes:
             return _resolve_google_provider(instance)
+        if cls_name in _LITELLM_CLASSES:
+            return _resolve_litellm_provider(instance)
         if cls_name in stop_classes:
             if getattr(instance, "provider", None) == getattr(
                 cls, "provider", None
@@ -566,14 +692,11 @@ def _resolve_provider(
         provider_attr = getattr(instance, "provider", None)
         if isinstance(provider_attr, str) and provider_attr.strip():
             p_name = provider_attr.strip().lower()
-            if p_name in ("google", "gemini"):
-                return _resolve_google_provider(instance)
-            p_clean = "".join(c for c in p_name if c.isalnum())
-            return (
-                _KNOWN_PROVIDERS.get(p_name)
-                or _KNOWN_PROVIDERS.get(p_clean)
-                or p_name
-            )
+            if p_name in _LITELLM_ROUTING_NAMES:
+                return _resolve_litellm_provider(instance)
+            resolved = _normalize_provider_name(provider_attr, instance)
+            if resolved is not None:
+                return resolved
 
     return _UNKNOWN_PROVIDER
 
@@ -618,8 +741,6 @@ _MODEL_CLASS_NAME_TO_PROVIDER: dict[str, str] = {
     "HuggingFace": "huggingface",
     "Cerebras": "cerebras",
     "CerebrasOpenAI": "cerebras",
-    "LiteLLM": "litellm",
-    "LiteLLMOpenAI": "litellm",
     "OpenRouter": "openrouter",
     "Nebius": "nebius",
     "LangDB": "langdb",

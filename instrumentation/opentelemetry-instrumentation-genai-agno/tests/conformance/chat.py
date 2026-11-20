@@ -785,7 +785,11 @@ class ChatMultimodalScenario(Scenario):
                                 id="ms://video-conformance-123",
                                 url="https://example.com/clip.mp4",
                                 format="mp4",
-                            )
+                            ),
+                            Video(
+                                content=b"\x00\x00\x00\x18ftypmp42",
+                                format="mp4",
+                            ),
                         ],
                     )
                 ]
@@ -811,6 +815,7 @@ class ChatMultimodalScenario(Scenario):
             ("file", "document"),
             ("blob", "document"),
             ("uri", "video"),
+            ("blob", "video"),
         ):
             assert expected_input in input_parts, (
                 f"expected {expected_input!r} on input messages, saw {input_parts}"
@@ -828,6 +833,9 @@ class ChatMultimodalScenario(Scenario):
         )
         assert b"%PDF-1.4\nconformance" in input_blobs_by_modality.get(
             "document", []
+        )
+        assert b"\x00\x00\x00\x18ftypmp42" in input_blobs_by_modality.get(
+            "video", []
         )
         assert ("blob", "image") in output_parts, (
             f"expected ('blob', 'image') on output messages, saw {output_parts}"
@@ -964,3 +972,117 @@ class ChatAudioOutputScenario(Scenario):
             ]
             assert len(audio_blobs) == 1
             assert audio_blobs[0]["content"] == b"\x00\x01"
+
+
+class ChatOpenAIResponsesScenario(Scenario):
+    expected_spans = {"chat": 4, "execute_tool": 4}
+    expected_metrics = (
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.token.usage",
+    )
+    expected_violations = _OPENAI_CHAT_GAPS
+
+    def run(
+        self,
+        *,
+        tracer_provider: TracerProvider,
+        meter_provider: MeterProvider,
+        logger_provider: LoggerProvider,
+        vcr: Any,
+    ) -> None:
+        def get_current_weather(location: str) -> str:
+            """Get the current weather in a given location."""
+            if "Seattle" in location:
+                return '{"location":"Seattle, WA","temperature":58,"unit":"F","conditions":"rain"}'
+            return '{"location":"San Francisco, CA","temperature":65,"unit":"F","conditions":"fog"}'
+
+        prompt_text = "What's the weather in Seattle and San Francisco today?"
+
+        async def _run_async() -> None:
+            async_model = OpenAIResponses(
+                id="gpt-4o-mini",
+                async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
+            )
+            await async_model.aresponse(
+                messages=[Message(role="user", content=prompt_text)],
+                tools=[Function.from_callable(get_current_weather)],
+            )
+
+        with instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            with vcr.use_cassette("openai_responses_tool_calling.yaml"):
+                sync_model = OpenAIResponses(
+                    id="gpt-4o-mini",
+                    client=openai.OpenAI(api_key="test_openai_api_key"),
+                )
+                sync_model.response(
+                    messages=[Message(role="user", content=prompt_text)],
+                    tools=[Function.from_callable(get_current_weather)],
+                )
+            with vcr.use_cassette("openai_responses_tool_calling.yaml"):
+                asyncio.run(_run_async())
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        spans = _chat_spans(report)
+        assert len(spans) == 4, f"expected 4 chat spans, saw {len(spans)}"
+        turn1_id = "resp_06846aae2b482d8e006a9b1773c4ec87d08182937f685f261f"
+        turn2_id = "resp_06846aae2b482d8e006a9b1775645c87d08005ec0fb2110764"
+        expected_call_ids = [
+            "call_krAHY11uDHrSPJIjNZLF7RHU",
+            "call_fr3gmaw1ffbKMC3N64V6Iux4",
+        ]
+        turn1_spans = [
+            s for s in spans if _attr(s, "gen_ai.response.id") == turn1_id
+        ]
+        turn2_spans = [
+            s for s in spans if _attr(s, "gen_ai.response.id") == turn2_id
+        ]
+        assert len(turn1_spans) == 2
+        assert len(turn2_spans) == 2
+        for span in turn1_spans:
+            assert _attr(span, "gen_ai.request.stream") is None
+            _assert_attrs_exact(
+                span,
+                {
+                    "gen_ai.provider.name": ("openai", str),
+                    "gen_ai.request.model": ("gpt-4o-mini", str),
+                    "gen_ai.response.id": (turn1_id, str),
+                    "gen_ai.usage.input_tokens": (64, int),
+                    "gen_ai.usage.output_tokens": (52, int),
+                    "server.address": ("api.openai.com", str),
+                },
+            )
+            assert _attr(span, "gen_ai.tool.definitions")
+            call_ids = [
+                part["id"]
+                for msg in (_attr(span, "gen_ai.output.messages") or ())
+                for part in msg.get("parts", ())
+                if part.get("type") == "tool_call"
+            ]
+            assert call_ids == expected_call_ids
+        for span in turn2_spans:
+            assert _attr(span, "gen_ai.request.stream") is None
+            _assert_attrs_exact(
+                span,
+                {
+                    "gen_ai.provider.name": ("openai", str),
+                    "gen_ai.request.model": ("gpt-4o-mini", str),
+                    "gen_ai.response.id": (turn2_id, str),
+                    "gen_ai.usage.input_tokens": (138, int),
+                    "gen_ai.usage.output_tokens": (60, int),
+                    "server.address": ("api.openai.com", str),
+                },
+            )
+            result_ids = [
+                part["id"]
+                for msg in (_attr(span, "gen_ai.input.messages") or ())
+                for part in msg.get("parts", ())
+                if part.get("type") == "tool_call_response"
+            ]
+            assert result_ids == expected_call_ids
