@@ -55,6 +55,7 @@ _DURATION_METRICS = {
     "invoke_workflow": "gen_ai.invoke_workflow.duration",
     "retrieval": gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION,
     "chat": gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION,
+    "text_completion": gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION,
 }
 
 

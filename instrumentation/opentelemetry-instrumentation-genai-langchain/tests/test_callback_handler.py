@@ -9,11 +9,17 @@ import base64
 import json
 import math
 import uuid
+from collections.abc import AsyncIterator, Iterator
 from unittest import mock
 
 import langchain.agents
 import pytest
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
 from langchain_core.documents import Document
+from langchain_core.language_models.fake import FakeListLLM
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -33,6 +39,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import (
     ChatGeneration,
     ChatGenerationChunk,
+    GenerationChunk,
     LLMResult,
 )
 from langchain_core.prompts import ChatPromptTemplate
@@ -126,6 +133,161 @@ def _run_id():
     return uuid.uuid4()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_text_completion_emits_inference_span(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    model = FakeListLLM(responses=["completed text"]).with_config(
+        metadata={
+            "ls_model_name": "completion-model",
+            "ls_provider": "test-provider",
+        }
+    )
+
+    assert (
+        await invoke(model, "complete this", asynchronous) == "completed text"
+    )
+
+    span = finished_span(span_exporter, "text_completion completion-model")
+    attrs = span.attributes
+    assert attrs[GenAI.GEN_AI_OPERATION_NAME] == "text_completion"
+    assert attrs[GenAI.GEN_AI_PROVIDER_NAME] == "fakelist"
+    assert attrs[GenAI.GEN_AI_REQUEST_MODEL] == "completion-model"
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (input_message,) = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
+        assert input_message["role"] == "user"
+        assert list(input_message["parts"]) == [
+            {"type": "text", "content": "complete this"}
+        ]
+        (output_message,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
+        assert output_message["role"] == "assistant"
+        assert list(output_message["parts"]) == [
+            {"type": "text", "content": "completed text"}
+        ]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_text_completion_records_llm_output_token_usage(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    class UsageLLM(FakeListLLM):
+        @staticmethod
+        def _with_usage(result: LLMResult) -> LLMResult:
+            result.llm_output = {
+                "token_usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 7,
+                }
+            }
+            return result
+
+        def _generate(self, *args: object, **kwargs: object) -> LLMResult:
+            return self._with_usage(super()._generate(*args, **kwargs))
+
+        async def _agenerate(
+            self, *args: object, **kwargs: object
+        ) -> LLMResult:
+            return self._with_usage(await super()._agenerate(*args, **kwargs))
+
+    model = UsageLLM(responses=["completed text"])
+    assert (
+        await invoke(model, "complete this", asynchronous) == "completed text"
+    )
+    attrs = finished_span(span_exporter, "text_completion").attributes
+    assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 11
+    assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_text_completion_stream_uses_string_done_reason(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    class StopSequenceLLM(FakeListLLM):
+        def _stream(
+            self,
+            prompt: str,
+            stop: list[str] | None = None,
+            run_manager: CallbackManagerForLLMRun | None = None,
+            **kwargs: object,
+        ) -> Iterator[GenerationChunk]:
+            assert stop == ["END"]
+            yield GenerationChunk(
+                text="completed text",
+                generation_info={
+                    "finish_reason": stop,
+                    "done_reason": "stop",
+                },
+            )
+
+        async def _astream(
+            self,
+            prompt: str,
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: object,
+        ) -> AsyncIterator[GenerationChunk]:
+            assert stop == ["END"]
+            yield GenerationChunk(
+                text="completed text",
+                generation_info={
+                    "finish_reason": stop,
+                    "done_reason": "stop",
+                },
+            )
+
+    model = StopSequenceLLM(responses=["unused"])
+    if asynchronous:
+        chunks = [
+            chunk
+            async for chunk in model.astream("complete this", stop=["END"])
+        ]
+    else:
+        chunks = list(model.stream("complete this", stop=["END"]))
+    assert "".join(chunks) == "completed text"
+
+    attrs = finished_span(span_exporter, "text_completion").attributes
+    assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (output,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
+        assert output["finish_reason"] == "stop"
+    else:
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
+def test_chat_without_model_name_still_starts_inference() -> None:
+    handler, telemetry, _, _ = _make_handler()
+    telemetry.should_capture_content.return_value = False
+    run_id = _run_id()
+
+    handler.on_chat_model_start(
+        serialized={"name": "CustomChatModel"},
+        messages=[[HumanMessage(content="hello")]],
+        run_id=run_id,
+    )
+
+    telemetry.inference.assert_called_once()
+    assert telemetry.inference.call_args.kwargs["request_model"] is None
+    assert telemetry.inference.call_args.kwargs["operation_name"] is None
+    assert (
+        handler._invocation_manager.get_invocation(run_id)
+        is telemetry.inference.return_value
+    )
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("native_agent", [False, True])
 def test_chat_model_start_does_not_count_untraced_calls(
@@ -140,9 +302,8 @@ def test_chat_model_start_does_not_count_untraced_calls(
         handler.on_chain_start(
             {"name": "math_agent"}, {}, run_id=parent_run_id
         )
-    initial_count = 0 if native_agent else None
-    assert agent.inference_calls == initial_count
-    assert agent.tool_calls == initial_count
+    assert agent.inference_calls == (0 if native_agent else None)
+    assert agent.tool_calls == (0 if native_agent else None)
     handler._enabled = enabled
 
     for _ in range(2):
@@ -150,9 +311,12 @@ def test_chat_model_start_does_not_count_untraced_calls(
             {}, [], run_id=_run_id(), parent_run_id=parent_run_id
         )
 
-    assert agent.inference_calls == initial_count
-    assert agent.tool_calls == initial_count
-    telemetry.inference.assert_not_called()
+    expected_inference_calls = 2 if native_agent and enabled else 0
+    assert agent.inference_calls == (
+        expected_inference_calls if native_agent else None
+    )
+    assert agent.tool_calls == (0 if native_agent else None)
+    assert telemetry.inference.call_count == (2 if enabled else 0)
 
 
 class TestExtractPromptContext:
@@ -1327,7 +1491,7 @@ class TestPromptContextLifecycle:
             is None
         )
 
-    def test_unsupported_model_does_not_consume_prompt_context(self):
+    def test_model_without_name_consumes_prompt_context(self):
         handler, telemetry, _, _ = _make_handler()
         telemetry.should_capture_content.return_value = True
         sequence_id = _run_id()
@@ -1348,21 +1512,10 @@ class TestPromptContextLifecycle:
         handler.on_chain_end(outputs={"text": "Hello Ada"}, run_id=prompt_id)
 
         handler.on_chat_model_start(
-            serialized={"name": "UnsupportedModel"},
+            serialized={"name": "CustomChatModel"},
             messages=[[HumanMessage(content="Hello Ada")]],
             run_id=_run_id(),
             parent_run_id=sequence_id,
-        )
-
-        telemetry.inference.assert_not_called()
-
-        handler.on_chat_model_start(
-            serialized={"name": "ChatOpenAI"},
-            messages=[[HumanMessage(content="Hello Ada")]],
-            run_id=_run_id(),
-            parent_run_id=sequence_id,
-            metadata={"ls_provider": "openai"},
-            invocation_params={"model_name": "gpt-4"},
         )
 
         invocation = telemetry.inference.return_value
