@@ -48,7 +48,6 @@ Usage:
 
 from __future__ import annotations
 
-import logging
 
 from opentelemetry._logs import (
     LoggerProvider,
@@ -104,7 +103,6 @@ from opentelemetry.util.genai.types import (
 from opentelemetry.util.genai.utils import get_content_capturing_mode
 from opentelemetry.util.genai.version import __version__
 
-_logger = logging.getLogger(__name__)
 
 
 class TelemetryHandler:
