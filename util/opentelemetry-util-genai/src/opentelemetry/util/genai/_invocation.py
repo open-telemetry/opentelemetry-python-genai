@@ -10,7 +10,7 @@ from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
 from dataclasses import dataclass, field, fields
 from types import TracebackType
-from typing import Any, ClassVar, Self, TypeAlias, cast
+from typing import Any, ClassVar, Final, Self, TypeAlias, cast
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import (
@@ -53,13 +53,12 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    gen_ai_json_dumps,
     get_content_capturing_mode,
     object_to_any_value,
 )
 from opentelemetry.util.types import AttributeValue
 
-_GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
+_GEN_AI_PROMPT_VARIABLES: Final = "gen_ai.prompt.variables"
 
 
 ContextToken: TypeAlias = Token[Context]
@@ -556,20 +555,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 detach(token)
 
 
-def _json_dumps_unless_str(value: object) -> str | None:
-    if value is None or isinstance(value, str):
-        return value
-    try:
-        return gen_ai_json_dumps(value, allow_nan=False)
-    except (TypeError, ValueError, RecursionError):
-        pass
-    # Callers may set objects (e.g. models) that weren't converted to AnyValue.
-    converted = object_to_any_value(value)
-    if converted is None or isinstance(converted, str):
-        return converted
-    return gen_ai_json_dumps(converted)
-
-
 def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
@@ -580,15 +565,16 @@ def get_content_attributes(
     for_span: bool,
     content_capturing_mode: ContentCapturingMode | None = None,
 ) -> dict[str, AttributeValue]:
-    """Serialize messages, system instructions, and tool definitions into attributes.
+    """Build structured content attributes for spans or events.
 
     Args:
-        input_messages: Input messages to serialize.
-        output_messages: Output messages to serialize.
-        system_instruction: System instructions to serialize. Passing ``MessagePart``
+        input_messages: Input messages to convert.
+        output_messages: Output messages to convert.
+        system_instruction: System instructions to convert. Passing ``MessagePart``
             is deprecated; use ``SystemInstructionPart``.
-        tool_definitions: Tool definitions to serialize (may be None).
-        prompt_variables: Prompt template variables to serialize (may be None).
+        tool_definitions: Tool definitions to convert (may be None).
+        prompt_variables: Prompt template variables to record as
+            ``gen_ai.prompt.variables`` (may be None).
         for_span: If True, check span content capturing modes;
                   if False, check event content capturing modes.
         content_capturing_mode: Configured content capturing mode; if None,
@@ -639,13 +625,11 @@ def get_content_attributes(
             if tool_definitions
             else None,
         ),
+        (
+            _GEN_AI_PROMPT_VARIABLES,
+            (object_to_any_value(prompt_variables) or None)
+            if prompt_variables
+            else None,
+        ),
     )
-    result: dict[str, AttributeValue] = {
-        key: value for key, value in optional_attrs if value is not None
-    }
-    if prompt_variables:
-        for k, v in prompt_variables.items():
-            serialized = _json_dumps_unless_str(v)
-            if serialized is not None:
-                result[f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}"] = serialized
-    return result
+    return {key: value for key, value in optional_attrs if value is not None}
