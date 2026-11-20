@@ -309,6 +309,20 @@ def test_result_error_marks_agent_span_failed(
     assert exception_events(agent) == []
 
 
+def test_result_error_with_success_subtype(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # A failed API call is reported with subtype "success"; recording that as
+    # error.type would claim the run succeeded, so it falls back to _OTHER.
+    messages = single_turn()
+    messages[-1] = result(is_error=True, subtype="success")
+    run_query(messages)
+
+    agent = agent_spans(span_exporter)[0]
+    assert agent.status.status_code.name == "ERROR"
+    assert agent.attributes["error.type"] == "_OTHER"
+
+
 @pytest.mark.skipif(
     not _result_reports_errors(),
     reason="this claude-agent-sdk release does not report errors",
@@ -451,6 +465,22 @@ def test_output_messages_capture(span_exporter, capture) -> None:
         {"response": "hello", "id": "toolu_1", "type": "tool_call_response"}
     ]
     assert messages[2]["parts"] == [{"content": "Done: hello", "type": "text"}]
+
+
+def test_subagent_messages_not_in_output(span_exporter, capture) -> None:
+    # Sub-agent turns are skipped until they get their own spans, so their
+    # text must not leak into this agent's output messages.
+    messages = single_turn()
+    sub = assistant([{"type": "text", "text": "sub-agent step"}])
+    sub["parent_tool_use_id"] = "toolu_1"
+    messages.insert(2, sub)
+    run_query(messages)
+
+    span = agent_spans(span_exporter)[0]
+    if capture:
+        assert (
+            "sub-agent step" not in span.attributes["gen_ai.output.messages"]
+        )
 
 
 def test_agent_span_starts_in_creator_context(

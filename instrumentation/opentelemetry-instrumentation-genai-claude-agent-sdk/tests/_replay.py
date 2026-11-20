@@ -15,7 +15,7 @@ import json
 from typing import Any
 
 import anyio
-from claude_agent_sdk._internal.transport import Transport
+from claude_agent_sdk import Transport
 
 
 def _message(

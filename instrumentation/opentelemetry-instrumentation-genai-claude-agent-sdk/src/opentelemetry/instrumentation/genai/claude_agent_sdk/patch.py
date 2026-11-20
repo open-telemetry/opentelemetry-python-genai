@@ -87,10 +87,13 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
         self._self_sdk_session_seen = False
 
     def _process_chunk(self, chunk: Message) -> None:
+        # Sub-agent messages are skipped until sub-agents get their own spans.
         if isinstance(chunk, AssistantMessage):
-            self._handle_assistant(chunk)
+            if chunk.parent_tool_use_id is None:
+                self._handle_assistant(chunk)
         elif isinstance(chunk, UserMessage):
-            self._handle_user(chunk)
+            if chunk.parent_tool_use_id is None:
+                self._handle_user(chunk)
         elif isinstance(chunk, ResultMessage):
             self._handle_result(chunk)
         elif isinstance(chunk, SystemMessage):
@@ -160,10 +163,13 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
                 _finish_reason(stop_reason)
             ]
         if chunk.is_error:
-            # The per-error text is user data; only the fixed subtype may
-            # reach the status description.
+            # Failed API calls are reported with subtype "success". The
+            # per-error text is user data, so only the type reaches the status.
+            error_type = (
+                chunk.subtype if chunk.subtype != "success" else "_OTHER"
+            )
             self._self_result_error = Error(
-                message=chunk.subtype, type=chunk.subtype
+                message=error_type, type=error_type
             )
 
     def _apply_usage(self) -> None:
