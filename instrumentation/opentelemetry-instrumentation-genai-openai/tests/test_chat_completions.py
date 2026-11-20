@@ -1466,7 +1466,7 @@ def test_chat_completion_streaming_user_exception_propagates(
     assert "RuntimeError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
 
 
-def test_chat_completion_streaming_user_exception_wins_over_close_exception(
+def test_chat_completion_streaming_close_exception_chains_user_exception(
     span_exporter, openai_client, instrument_with_content, vcr, monkeypatch
 ):
     if not is_experimental_mode():
@@ -1488,10 +1488,11 @@ def test_chat_completion_streaming_user_exception_wins_over_close_exception(
             raise RuntimeError("close failure")
 
         monkeypatch.setattr(response.__wrapped__, "close", close_raises)
-        with pytest.raises(RuntimeError, match="user failure"):
+        with pytest.raises(RuntimeError, match="close failure") as raised:
             with response:
                 raise RuntimeError("user failure")
 
+    assert str(raised.value.__context__) == "user failure"
     spans = span_exporter.get_finished_spans()
     assert "RuntimeError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
 
