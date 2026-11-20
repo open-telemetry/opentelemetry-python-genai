@@ -1,0 +1,1 @@
+`interactions.create` emits one span per call when google-genai automatically continues an interaction, with token usage summed across continuation requests.
