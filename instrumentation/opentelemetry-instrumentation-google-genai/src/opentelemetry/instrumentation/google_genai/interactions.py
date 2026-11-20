@@ -1232,17 +1232,22 @@ def _create_instrumented_interactions_create(
             telemetry_handler, instance, request
         )
 
-        with invocation.activate():
-            response = wrapped(*args, **kwargs)
-            if _is_interaction_stream(response, request):
-                return InteractionsStreamWrapper(
-                    response,
-                    invocation,
-                    telemetry_handler,
+        try:
+            with invocation.activate():
+                response = wrapped(*args, **kwargs)
+                if _is_interaction_stream(response, request):
+                    return InteractionsStreamWrapper(
+                        response,
+                        invocation,
+                        telemetry_handler,
+                    )
+                _apply_interaction_response_attributes(
+                    response, invocation, telemetry_handler
                 )
-            _apply_interaction_response_attributes(
-                response, invocation, telemetry_handler
-            )
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         invocation.stop()
         return response
 
@@ -1271,21 +1276,26 @@ def _create_instrumented_async_interactions_create(
             telemetry_handler, instance, request
         )
 
-        with invocation.activate():
-            response = await wrapped(*args, **kwargs)
-            if _is_interaction_stream(response, request):
-                return AsyncInteractionsStreamWrapper(
+        try:
+            with invocation.activate():
+                response = await wrapped(*args, **kwargs)
+                if _is_interaction_stream(response, request):
+                    return AsyncInteractionsStreamWrapper(
+                        response,
+                        invocation,
+                        telemetry_handler,
+                    )
+                response = cast(
+                    Interaction,
                     response,
-                    invocation,
-                    telemetry_handler,
                 )
-            response = cast(
-                Interaction,
-                response,
-            )
-            _apply_interaction_response_attributes(
-                response, invocation, telemetry_handler
-            )
+                _apply_interaction_response_attributes(
+                    response, invocation, telemetry_handler
+                )
+        # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         invocation.stop()
         return response
 
@@ -1408,20 +1418,27 @@ def _create_instrumented_interactions_get(
             telemetry_handler, instance, interaction_id, kwargs
         )
 
-        with invocation.activate():
-            result = wrapped(*args, **kwargs)
-            if _is_fetched_interaction(result):
-                _apply_fetched_interaction_attributes(
-                    cast(Interaction, result), invocation, telemetry_handler
-                )
-            elif not _is_unparsed_response(result) and hasattr(
-                result, "__iter__"
-            ):
-                return FetchInteractionStreamWrapper(
-                    cast("Stream[InteractionSSEEvent]", result),
-                    invocation,
-                    telemetry_handler,
-                )
+        try:
+            with invocation.activate():
+                result = wrapped(*args, **kwargs)
+                if _is_fetched_interaction(result):
+                    _apply_fetched_interaction_attributes(
+                        cast(Interaction, result),
+                        invocation,
+                        telemetry_handler,
+                    )
+                elif not _is_unparsed_response(result) and hasattr(
+                    result, "__iter__"
+                ):
+                    return FetchInteractionStreamWrapper(
+                        cast("Stream[InteractionSSEEvent]", result),
+                        invocation,
+                        telemetry_handler,
+                    )
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         invocation.stop()
         return result
 
@@ -1462,18 +1479,25 @@ def _create_instrumented_async_interactions_get(
             telemetry_handler, instance, interaction_id, kwargs
         )
 
-        with invocation.activate():
-            result = await wrapped(*args, **kwargs)
-            if _is_fetched_interaction(result):
-                _apply_fetched_interaction_attributes(
-                    cast(Interaction, result), invocation, telemetry_handler
-                )
-            elif not _is_unparsed_response(result) and hasattr(
-                result, "__aiter__"
-            ):
-                return AsyncFetchInteractionStreamWrapper(
-                    result, invocation, telemetry_handler
-                )
+        try:
+            with invocation.activate():
+                result = await wrapped(*args, **kwargs)
+                if _is_fetched_interaction(result):
+                    _apply_fetched_interaction_attributes(
+                        cast(Interaction, result),
+                        invocation,
+                        telemetry_handler,
+                    )
+                elif not _is_unparsed_response(result) and hasattr(
+                    result, "__aiter__"
+                ):
+                    return AsyncFetchInteractionStreamWrapper(
+                        result, invocation, telemetry_handler
+                    )
+        # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         invocation.stop()
         return result
 

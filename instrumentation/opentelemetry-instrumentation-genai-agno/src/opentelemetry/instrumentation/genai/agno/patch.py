@@ -962,16 +962,21 @@ def _agent_run(
             wrapped=wrapped,
             is_continue=is_continue,
         )
-        with invocation.activate():
-            result = wrapped(*args, **kwargs)
-            if isinstance(result, Iterator):
-                return AgnoAgentStreamWrapper(
-                    result,
-                    invocation,
-                    capture_content,
-                )
+        try:
+            with invocation.activate():
+                result = wrapped(*args, **kwargs)
+                if isinstance(result, Iterator):
+                    return AgnoAgentStreamWrapper(
+                        result,
+                        invocation,
+                        capture_content,
+                    )
 
-            _set_invocation_output(invocation, result, capture_content)
+                _set_invocation_output(invocation, result, capture_content)
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         invocation.stop()
         return result
 
@@ -1035,18 +1040,24 @@ def _agent_arun(
                     wrapped=wrapped,
                     is_continue=is_continue,
                 )
-                with invocation.activate():
-                    awaitable = cast(Awaitable[object], result)
-                    response: object = await awaitable
-                    if isinstance(response, AsyncIterator):
-                        return AsyncAgnoAgentStreamWrapper(
-                            response,
-                            invocation,
-                            capture_content,
+                try:
+                    with invocation.activate():
+                        awaitable = cast(Awaitable[object], result)
+                        response: object = await awaitable
+                        if isinstance(response, AsyncIterator):
+                            return AsyncAgnoAgentStreamWrapper(
+                                response,
+                                invocation,
+                                capture_content,
+                            )
+                        _set_invocation_output(
+                            invocation, response, capture_content
                         )
-                    _set_invocation_output(
-                        invocation, response, capture_content
-                    )
+                # activate() doesn't fail on StopAsyncIteration or
+                # GeneratorExit.
+                except BaseException as error:
+                    invocation.fail(error)
+                    raise
                 invocation.stop()
                 return response
 
@@ -1106,8 +1117,13 @@ def _tool_call_execute(
         kwargs: dict[str, Any],
     ) -> FunctionExecutionResult:
         invocation = _start_tool_invocation(handler, instance)
-        with invocation.activate():
-            result = wrapped(*args, **kwargs)
+        try:
+            with invocation.activate():
+                result = wrapped(*args, **kwargs)
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         return _handle_tool_result(invocation, instance, result)
 
     return traced_method
@@ -1123,8 +1139,13 @@ def _tool_call_aexecute(
         kwargs: dict[str, Any],
     ) -> FunctionExecutionResult:
         invocation = _start_tool_invocation(handler, instance)
-        with invocation.activate():
-            result = await wrapped(*args, **kwargs)
+        try:
+            with invocation.activate():
+                result = await wrapped(*args, **kwargs)
+        # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         return _handle_tool_result(invocation, instance, result)
 
     return traced_method
@@ -1182,16 +1203,21 @@ def _workflow_run(
             wrapped=wrapped,
             is_continue=is_continue,
         )
-        with invocation.activate():
-            result = wrapped(*args, **kwargs)
-            if isinstance(result, Iterator):
-                return AgnoWorkflowStreamWrapper(
-                    result,
-                    invocation,
-                    capture_content,
-                )
+        try:
+            with invocation.activate():
+                result = wrapped(*args, **kwargs)
+                if isinstance(result, Iterator):
+                    return AgnoWorkflowStreamWrapper(
+                        result,
+                        invocation,
+                        capture_content,
+                    )
 
-            _set_invocation_output(invocation, result, capture_content)
+                _set_invocation_output(invocation, result, capture_content)
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         invocation.stop()
         return result
 
@@ -1307,22 +1333,28 @@ def _workflow_arun(
                 )
                 discard_on_exit = True
                 try:
-                    with invocation.activate():
-                        awaitable = cast(Awaitable[object], result)
-                        response: object = await awaitable
-                        if isinstance(response, AsyncIterator):
-                            discard_on_exit = False
-                            return AsyncAgnoWorkflowStreamWrapper(
-                                response,
-                                invocation,
-                                capture_content,
-                                on_close=functools.partial(
-                                    _release_run_id, run_id
-                                ),
+                    try:
+                        with invocation.activate():
+                            awaitable = cast(Awaitable[object], result)
+                            response: object = await awaitable
+                            if isinstance(response, AsyncIterator):
+                                discard_on_exit = False
+                                return AsyncAgnoWorkflowStreamWrapper(
+                                    response,
+                                    invocation,
+                                    capture_content,
+                                    on_close=functools.partial(
+                                        _release_run_id, run_id
+                                    ),
+                                )
+                            _set_invocation_output(
+                                invocation, response, capture_content
                             )
-                        _set_invocation_output(
-                            invocation, response, capture_content
-                        )
+                    # activate() doesn't fail on StopAsyncIteration or
+                    # GeneratorExit.
+                    except BaseException as error:
+                        invocation.fail(error)
+                        raise
                     invocation.stop()
                     return response
                 finally:
@@ -1461,8 +1493,10 @@ def _workflow_aexecute_stream(
                 _set_invocation_output(invocation, result, capture_content)
             invocation.stop()
             return result
-        except BaseException:
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
             _release_run_id(run_id)
+            invocation.fail(error)
             raise
 
     return traced_method
@@ -1515,8 +1549,10 @@ def _workflow_aexecute_workflow_agent(
         try:
             with invocation.activate():
                 result = wrapped(*args, **kwargs)
-        except BaseException:
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
             _release_run_id(run_id)
+            invocation.fail(error)
             raise
 
         if isinstance(result, AsyncIterator):
@@ -1533,22 +1569,28 @@ def _workflow_aexecute_workflow_agent(
             async def _await_result() -> object:
                 discard_on_exit = True
                 try:
-                    with invocation.activate():
-                        awaitable = cast(Awaitable[object], result)
-                        response: object = await awaitable
-                        if isinstance(response, AsyncIterator):
-                            discard_on_exit = False
-                            return AsyncAgnoWorkflowStreamWrapper(
-                                response,
-                                invocation,
-                                capture_content,
-                                on_close=functools.partial(
-                                    _release_run_id, run_id
-                                ),
+                    try:
+                        with invocation.activate():
+                            awaitable = cast(Awaitable[object], result)
+                            response: object = await awaitable
+                            if isinstance(response, AsyncIterator):
+                                discard_on_exit = False
+                                return AsyncAgnoWorkflowStreamWrapper(
+                                    response,
+                                    invocation,
+                                    capture_content,
+                                    on_close=functools.partial(
+                                        _release_run_id, run_id
+                                    ),
+                                )
+                            _set_invocation_output(
+                                invocation, response, capture_content
                             )
-                        _set_invocation_output(
-                            invocation, response, capture_content
-                        )
+                    # activate() doesn't fail on StopAsyncIteration or
+                    # GeneratorExit.
+                    except BaseException as error:
+                        invocation.fail(error)
+                        raise
                     invocation.stop()
                     return response
                 finally:

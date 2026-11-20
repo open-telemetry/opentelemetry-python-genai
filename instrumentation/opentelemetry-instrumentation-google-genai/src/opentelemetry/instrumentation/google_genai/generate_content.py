@@ -315,7 +315,11 @@ async def _to_tool_definition_async(
     tool: ToolUnionDict,
 ) -> list[ToolDefinition]:
     if _is_mcp_imported and isinstance(tool, McpClientSession):
-        result = await tool.list_tools()
+        try:
+            result = await tool.list_tools()
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug("Failed to list MCP tools", exc_info=True)
+            return []
         return [_model_dump_to_tool_definition(t) for t in result.tools]
 
     return _to_tool_definition_common(tool)
@@ -756,14 +760,19 @@ def _create_instrumented_generate_content_stream(
                             )
                         )[0]
                     )
-            with invocation.activate():
-                stream = wrapped(
-                    model=model,
-                    contents=contents,
-                    config=wrapped_config if has_wrapped_tools else config,
-                    *_args,
-                    **_kwargs,
-                )
+            try:
+                with invocation.activate():
+                    stream = wrapped(
+                        model=model,
+                        contents=contents,
+                        config=wrapped_config if has_wrapped_tools else config,
+                        *_args,
+                        **_kwargs,
+                    )
+            # activate() doesn't fail on StopIteration or GeneratorExit.
+            except BaseException as error:
+                invocation.fail(error)
+                raise
             return GenerateContentStreamWrapper(
                 stream, invocation, telemetry_handler
             )
@@ -883,6 +892,11 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 config,
             )
             _, server_address = _get_client_info(instance)
+            # Awaited before the invocation starts: nothing would end its span
+            # if the caller cancels here.
+            tool_definitions = await _maybe_get_tool_definitions_async(
+                wrapped_config
+            )
             invocation = telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
@@ -899,9 +913,7 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 generate_content_config_key_allowlist,
                 invocation,
             )
-            invocation.tool_definitions = (
-                await _maybe_get_tool_definitions_async(wrapped_config)
-            )
+            invocation.tool_definitions = tool_definitions
 
             if telemetry_handler.should_capture_content():
                 invocation.input_messages = _to_input_messages(contents)
@@ -913,14 +925,19 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                             )
                         )[0]
                     )
-            with invocation.activate():
-                stream = await wrapped(
-                    model=model,
-                    contents=contents,
-                    config=wrapped_config if has_wrapped_tools else config,
-                    *_args,
-                    **_kwargs,
-                )
+            try:
+                with invocation.activate():
+                    stream = await wrapped(
+                        model=model,
+                        contents=contents,
+                        config=wrapped_config if has_wrapped_tools else config,
+                        *_args,
+                        **_kwargs,
+                    )
+            # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
+            except BaseException as error:
+                invocation.fail(error)
+                raise
             return AsyncGenerateContentStreamWrapper(
                 stream, invocation, telemetry_handler
             )

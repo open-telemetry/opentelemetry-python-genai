@@ -17,6 +17,9 @@ from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
 from opentelemetry.semconv._incubating.attributes import (
+    error_attributes as ErrorAttributes,
+)
+from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.trace import INVALID_SPAN, get_current_span
@@ -1277,3 +1280,28 @@ def test_workflow_run_stream_is_current_only_while_read(
         assert get_current_span() is INVALID_SPAN
 
     _assert_scoped(span_exporter, seen, "invoke_workflow scoped-workflow")
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+def test_tool_aexecute_closed_while_tool_is_pending_fails_the_span(
+    instrument_agno, span_exporter
+) -> None:
+    async def sample_tool(x: int) -> int:
+        """Double a number."""
+        await _Pending()
+        return x * 2
+
+    call = FunctionCall(
+        function=Function.from_callable(sample_tool), arguments={"x": 1}
+    )
+    coro = call.aexecute()
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"

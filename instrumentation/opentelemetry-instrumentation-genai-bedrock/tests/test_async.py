@@ -350,6 +350,31 @@ async def test_async_converse_records_cancelled_error(
     )
 
 
+class _Pending:
+    def __await__(self):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_async_converse_closed_while_request_is_pending_fails_the_span(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    async def _pending(*_args: Any, **_kwargs: Any) -> Any:
+        await _Pending()
+
+    async_bedrock_client._endpoint.make_request = _pending
+
+    coro = async_bedrock_client.converse(modelId=NOVA_MODEL_ID, messages=[])
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
+
+
 CONVERSE_STREAM_EVENTS = [
     {"messageStart": {"role": "assistant"}},
     {"contentBlockStart": {"contentBlockIndex": 0, "start": {}}},

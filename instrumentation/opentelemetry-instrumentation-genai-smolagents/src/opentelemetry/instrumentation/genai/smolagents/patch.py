@@ -368,11 +368,16 @@ def model_generate_stream(handler: TelemetryHandler) -> _Wrapper[Model]:
         kwargs: dict[str, Any],
     ) -> _ModelStreamWrapper:
         invocation = _start_inference(handler, instance)
-        with invocation.activate():
-            _record_request(
-                handler, invocation, wrapped, instance, args, kwargs
-            )
-            stream = wrapped(*args, **kwargs)
+        try:
+            with invocation.activate():
+                _record_request(
+                    handler, invocation, wrapped, instance, args, kwargs
+                )
+                stream = wrapped(*args, **kwargs)
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         return _ModelStreamWrapper(stream, invocation, handler)
 
     return wrapper
@@ -524,18 +529,23 @@ def agent_run(handler: TelemetryHandler) -> _Wrapper[MultiStepAgent]:
             _attach_to_context=False,
         )
 
-        with invocation.activate():
-            _record_agent(
-                invocation, agent, bound, capture_content=capture_content
-            )
-            result = wrapped(*args, **kwargs)
-            stream = _record_agent_run(
-                invocation,
-                agent,
-                bound,
-                result,
-                capture_content=capture_content,
-            )
+        try:
+            with invocation.activate():
+                _record_agent(
+                    invocation, agent, bound, capture_content=capture_content
+                )
+                result = wrapped(*args, **kwargs)
+                stream = _record_agent_run(
+                    invocation,
+                    agent,
+                    bound,
+                    result,
+                    capture_content=capture_content,
+                )
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         if stream is not None:
             return stream
         invocation.stop()

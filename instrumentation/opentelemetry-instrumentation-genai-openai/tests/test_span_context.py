@@ -10,6 +10,7 @@ import pytest
 from openai import AsyncOpenAI, OpenAI
 
 from opentelemetry import trace
+from opentelemetry.semconv.attributes import error_attributes
 
 from .test_responses import HAS_RESPONSES_API, RETRIEVE_RESPONSE_ID
 from .test_utils import (
@@ -190,3 +191,42 @@ def test_responses_retrieve_span_is_current_only_during_the_request(
         assert _no_current_span()
 
     assert seen == [_span_id(span_exporter)]
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+def _assert_closed_while_pending(span_exporter, coro) -> None:
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "GeneratorExit"
+
+
+def test_async_chat_closed_while_request_is_pending_fails_the_span(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    monkeypatch.setattr(AsyncOpenAI, "post", lambda *_a, **_kw: _Pending())
+    _assert_closed_while_pending(
+        span_exporter,
+        AsyncOpenAI().chat.completions.create(
+            model=DEFAULT_MODEL, messages=USER_ONLY_PROMPT
+        ),
+    )
+
+
+@requires_responses
+def test_async_responses_closed_while_request_is_pending_fails_the_span(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    monkeypatch.setattr(AsyncOpenAI, "post", lambda *_a, **_kw: _Pending())
+    _assert_closed_while_pending(
+        span_exporter,
+        AsyncOpenAI().responses.create(
+            model=DEFAULT_MODEL, input=USER_ONLY_PROMPT[0]["content"]
+        ),
+    )
