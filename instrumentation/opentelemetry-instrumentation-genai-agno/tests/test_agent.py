@@ -2640,3 +2640,75 @@ def test_agent_run_captures_dict_message_list(
     assert messages[0]["parts"] == [{"type": "text", "content": "hello dict"}]
     assert messages[1]["role"] == "assistant"
     assert messages[1]["parts"] == [{"type": "text", "content": "world dict"}]
+
+
+def test_agent_run_captures_tool_roundtrip_input_messages(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that tool calls and tool responses in input messages are mapped to ToolCallRequestPart and ToolCallResponsePart."""
+    from agno.models.message import Message
+
+    agent = Agent(
+        name="test-tool-roundtrip-agent", model=MockModel(id="mock-model")
+    )
+    mock_output = ModelResponse(content="Final answer")
+
+    with patch("agno.models.base.Model.response", return_value=mock_output):
+        agent.run(
+            input=[
+                Message(role="user", content="What is the weather?"),
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "Tokyo"}',
+                            },
+                        }
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    content="Sunny, 22C",
+                    tool_call_id="call_123",
+                ),
+            ]
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    raw_messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert raw_messages is not None
+    messages = json.loads(raw_messages)
+    assert len(messages) == 3
+
+    assert messages[0]["role"] == "user"
+    assert messages[0]["parts"] == [
+        {"type": "text", "content": "What is the weather?"}
+    ]
+
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["parts"] == [
+        {
+            "type": "tool_call",
+            "id": "call_123",
+            "name": "get_weather",
+            "arguments": {"location": "Tokyo"},
+        }
+    ]
+
+    assert messages[2]["role"] == "tool"
+    assert messages[2]["parts"] == [
+        {
+            "type": "tool_call_response",
+            "id": "call_123",
+            "response": "Sunny, 22C",
+        }
+    ]
+

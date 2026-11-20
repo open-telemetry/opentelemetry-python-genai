@@ -10,6 +10,7 @@ from __future__ import annotations
 import array
 import base64
 import functools
+import json
 import logging
 import sys
 from collections.abc import (
@@ -88,6 +89,7 @@ from opentelemetry.util.genai.types import (
     Role,
     SystemInstructionPart,
     TextPart,
+    ToolCallRequestPart,
     ToolCallResponsePart,
 )
 from opentelemetry.util.genai.utils import (
@@ -635,12 +637,19 @@ def _set_tool_invocation_output(
         )
 
 
-def _is_agno_message(item: Any) -> bool:
+def _is_agno_message(item: object) -> bool:
     if item is None:
         return False
+    try:
+        from agno.models.message import Message
+
+        if isinstance(item, Message):
+            return True
+    except ImportError:
+        pass
     if isinstance(item, Mapping):
-        return "role" in item and ("content" in item or "parts" in item)
-    return hasattr(item, "role") and hasattr(item, "content")
+        return "role" in item and "content" in item
+    return False
 
 
 def _convert_agno_message(msg: Any) -> InputMessage:
@@ -648,15 +657,53 @@ def _convert_agno_message(msg: Any) -> InputMessage:
     role: str = (
         str(raw_role).lower() if raw_role is not None else Role.USER.value
     )
-    raw_content = _get_property_value(msg, "content")
-    content_str = (
-        format_content(raw_content) if raw_content is not None else ""
-    )
     raw_name = _get_property_value(msg, "name")
     name = str(raw_name) if raw_name is not None else None
+
+    parts: list[Any] = []
+
+    if role in (Role.TOOL.value, "tool"):
+        tool_call_id = _get_property_value(msg, "tool_call_id")
+        raw_content = _get_property_value(msg, "content")
+        parts.append(
+            ToolCallResponsePart(
+                id=str(tool_call_id) if tool_call_id is not None else None,
+                response=raw_content,
+            )
+        )
+    else:
+        tool_calls = _get_property_value(msg, "tool_calls")
+        if tool_calls:
+            for tc in tool_calls:
+                call_id = _get_property_value(tc, "id")
+                func = _get_property_value(tc, "function")
+                func_name = _get_property_value(func, "name") if func else ""
+                arguments = (
+                    _get_property_value(func, "arguments") if func else None
+                )
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except Exception:
+                        pass
+                parts.append(
+                    ToolCallRequestPart(
+                        id=str(call_id) if call_id is not None else None,
+                        name=str(func_name) if func_name is not None else "",
+                        arguments=arguments,
+                    )
+                )
+
+        raw_content = _get_property_value(msg, "content")
+        if raw_content is not None and str(raw_content) != "":
+            content_str = format_content(raw_content)
+            parts.append(TextPart(content=content_str))
+        elif not parts:
+            parts.append(TextPart(content=""))
+
     return InputMessage(
         role=role,
-        parts=[TextPart(content=content_str)],
+        parts=parts,
         name=name,
     )
 
@@ -668,26 +715,26 @@ def _extract_input_messages(input_val: Any) -> list[InputMessage]:
     if _is_agno_message(input_val):
         return [_convert_agno_message(input_val)]
 
-    if isinstance(input_val, Iterable) and not isinstance(
-        input_val, (str, bytes, Mapping)
-    ):
-        items = list(cast(Iterable[Any], input_val))
-        if any(_is_agno_message(item) for item in items):
+    if isinstance(input_val, list):
+        if any(_is_agno_message(item) for item in input_val):
             messages: list[InputMessage] = []
-            for item in items:
+            for item in input_val:
                 if _is_agno_message(item):
                     messages.append(_convert_agno_message(item))
                 else:
                     content_str = _extract_input_content(item)
-                    messages.append(
-                        InputMessage(
-                            role=Role.USER.value,
-                            parts=[TextPart(content=content_str)],
+                    if content_str:
+                        messages.append(
+                            InputMessage(
+                                role=Role.USER.value,
+                                parts=[TextPart(content=content_str)],
+                            )
                         )
-                    )
             return messages
 
     content_str = _extract_input_content(input_val)
+    if not content_str:
+        return []
     return [
         InputMessage(
             role=Role.USER.value,
@@ -707,9 +754,19 @@ def _set_invocation_input(
     if capture_content:
         input_val = get_argument("input", wrapped, args, kwargs)
         if input_val is not None:
-            messages = _extract_input_messages(input_val)
-            if messages:
-                invocation.input_messages = messages
+            if isinstance(invocation, LocalAgentInvocation):
+                messages = _extract_input_messages(input_val)
+                if messages:
+                    invocation.input_messages = messages
+            else:
+                content_str = _extract_input_content(input_val)
+                if content_str:
+                    invocation.input_messages = [
+                        InputMessage(
+                            role=Role.USER.value,
+                            parts=[TextPart(content=content_str)],
+                        )
+                    ]
 
 
 def _to_tool_executions(raw_tools: object) -> list[ToolExecution]:
@@ -877,7 +934,14 @@ def _set_continue_invocation_input(
         else None
     )
     if input_val is not None:
-        messages.extend(_extract_input_messages(input_val))
+        content_str = _extract_input_content(input_val)
+        if content_str:
+            messages.append(
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=content_str)],
+                )
+            )
 
     invocation.input_messages = messages
 
@@ -1446,9 +1510,14 @@ def _start_background_workflow_invocation(
     )
 
     if capture_content and input_val is not None:
-        messages = _extract_input_messages(input_val)
-        if messages:
-            invocation.input_messages = messages
+        content_str = _extract_input_content(input_val)
+        if content_str:
+            invocation.input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=content_str)],
+                )
+            ]
 
     return invocation
 
@@ -1559,9 +1628,14 @@ def _workflow_aexecute_workflow_agent(
         )
 
         if capture_content and user_input is not None:
-            messages = _extract_input_messages(user_input)
-            if messages:
-                invocation.input_messages = messages
+            content_str = _extract_input_content(user_input)
+            if content_str:
+                invocation.input_messages = [
+                    InputMessage(
+                        role=Role.USER.value,
+                        parts=[TextPart(content=content_str)],
+                    )
+                ]
 
         if run_id:
             _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
