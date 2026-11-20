@@ -26,6 +26,7 @@ from .conformance.chat import (
     ChatGeminiScenario,
     ChatGeminiStreamingScenario,
     ChatMultimodalScenario,
+    ChatOpenAIResponsesScenario,
     ChatScenario,
     ChatStreamingScenario,
     ChatToolCallingScenario,
@@ -42,6 +43,7 @@ from .conformance.workflow_streaming import WorkflowStreamingScenario
     [
         pytest.param(AgentScenario()),
         pytest.param(ChatScenario()),
+        pytest.param(ChatOpenAIResponsesScenario()),
         pytest.param(ChatGeminiScenario()),
         pytest.param(ChatGeminiStreamingScenario()),
         pytest.param(ChatStreamingScenario()),
