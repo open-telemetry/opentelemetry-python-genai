@@ -18,6 +18,7 @@ env:
     ) || 'main' }}
   CONTRIB_REPO_SHA: main
   PIP_EXISTS_ACTION: w
+  UV_LOCKED: "true"
 
 jobs:
 
@@ -40,7 +41,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run spellcheck
-        run: uvx --with tox-uv tox -e spellcheck
+        run: uv run --only-group tox tox -e spellcheck
 
   docs:
     name: docs
@@ -64,7 +65,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Build docs
-        run: uvx --with tox-uv tox -e docs
+        run: uv run --only-group tox tox -e docs
 
   generate:
     name: generate
@@ -85,7 +86,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run generate
-        run: uvx --with tox-uv tox -e generate
+        run: uv run --only-group tox tox -e generate
 
       - name: Check generated files are up to date
         run: git diff --exit-code || (echo 'Generated code is out of date, run "tox -e generate" and commit the changes in this PR.' && exit 1)
@@ -109,7 +110,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Check READMEs render on PyPI
-        run: uvx --with tox-uv tox -e readme
+        run: uv run --only-group tox tox -e readme
 
   shellcheck:
     name: shellcheck
@@ -130,7 +131,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run shellcheck
-        run: uvx --with tox-uv tox -e shellcheck
+        run: uv run --only-group tox tox -e shellcheck
 
   precommit:
     name: precommit
@@ -151,7 +152,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run pre-commit
-        run: uvx --with tox-uv tox -e precommit
+        run: uv run --only-group tox tox -e precommit
 
   typecheck:
     name: typecheck
@@ -172,7 +173,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run typecheck
-        run: uvx --with tox-uv tox -e typecheck
+        run: uv run --only-group tox tox -e typecheck
 
   typecheck-py314:
     name: typecheck-py314
@@ -194,7 +195,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run typecheck
-        run: uvx --with tox-uv tox -e typecheck-py314
+        run: uv run --only-group tox tox -e typecheck-py314
 
   deps-check:
     name: deps-check
@@ -215,7 +216,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run dependency check
-        run: uv run --no-project --with packaging scripts/check_deps.py
+        run: uv run --only-group packaging scripts/check_deps.py
 
   check-util-api:
     name: check-util-api
@@ -241,7 +242,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Check util public API
-        run: uvx --with tox-uv tox -e check-util-api
+        run: uv run --only-group tox tox -e check-util-api
 
   license-header-check:
     name: license-header-check
@@ -262,7 +263,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Check license headers
-        run: uvx --with tox-uv tox -e license-header-check
+        run: uv run --only-group tox tox -e license-header-check
 
   check-versions:
     name: check-versions
@@ -283,6 +284,6 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Check versions
-        run: uvx --with tox-uv tox -e check-versions
+        run: uv run --only-group tox tox -e check-versions
 
 
