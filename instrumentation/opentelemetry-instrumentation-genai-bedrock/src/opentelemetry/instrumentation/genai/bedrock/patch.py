@@ -20,6 +20,7 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    GenAIInvocation,
     InferenceInvocation,
     RemoteAgentInvocation,
     RetrievalInvocation,
@@ -62,6 +63,36 @@ BEDROCK_RUNTIME = "bedrock-runtime"
 BEDROCK_AGENT_RUNTIME = "bedrock-agent-runtime"
 
 
+def _call_wrapped(
+    invocation: GenAIInvocation,
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    try:
+        with invocation.activate():
+            return wrapped(*args, **kwargs)
+    # activate() doesn't fail on StopIteration or GeneratorExit.
+    except BaseException as error:
+        invocation.fail(error)
+        raise
+
+
+async def _call_wrapped_async(
+    invocation: GenAIInvocation,
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    try:
+        with invocation.activate():
+            return await wrapped(*args, **kwargs)
+    # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
+    except BaseException as error:
+        invocation.fail(error)
+        raise
+
+
 def _handle_converse(
     wrapped: Callable[..., Any],
     instance: BaseClient,
@@ -90,8 +121,7 @@ def _handle_converse(
     extract_converse_request(
         api_params, invocation, capture_content=capture_content
     )
-    with invocation.activate():
-        response: Any = wrapped(*args, **kwargs)
+    response: Any = _call_wrapped(invocation, wrapped, args, kwargs)
 
     if is_stream:
         # Any 200 response is guaranteed to have this..
@@ -141,8 +171,9 @@ async def _handle_async_converse(
     extract_converse_request(
         api_params, invocation, capture_content=capture_content
     )
-    with invocation.activate():
-        response: Any = await wrapped(*args, **kwargs)
+    response: Any = await _call_wrapped_async(
+        invocation, wrapped, args, kwargs
+    )
 
     if is_stream:
         if "stream" in response:
@@ -216,8 +247,7 @@ def _handle_invoke_model(
     extract_invoke_model_request(
         api_params, invocation, capture_content=capture_content
     )
-    with invocation.activate():
-        response = wrapped(*args, **kwargs)
+    response = _call_wrapped(invocation, wrapped, args, kwargs)
 
     if is_stream:
         if "body" in response:
@@ -274,8 +304,9 @@ async def _handle_async_invoke_model(
             _attach_to_context=False,
         )
         extract_embedding_request(api_params, invocation)
-        with invocation.activate():
-            response: Any = await wrapped(*args, **kwargs)
+        response: Any = await _call_wrapped_async(
+            invocation, wrapped, args, kwargs
+        )
 
         body_stream = response.get("body")
         if body_stream is not None:
@@ -317,8 +348,7 @@ async def _handle_async_invoke_model(
     extract_invoke_model_request(
         api_params, invocation, capture_content=capture_content
     )
-    with invocation.activate():
-        response = await wrapped(*args, **kwargs)
+    response = await _call_wrapped_async(invocation, wrapped, args, kwargs)
 
     if is_stream:
         if "body" in response:
@@ -460,8 +490,7 @@ def _handle_invoke_agent(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_invoke_agent(instance, api_params, handler)
-    with invocation.activate():
-        response: Any = wrapped(*args, **kwargs)
+    response: Any = _call_wrapped(invocation, wrapped, args, kwargs)
 
     return _finish_invoke_agent(
         response, invocation, BedrockAgentEventStreamWrapper
@@ -477,8 +506,9 @@ async def _handle_async_invoke_agent(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_invoke_agent(instance, api_params, handler)
-    with invocation.activate():
-        response: Any = await wrapped(*args, **kwargs)
+    response: Any = await _call_wrapped_async(
+        invocation, wrapped, args, kwargs
+    )
 
     return _finish_invoke_agent(
         response, invocation, AsyncBedrockAgentEventStreamWrapper
@@ -524,8 +554,7 @@ def _handle_invoke_inline_agent(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_invoke_inline_agent(instance, api_params, handler)
-    with invocation.activate():
-        response: Any = wrapped(*args, **kwargs)
+    response: Any = _call_wrapped(invocation, wrapped, args, kwargs)
 
     return _finish_invoke_agent(
         response, invocation, BedrockAgentEventStreamWrapper
@@ -541,8 +570,9 @@ async def _handle_async_invoke_inline_agent(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_invoke_inline_agent(instance, api_params, handler)
-    with invocation.activate():
-        response: Any = await wrapped(*args, **kwargs)
+    response: Any = await _call_wrapped_async(
+        invocation, wrapped, args, kwargs
+    )
 
     return _finish_invoke_agent(
         response, invocation, AsyncBedrockAgentEventStreamWrapper
@@ -558,8 +588,7 @@ def _handle_retrieve(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_retrieve(instance, api_params, handler)
-    with invocation.activate():
-        response: Any = wrapped(*args, **kwargs)
+    response: Any = _call_wrapped(invocation, wrapped, args, kwargs)
 
     return _finish_retrieve(response, invocation)
 
@@ -573,8 +602,9 @@ async def _handle_async_retrieve(
     handler: TelemetryHandler,
 ) -> Any:
     invocation = _start_retrieve(instance, api_params, handler)
-    with invocation.activate():
-        response: Any = await wrapped(*args, **kwargs)
+    response: Any = await _call_wrapped_async(
+        invocation, wrapped, args, kwargs
+    )
 
     return _finish_retrieve(response, invocation)
 
@@ -645,8 +675,7 @@ def _handle_retrieve_and_generate(
     is_stream: bool = False,
 ) -> Any:
     invocation = _start_retrieve_and_generate(instance, api_params, handler)
-    with invocation.activate():
-        response: Any = wrapped(*args, **kwargs)
+    response: Any = _call_wrapped(invocation, wrapped, args, kwargs)
 
     return _finish_retrieve_and_generate(
         response,
@@ -667,8 +696,9 @@ async def _handle_async_retrieve_and_generate(
     is_stream: bool = False,
 ) -> Any:
     invocation = _start_retrieve_and_generate(instance, api_params, handler)
-    with invocation.activate():
-        response: Any = await wrapped(*args, **kwargs)
+    response: Any = await _call_wrapped_async(
+        invocation, wrapped, args, kwargs
+    )
 
     return _finish_retrieve_and_generate(
         response,

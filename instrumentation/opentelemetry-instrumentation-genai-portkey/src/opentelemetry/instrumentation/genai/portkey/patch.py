@@ -110,24 +110,29 @@ def _sync_completions_create(
         invocation = create_inference_invocation(
             handler, instance, kwargs, is_prompt=is_prompt
         )
-        with invocation.activate():
-            try:
-                result = wrapped(*args, **kwargs)
-            finally:
-                invocation.input_messages = (
-                    messages_capture.extract(prepare_input_messages) or []
-                )
-                invocation.tool_definitions = tools_capture.extract(
-                    prepare_tool_definitions
-                )
-            if is_streaming(kwargs):
-                return PortkeyStreamWrapper(
-                    result, invocation, capture_content
-                )
+        try:
+            with invocation.activate():
+                try:
+                    result = wrapped(*args, **kwargs)
+                finally:
+                    invocation.input_messages = (
+                        messages_capture.extract(prepare_input_messages) or []
+                    )
+                    invocation.tool_definitions = tools_capture.extract(
+                        prepare_tool_definitions
+                    )
+                if is_streaming(kwargs):
+                    return PortkeyStreamWrapper(
+                        result, invocation, capture_content
+                    )
 
-            set_response_properties(invocation, result, capture_content)
-            invocation.stop()
-            return result
+                set_response_properties(invocation, result, capture_content)
+                invocation.stop()
+                return result
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
 
     return traced_method
 
@@ -154,23 +159,28 @@ def _async_completions_create(
         invocation = create_inference_invocation(
             handler, instance, kwargs, is_prompt=is_prompt
         )
-        with invocation.activate():
-            try:
-                result = await wrapped(*args, **kwargs)
-            finally:
-                invocation.input_messages = (
-                    messages_capture.extract(prepare_input_messages) or []
-                )
-                invocation.tool_definitions = tools_capture.extract(
-                    prepare_tool_definitions
-                )
-            if is_streaming(kwargs):
-                return AsyncPortkeyStreamWrapper(
-                    result, invocation, capture_content
-                )
+        try:
+            with invocation.activate():
+                try:
+                    result = await wrapped(*args, **kwargs)
+                finally:
+                    invocation.input_messages = (
+                        messages_capture.extract(prepare_input_messages) or []
+                    )
+                    invocation.tool_definitions = tools_capture.extract(
+                        prepare_tool_definitions
+                    )
+                if is_streaming(kwargs):
+                    return AsyncPortkeyStreamWrapper(
+                        result, invocation, capture_content
+                    )
 
-            set_response_properties(invocation, result, capture_content)
-            invocation.stop()
-            return result
+                set_response_properties(invocation, result, capture_content)
+                invocation.stop()
+                return result
+        # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
 
     return cast(Callable[..., Any], traced_method)

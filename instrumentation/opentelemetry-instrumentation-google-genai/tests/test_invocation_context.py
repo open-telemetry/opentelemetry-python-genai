@@ -197,6 +197,73 @@ async def test_async_span_is_current_only_during_the_call(
     assert [s.get_span_context() for s in seen] == [span.context]
 
 
+def _assert_single_error_span(span_exporter: InMemorySpanExporter) -> None:
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert (span.attributes or {})["error.type"] == "ValueError"
+
+
+def test_generate_content_stream_error_before_stream_is_returned(
+    monkeypatch: pytest.MonkeyPatch,
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+    logger_provider: LoggerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    @wraps(Models.generate_content_stream)
+    def call(*args: object, **kwargs: object) -> Any:
+        raise ValueError("boom")
+
+    monkeypatch.setattr(Models, "generate_content_stream", call)
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="NO_CONTENT",
+    ):
+        before = context.get_current()
+        with pytest.raises(ValueError):
+            Client(api_key="test-key").models.generate_content_stream(
+                model="gemini-2.5-flash", contents="Hello"
+            )
+        assert context.get_current() is before
+
+    _assert_single_error_span(span_exporter)
+
+
+@pytest.mark.asyncio
+async def test_async_generate_content_stream_error_before_stream_is_returned(
+    monkeypatch: pytest.MonkeyPatch,
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+    logger_provider: LoggerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    @wraps(AsyncModels.generate_content_stream)
+    async def call(*args: object, **kwargs: object) -> Any:
+        raise ValueError("boom")
+
+    monkeypatch.setattr(AsyncModels, "generate_content_stream", call)
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="NO_CONTENT",
+    ):
+        before = context.get_current()
+        with pytest.raises(ValueError):
+            await Client(
+                api_key="test-key"
+            ).aio.models.generate_content_stream(
+                model="gemini-2.5-flash", contents="Hello"
+            )
+        assert context.get_current() is before
+
+    _assert_single_error_span(span_exporter)
+
+
 def test_tool_span_is_current_only_during_the_tool(
     tracer_provider: TracerProvider,
     meter_provider: MeterProvider,
@@ -221,3 +288,68 @@ def test_tool_span_is_current_only_during_the_tool(
 
     (span,) = span_exporter.get_finished_spans()
     assert [s.get_span_context() for s in seen] == [span.context]
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+_PENDING_CASES: dict[str, tuple[type, str, Callable[..., Any]]] = {
+    "generate_content_stream": (
+        AsyncModels,
+        "generate_content_stream",
+        lambda c: c.aio.models.generate_content_stream(
+            model="gemini-2.5-flash", contents="Hello"
+        ),
+    ),
+    "interactions.create": (
+        AsyncInteractionsResource,
+        "create",
+        _ASYNC_CASES["interactions.create"][3],
+    ),
+    "interactions.get": (
+        AsyncInteractionsResource,
+        "get",
+        _ASYNC_CASES["interactions.get"][3],
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param("generate_content_stream"),
+        pytest.param("interactions.create", marks=REQUIRES_INTERACTIONS),
+        pytest.param("interactions.get", marks=REQUIRES_INTERACTIONS),
+    ],
+)
+def test_async_call_closed_while_pending_fails_the_span(
+    monkeypatch: pytest.MonkeyPatch,
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+    logger_provider: LoggerProvider,
+    span_exporter: InMemorySpanExporter,
+    operation: str,
+) -> None:
+    resource_type, method_name, call_sdk = _PENDING_CASES[operation]
+
+    @wraps(getattr(resource_type, method_name))
+    async def call(*args: object, **kwargs: object) -> Any:
+        await _Pending()
+
+    monkeypatch.setattr(resource_type, method_name, call)
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="NO_CONTENT",
+    ):
+        coro = call_sdk(Client(api_key="test-key"))
+        coro.send(None)
+        coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert (span.attributes or {})["error.type"] == "GeneratorExit"

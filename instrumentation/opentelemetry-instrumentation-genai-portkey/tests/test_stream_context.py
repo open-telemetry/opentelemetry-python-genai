@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from portkey_ai import Portkey
@@ -18,6 +18,9 @@ from opentelemetry import context, trace
 from opentelemetry.instrumentation.genai.portkey.wrappers import (
     AsyncPortkeyStreamWrapper,
     PortkeyStreamWrapper,
+)
+from opentelemetry.semconv._incubating.attributes import (
+    error_attributes as ErrorAttributes,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 
@@ -307,3 +310,33 @@ async def test_async_span_is_current_only_during_the_provider_call(
 
     (span,) = span_exporter.get_finished_spans()
     assert seen == [span.context]
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+@pytest.mark.skipif(AsyncPortkey is None, reason="AsyncPortkey not available")
+def test_async_create_closed_while_provider_call_is_pending_fails_the_span(
+    instrument_portkey, span_exporter
+) -> None:
+    async def pending(*_args: Any, **_kwargs: Any) -> None:
+        await _Pending()
+
+    client = AsyncPortkey(api_key="test_pk", provider="openai")
+    completions = client.chat.completions
+    completions._post = pending
+    if hasattr(completions, "openai_client"):
+        completions.openai_client = MagicMock()
+        completions.openai_client.with_raw_response.chat.completions.create = (
+            pending
+        )
+
+    coro = completions.create(messages=_MESSAGES, model="gpt-4o")
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"

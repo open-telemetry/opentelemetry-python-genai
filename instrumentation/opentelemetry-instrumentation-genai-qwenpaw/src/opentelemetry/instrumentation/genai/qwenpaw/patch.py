@@ -104,8 +104,13 @@ def make_query_handler_wrapper(
     ) -> QueryHandlerStreamWrapper:
         msgs, request = parse_query_handler_call(args, kwargs)
         invocation = _build_invocation(handler, instance, msgs, request)
-        with invocation.activate():
-            stream = wrapped(*args, **kwargs)
+        try:
+            with invocation.activate():
+                stream = wrapped(*args, **kwargs)
+        # activate() doesn't fail on StopIteration or GeneratorExit.
+        except BaseException as error:
+            invocation.fail(error)
+            raise
         return QueryHandlerStreamWrapper(stream, invocation)
 
     return query_handler_wrapper

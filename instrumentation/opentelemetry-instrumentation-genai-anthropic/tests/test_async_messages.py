@@ -3340,3 +3340,21 @@ async def test_async_messages_stream_span_is_not_current_between_reads(
 
     (span,) = span_exporter.get_finished_spans()
     assert seen == [span.context.span_id]
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+def test_async_messages_create_closed_while_request_is_pending_fails_the_span(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    monkeypatch.setattr(AsyncAnthropic, "post", lambda *_a, **_kw: _Pending())
+    coro = AsyncAnthropic().messages.create(**_UNSET_BASE_KWARGS)
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
