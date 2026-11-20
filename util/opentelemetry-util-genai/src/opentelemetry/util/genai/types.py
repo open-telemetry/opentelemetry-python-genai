@@ -120,7 +120,7 @@ class ToolCallResponsePart:
 
 
 @dataclass()
-class ServerToolCallPart:
+class ServerToolCallPart(_AnyValueMapping):
     """Represents a server-side tool call.
 
     Server tool calls are executed by the model provider on the server side rather
@@ -131,6 +131,8 @@ class ServerToolCallPart:
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset({"server_tool_call"})
+
     name: str
     server_tool_call: Any
     id: str | None = None
@@ -138,7 +140,7 @@ class ServerToolCallPart:
 
 
 @dataclass()
-class ServerToolCallResponsePart:
+class ServerToolCallResponsePart(_AnyValueMapping):
     """Represents a server-side tool call response.
 
     Contains the outcome and details of a server tool execution. Provider-specific
@@ -148,6 +150,10 @@ class ServerToolCallResponsePart:
     This model is specified as part of semconv in `GenAI messages Python models - ServerToolCallResponsePart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
+
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset(
+        {"server_tool_call_response"}
+    )
 
     server_tool_call_response: Any
     id: str | None = None

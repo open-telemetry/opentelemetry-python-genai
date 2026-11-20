@@ -53,6 +53,8 @@ from opentelemetry.util.genai.types import (
     ReasoningPart,
     RetrievalDocument,
     Role,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     SystemInstructionPart,
     Text,
     TextPart,
@@ -1689,6 +1691,57 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
+    def test_server_tool_parts_mapping(self):
+        @dataclass
+        class Payload:
+            count: int
+            label: str | None = None
+
+        payload_cases = [
+            (Payload(count=0), {"count": 0, "label": None}),
+            ({"count": 0, "invalid": object()}, {"count": 0}),
+            (object(), None),
+            (None, None),
+        ]
+        for payload, converted in payload_cases:
+            parts = [
+                (
+                    ServerToolCallPart(
+                        name="web_search", server_tool_call=payload
+                    ),
+                    "server_tool_call",
+                    {"name": "web_search", "type": "server_tool_call"},
+                ),
+                (
+                    ServerToolCallResponsePart(
+                        server_tool_call_response=payload, id="call-1"
+                    ),
+                    "server_tool_call_response",
+                    {
+                        "id": "call-1",
+                        "type": "server_tool_call_response",
+                    },
+                ),
+            ]
+            for part, payload_key, expected in parts:
+                with (
+                    self.subTest(part=part),
+                    patch(
+                        "opentelemetry.util.genai.utils.object_to_any_value",
+                        wraps=object_to_any_value,
+                    ) as convert,
+                ):
+                    if payload is not None:
+                        expected[payload_key] = converted
+                    self.assertIsInstance(part, Mapping)
+                    self.assertEqual(dict(part), expected)
+                    self.assertEqual(len(part), len(expected))
+                    if payload is None:
+                        self.assertNotIn(payload_key, part)
+                        convert.assert_not_called()
+                    else:
+                        convert.assert_called_once_with(payload)
+
     def test_typed_parts_are_mappings_without_conversion(self):
         cases = [
             (TextPart(content="hello"), {"content": "hello", "type": "text"}),
