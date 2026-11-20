@@ -53,6 +53,9 @@ try:
     from google.genai._interactions.types.interaction_sse_event import (
         InteractionSSEEvent,
     )
+    from google.genai._interactions.types.model_output_step import (
+        ModelOutputStep,
+    )
     from google.genai._interactions.types.step import Step
     from google.genai._interactions.types.text_content import TextContent
     from google.genai._interactions.types.user_input_step import UserInputStep
@@ -83,6 +86,7 @@ except ImportError:
             ImageContent,
             Interaction,
             InteractionSSEEvent,
+            ModelOutputStep,
             Step,
             TextContent,
             Usage,
@@ -375,9 +379,9 @@ def _interaction_output_item_to_part(
     return _to_server_tool_part(item)
 
 
-def _interaction_item_to_part(
+def _function_result_to_part(
     item: Step | dict[str, object],
-) -> MessagePart | None:
+) -> ToolCallResponsePart | None:
     if isinstance(item, FunctionResultStep):
         return ToolCallResponsePart(
             id=item.call_id if isinstance(item.call_id, str) else None,
@@ -389,7 +393,7 @@ def _interaction_item_to_part(
             id=call_id if isinstance(call_id, str) else None,
             response=item.get("result"),
         )
-    return _interaction_output_item_to_part(item)
+    return None
 
 
 _MEDIA_CONTENT_MODALITIES: dict[str, Modality] = {
@@ -461,11 +465,37 @@ def _content_item_to_part(
     return None
 
 
-# Logic for parsing Input is tricky:
-# https://github.com/open-telemetry/donation-openinference/blob/6cdd644d79fccf50aedcb614187f924ddfcafb7b/python/instrumentation/openinference-instrumentation-google-genai/src/openinference/instrumentation/google_genai/interactions_attributes.py#L103
-# It doesn't make sense for this to be a List[InputMessage] (per semconv),
-# because this API doesn't take conversation history as input (unlike the generate_content API).
-# Conversation history is stored server-side and referenced via a interaction ID parameter.
+def _dict_step_content_to_parts(
+    item_dict: dict[str, object],
+) -> list[MessagePart]:
+    content = item_dict.get("content")
+    if not isinstance(content, Sequence) or isinstance(
+        content, (str, bytes, bytearray)
+    ):
+        return []
+    parts: list[MessagePart] = []
+    for sub_item in content:
+        if isinstance(sub_item, dict):
+            part = _content_item_to_part(cast(dict[str, object], sub_item))
+        elif isinstance(
+            sub_item,
+            (
+                str,
+                TextContent,
+                AudioContent,
+                DocumentContent,
+                ImageContent,
+                VideoContent,
+            ),
+        ):
+            part = _content_item_to_part(sub_item)
+        else:
+            part = None
+        if part is not None:
+            parts.append(part)
+    return parts
+
+
 def _interactions_input_to_messages(
     input_data: Input | None,
 ) -> list[InputMessage]:
@@ -484,53 +514,79 @@ def _interactions_input_to_messages(
     ):
         input_data = [input_data]
 
-    parts: list[MessagePart] = []
+    messages: list[InputMessage] = []
+    # Consecutive standalone content items (str / Content) belong to one user
+    # message; consecutive assistant steps (tool calls, server tools, model
+    # output) belong to one assistant turn.
+    last_is_standalone_content = False
+
+    def _append_standalone_content(part: MessagePart) -> None:
+        nonlocal last_is_standalone_content
+        if (
+            last_is_standalone_content
+            and messages
+            and messages[-1].role == Role.USER.value
+        ):
+            messages[-1].parts.append(part)
+        else:
+            messages.append(InputMessage(role=Role.USER.value, parts=[part]))
+            last_is_standalone_content = True
+
+    def _append_step(role: str, step_parts: list[MessagePart]) -> None:
+        nonlocal last_is_standalone_content
+        if not step_parts:
+            return
+        last_is_standalone_content = False
+        if (
+            role == Role.ASSISTANT.value
+            and messages
+            and messages[-1].role == Role.ASSISTANT.value
+        ):
+            messages[-1].parts.extend(step_parts)
+        else:
+            messages.append(InputMessage(role=role, parts=step_parts))
+
     for item in input_data:
         if isinstance(item, str):
-            parts.append(TextPart(content=item))
+            _append_standalone_content(TextPart(content=item))
             continue
 
         if isinstance(item, dict):
             item_dict = cast(dict[str, object], item)
-            message_part = _interaction_item_to_part(item_dict)
-            if message_part is not None:
-                parts.append(message_part)
+            if tool_result := _function_result_to_part(item_dict):
+                _append_step(Role.TOOL.value, [tool_result])
+                continue
+            if output_part := _interaction_output_item_to_part(item_dict):
+                _append_step(Role.ASSISTANT.value, [output_part])
                 continue
             item_type = item_dict.get("type")
             if item_type == "user_input":
-                content = item_dict.get("content")
-                if isinstance(content, Sequence) and not isinstance(
-                    content, (str, bytes, bytearray)
-                ):
-                    for sub_item in content:
-                        if isinstance(sub_item, dict):
-                            part = _content_item_to_part(
-                                cast(dict[str, object], sub_item)
-                            )
-                        elif isinstance(
-                            sub_item,
-                            (
-                                str,
-                                TextContent,
-                                AudioContent,
-                                DocumentContent,
-                                ImageContent,
-                                VideoContent,
-                            ),
-                        ):
-                            part = _content_item_to_part(sub_item)
-                        else:
-                            part = None
-                        if part is not None:
-                            parts.append(part)
+                _append_step(
+                    Role.USER.value, _dict_step_content_to_parts(item_dict)
+                )
+            elif item_type == "model_output":
+                _append_step(
+                    Role.ASSISTANT.value,
+                    _dict_step_content_to_parts(item_dict),
+                )
             elif part := _content_item_to_part(item_dict):
-                parts.append(part)
+                _append_standalone_content(part)
             continue
 
-        if isinstance(item, UserInputStep):
-            for sub_item in item.content or ():
-                if part := _content_item_to_part(sub_item):
-                    parts.append(part)
+        if isinstance(item, (UserInputStep, ModelOutputStep)):
+            role = (
+                Role.USER.value
+                if isinstance(item, UserInputStep)
+                else Role.ASSISTANT.value
+            )
+            _append_step(
+                role,
+                [
+                    part
+                    for sub_item in item.content or ()
+                    if (part := _content_item_to_part(sub_item)) is not None
+                ],
+            )
             continue
 
         if isinstance(
@@ -544,16 +600,17 @@ def _interactions_input_to_messages(
             ),
         ):
             if part := _content_item_to_part(item):
-                parts.append(part)
+                _append_standalone_content(part)
             continue
 
         if isinstance(item, _STEP_MODEL_TYPES):
-            if part := _interaction_item_to_part(cast(Step, item)):
-                parts.append(part)
+            step = cast(Step, item)
+            if tool_result := _function_result_to_part(step):
+                _append_step(Role.TOOL.value, [tool_result])
+            elif output_part := _interaction_output_item_to_part(step):
+                _append_step(Role.ASSISTANT.value, [output_part])
 
-    if not parts:
-        return []
-    return [InputMessage(role=Role.USER.value, parts=parts)]
+    return messages
 
 
 def _get_interaction_output_text(interaction: Interaction) -> str:

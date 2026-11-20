@@ -79,6 +79,8 @@ class TestInteractionsParser(unittest.TestCase):
             }
         ]
         messages = _interactions_input_to_messages(steps)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].role, "assistant")
         self.assertEqual(len(messages[0].parts), 1)
         self.assertIsInstance(messages[0].parts[0], ToolCallRequestPart)
         self.assertEqual(messages[0].parts[0].id, "call-123")
@@ -94,6 +96,8 @@ class TestInteractionsParser(unittest.TestCase):
             }
         ]
         messages = _interactions_input_to_messages(steps)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].role, "tool")
         self.assertEqual(len(messages[0].parts), 1)
         self.assertIsInstance(messages[0].parts[0], ToolCallResponsePart)
         self.assertEqual(messages[0].parts[0].id, "call-123")
@@ -111,9 +115,16 @@ class TestInteractionsParser(unittest.TestCase):
                 "call_id": "search-1",
                 "result": [],
             },
+            {
+                "type": "model_output",
+                "content": [{"type": "text", "text": "Search complete."}],
+            },
         ]
 
-        parts = _interactions_input_to_messages(steps)[0].parts
+        messages = _interactions_input_to_messages(steps)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].role, "assistant")
+        parts = messages[0].parts
 
         self.assertIsInstance(parts[0], ServerToolCallPart)
         self.assertEqual(parts[0].id, "search-1")
@@ -131,6 +142,7 @@ class TestInteractionsParser(unittest.TestCase):
             parts[1].server_tool_call_response,
             {"result": [], "type": "google_search"},
         )
+        self.assertEqual(parts[2], TextPart(content="Search complete."))
 
     def test_input_to_messages_drops_unsupported_type(self) -> None:
         steps = [{"type": "some_unsupported_type"}]
@@ -148,6 +160,142 @@ class TestInteractionsParser(unittest.TestCase):
         step = {"other_field": "no type specified"}
         messages = _interactions_input_to_messages(step)
         self.assertEqual(messages, [])
+
+    def test_input_to_messages_multiturn_history_dicts(self) -> None:
+        steps = [
+            {
+                "type": "user_input",
+                "content": [{"type": "text", "text": "Hi"}],
+            },
+            {
+                "type": "function_call",
+                "id": "call-1",
+                "name": "lookup",
+                "arguments": {"q": "a"},
+            },
+            {
+                "type": "function_call",
+                "id": "call-2",
+                "name": "lookup",
+                "arguments": {"q": "b"},
+            },
+            {
+                "type": "function_result",
+                "call_id": "call-1",
+                "result": {"v": 1},
+            },
+            {
+                "type": "function_result",
+                "call_id": "call-2",
+                "result": {"v": 2},
+            },
+            {
+                "type": "model_output",
+                "content": [
+                    {"type": "text", "text": "Done"},
+                    {
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "uri": "https://example.com/out.png",
+                    },
+                ],
+            },
+            {
+                "type": "user_input",
+                "content": [{"type": "text", "text": "Thanks"}],
+            },
+        ]
+
+        messages = _interactions_input_to_messages(steps)
+
+        self.assertEqual(
+            [m.role for m in messages],
+            ["user", "assistant", "tool", "tool", "assistant", "user"],
+        )
+        self.assertEqual(messages[0].parts, [TextPart(content="Hi")])
+        self.assertEqual(
+            messages[1].parts,
+            [
+                ToolCallRequestPart(
+                    id="call-1", name="lookup", arguments={"q": "a"}
+                ),
+                ToolCallRequestPart(
+                    id="call-2", name="lookup", arguments={"q": "b"}
+                ),
+            ],
+        )
+        self.assertEqual(
+            messages[2].parts,
+            [ToolCallResponsePart(id="call-1", response={"v": 1})],
+        )
+        self.assertEqual(
+            messages[3].parts,
+            [ToolCallResponsePart(id="call-2", response={"v": 2})],
+        )
+        self.assertEqual(
+            messages[4].parts,
+            [
+                TextPart(content="Done"),
+                UriPart(
+                    mime_type="image/png",
+                    modality="image",
+                    uri="https://example.com/out.png",
+                ),
+            ],
+        )
+        self.assertEqual(messages[5].parts, [TextPart(content="Thanks")])
+
+    def test_input_to_messages_skips_empty_steps_and_keeps_turns_distinct(
+        self,
+    ) -> None:
+        steps = [
+            {"type": "user_input", "content": []},
+            {"type": "user_input", "content": [{"type": "text", "text": "A"}]},
+            {"type": "model_output", "content": []},
+            {"type": "user_input", "content": [{"type": "text", "text": "B"}]},
+        ]
+
+        messages = _interactions_input_to_messages(steps)
+
+        self.assertEqual([m.role for m in messages], ["user", "user"])
+        self.assertEqual(messages[0].parts, [TextPart(content="A")])
+        self.assertEqual(messages[1].parts, [TextPart(content="B")])
+
+    def test_input_to_messages_standalone_content_merges_separately_from_steps(
+        self,
+    ) -> None:
+        steps = [
+            {"type": "text", "text": "Part 1"},
+            {
+                "type": "document",
+                "mime_type": "application/pdf",
+                "uri": "https://example.com/doc.pdf",
+            },
+            {
+                "type": "user_input",
+                "content": [{"type": "text", "text": "Next turn"}],
+            },
+            "Trailing text",
+        ]
+
+        messages = _interactions_input_to_messages(steps)
+
+        self.assertEqual([m.role for m in messages], ["user", "user", "user"])
+        self.assertEqual(
+            messages[0].parts,
+            [
+                TextPart(content="Part 1"),
+                UriPart(
+                    mime_type="application/pdf",
+                    modality="document",
+                    uri="https://example.com/doc.pdf",
+                ),
+            ],
+        )
+        self.assertEqual(messages[1].parts, [TextPart(content="Next turn")])
+        self.assertEqual(
+            messages[2].parts, [TextPart(content="Trailing text")]
+        )
 
     def test_response_to_messages(self) -> None:
         mock_interaction = unittest.mock.MagicMock()

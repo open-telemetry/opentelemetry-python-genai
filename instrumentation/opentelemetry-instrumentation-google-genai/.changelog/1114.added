@@ -1,0 +1,1 @@
+Support stateless multi-turn conversation history in Interactions API input capture, emitting per-role `user`, `assistant`, and `tool` messages and preserving `ModelOutputStep` content.

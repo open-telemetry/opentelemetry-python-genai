@@ -1378,6 +1378,11 @@ def _assert_create_tool_call_and_steps_span(
                     "mime_type": "video/mp4",
                     "content": _INLINE_VIDEO_BYTES,
                 },
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
                 {"type": "text", "content": "And in London?"},
                 {
                     "type": "uri",
@@ -1427,18 +1432,28 @@ def _assert_create_tool_call_and_steps_span(
                     "mime_type": "video/mp4",
                     "content": _INLINE_VIDEO_BYTES,
                 },
+            ],
+        },
+        {
+            "role": "tool",
+            "parts": [
                 {
                     "type": "tool_call_response",
                     "id": "call-123",
                     "response": [expected_text_result],
-                },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "parts": [
                 {
                     "type": "tool_call_response",
                     "id": "call-456",
                     "response": {"answer": None, "ok": True},
-                },
+                }
             ],
-        }
+        },
     ]
     assert get_content_attribute(
         span.attributes, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
@@ -1684,3 +1699,234 @@ async def test_async_interactions_get_with_tools_and_function_result(
     _assert_fetched_tools_and_function_result_span(
         otel_mocker, response, content_mode
     )
+
+
+def _stateless_multiturn_args() -> tuple[list[Any], list[Any]]:
+    try:
+        from google.genai._interactions.types import (
+            FunctionCallStep,
+            FunctionResultStep,
+            ModelOutputStep,
+            TextContent,
+            UserInputStep,
+        )
+    except ImportError:
+        from google.genai._gaos.types.interactions import (
+            FunctionCallStep,
+            FunctionResultStep,
+            ModelOutputStep,
+            TextContent,
+            UserInputStep,
+        )
+
+    steps: list[Any] = [
+        UserInputStep(
+            type="user_input",
+            content=[
+                TextContent(type="text", text="Weather in Paris and London?")
+            ],
+        ),
+        FunctionCallStep(
+            type="function_call",
+            id="call-1",
+            name="get_weather",
+            arguments={"city": "Paris"},
+        ),
+        FunctionCallStep(
+            type="function_call",
+            id="call-2",
+            name="get_weather",
+            arguments={"city": "London"},
+        ),
+        FunctionResultStep(
+            type="function_result",
+            call_id="call-1",
+            name="get_weather",
+            result={"temp": 22},
+        ),
+        FunctionResultStep(
+            type="function_result",
+            call_id="call-2",
+            name="get_weather",
+            result={"temp": 15},
+        ),
+        ModelOutputStep(
+            type="model_output",
+            content=[
+                TextContent(
+                    type="text", text="Paris is 22C and London is 15C."
+                )
+            ],
+        ),
+        {
+            "type": "user_input",
+            "content": [{"type": "text", "text": "Which is warmer?"}],
+        },
+        {
+            "type": "model_output",
+            "content": [{"type": "text", "text": "Paris is warmer."}],
+        },
+        UserInputStep(
+            type="user_input",
+            content=[TextContent(type="text", text="Thanks!")],
+        ),
+    ]
+    tools: list[Any] = [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        }
+    ]
+    return steps, tools
+
+
+def _assert_stateless_multiturn_span(
+    otel_mocker: OTelMocker, response: Any, content_mode: str
+) -> None:
+    assert response.status == "completed"
+    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    assert span is not None
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
+    assert "gen_ai.request.previous_response_id" not in span.attributes
+    if content_mode == "no_content_capture":
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+        return
+
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    ) == [
+        {
+            "role": "user",
+            "parts": [
+                {"type": "text", "content": "Weather in Paris and London?"}
+            ],
+        },
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "get_weather",
+                    "arguments": {"city": "Paris"},
+                },
+                {
+                    "type": "tool_call",
+                    "id": "call-2",
+                    "name": "get_weather",
+                    "arguments": {"city": "London"},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "parts": [
+                {
+                    "type": "tool_call_response",
+                    "id": "call-1",
+                    "response": {"temp": 22},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "parts": [
+                {
+                    "type": "tool_call_response",
+                    "id": "call-2",
+                    "response": {"temp": 15},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "text",
+                    "content": "Paris is 22C and London is 15C.",
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "Which is warmer?"}],
+        },
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "Paris is warmer."}],
+        },
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "Thanks!"}],
+        },
+    ]
+    expected_output_parts = [
+        {"type": "text", "content": part.text}
+        for step in response.steps or ()
+        if step.type == "model_output"
+        for part in step.content or ()
+        if part.type == "text" and isinstance(part.text, str)
+    ]
+    assert expected_output_parts
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": expected_output_parts,
+        }
+    ]
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_stateless_multiturn")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_stateless_multiturn(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps, tools = _stateless_multiturn_args()
+    response = client.interactions.create(
+        model=_STREAM_MODEL,
+        store=False,
+        input=steps,
+        tools=tools,
+    )
+
+    _assert_stateless_multiturn_span(otel_mocker, response, content_mode)
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_stateless_multiturn")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_stateless_multiturn(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps, tools = _stateless_multiturn_args()
+    response = await client.aio.interactions.create(
+        model=_STREAM_MODEL,
+        store=False,
+        input=steps,
+        tools=tools,
+    )
+
+    _assert_stateless_multiturn_span(otel_mocker, response, content_mode)
