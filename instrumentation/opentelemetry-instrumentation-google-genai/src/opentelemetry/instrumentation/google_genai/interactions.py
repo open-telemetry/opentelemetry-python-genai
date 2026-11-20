@@ -25,6 +25,7 @@ try:
         AsyncInteractionsResource,
         InteractionsResource,
     )
+    from google.genai._interactions.types.audio_content import AudioContent
     from google.genai._interactions.types.content import Content
     from google.genai._interactions.types.content_param import ContentParam
     from google.genai._interactions.types.document_content import (
@@ -36,6 +37,7 @@ try:
     from google.genai._interactions.types.function_result_step import (
         FunctionResultStep,
     )
+    from google.genai._interactions.types.image_content import ImageContent
     from google.genai._interactions.types.interaction import Interaction, Usage
     from google.genai._interactions.types.interaction_create_params import (
         Input,
@@ -46,6 +48,7 @@ try:
     from google.genai._interactions.types.step import Step
     from google.genai._interactions.types.text_content import TextContent
     from google.genai._interactions.types.user_input_step import UserInputStep
+    from google.genai._interactions.types.video_content import VideoContent
 
     _HAS_INTERACTIONS = True
     _MODEL_DUMP_EXCLUDE_UNSET = True
@@ -63,17 +66,20 @@ except ImportError:
             Interactions as InteractionsResource,
         )
         from google.genai._gaos.types.interactions import (
+            AudioContent,
             Content,
             ContentParam,
             DocumentContent,
             FunctionCallStep,
             FunctionResultStep,
+            ImageContent,
             Interaction,
             InteractionSSEEvent,
             Step,
             TextContent,
             Usage,
             UserInputStep,
+            VideoContent,
         )
         from google.genai._gaos.types.interactions import (
             InteractionsInput as Input,
@@ -111,8 +117,26 @@ except ImportError:
             type: str = "text"
             text: str = ""
 
+        class AudioContent:
+            type: str = "audio"
+            data: str | None = None
+            mime_type: str | None = None
+            uri: str | None = None
+
         class DocumentContent:
             type: str = "document"
+            data: str | None = None
+            mime_type: str | None = None
+            uri: str | None = None
+
+        class ImageContent:
+            type: str = "image"
+            data: str | None = None
+            mime_type: str | None = None
+            uri: str | None = None
+
+        class VideoContent:
+            type: str = "video"
             data: str | None = None
             mime_type: str | None = None
             uri: str | None = None
@@ -404,7 +428,7 @@ def _interaction_output_item_to_part(
         return ToolCallRequestPart(
             id=item.id if isinstance(item.id, str) else None,
             name=item.name if isinstance(item.name, str) else "",
-            arguments=_as_json_value(item.arguments),
+            arguments=item.arguments,
         )
     if isinstance(item, dict) and item.get("type") == "function_call":
         item_id = item.get("id")
@@ -412,7 +436,7 @@ def _interaction_output_item_to_part(
         return ToolCallRequestPart(
             id=item_id if isinstance(item_id, str) else None,
             name=name if isinstance(name, str) else "",
-            arguments=_as_json_value(item.get("arguments")),
+            arguments=item.get("arguments"),
         )
     return _to_server_tool_part(item)
 
@@ -423,19 +447,28 @@ def _interaction_item_to_part(
     if isinstance(item, FunctionResultStep):
         return ToolCallResponsePart(
             id=item.call_id if isinstance(item.call_id, str) else None,
-            response=_as_json_value(item.result),
+            response=item.result,
         )
     if isinstance(item, dict) and item.get("type") == "function_result":
         call_id = item.get("call_id")
         return ToolCallResponsePart(
             id=call_id if isinstance(call_id, str) else None,
-            response=_as_json_value(item.get("result")),
+            response=item.get("result"),
         )
     return _interaction_output_item_to_part(item)
 
 
-def _document_to_part(
+_MEDIA_CONTENT_MODALITIES: dict[str, Modality] = {
+    "audio": Modality.AUDIO,
+    "document": Modality.DOCUMENT,
+    "image": Modality.IMAGE,
+    "video": Modality.VIDEO,
+}
+
+
+def _media_to_part(
     *,
+    modality: Modality,
     mime_type: str | None,
     uri: str | None,
     data: str | None,
@@ -443,7 +476,7 @@ def _document_to_part(
     if uri:
         return UriPart(
             mime_type=mime_type,
-            modality=Modality.DOCUMENT,
+            modality=modality,
             uri=uri,
         )
     if data:
@@ -452,7 +485,7 @@ def _document_to_part(
             return None
         return BlobPart(
             mime_type=mime_type,
-            modality=Modality.DOCUMENT,
+            modality=modality,
             content=decoded,
         )
     return None
@@ -465,8 +498,11 @@ def _content_item_to_part(
         return TextPart(content=item)
     if isinstance(item, TextContent):
         return TextPart(content=item.text)
-    if isinstance(item, DocumentContent):
-        return _document_to_part(
+    if isinstance(
+        item, (AudioContent, DocumentContent, ImageContent, VideoContent)
+    ):
+        return _media_to_part(
+            modality=_MEDIA_CONTENT_MODALITIES[item.type],
             mime_type=item.mime_type,
             uri=item.uri,
             data=item.data,
@@ -476,11 +512,14 @@ def _content_item_to_part(
         if item_type == "text":
             text = item.get("text")
             return TextPart(content=text if isinstance(text, str) else "")
-        if item_type == "document":
+        if isinstance(item_type, str) and (
+            modality := _MEDIA_CONTENT_MODALITIES.get(item_type)
+        ):
             mime_type = item.get("mime_type")
             uri = item.get("uri")
             data = item.get("data")
-            return _document_to_part(
+            return _media_to_part(
+                modality=modality,
                 mime_type=mime_type if isinstance(mime_type, str) else None,
                 uri=uri if isinstance(uri, str) else None,
                 data=data if isinstance(data, str) else None,
@@ -535,16 +574,23 @@ def _interactions_input_to_messages(
                                 cast(dict[str, object], sub_item)
                             )
                         elif isinstance(
-                            sub_item, (str, TextContent, DocumentContent)
+                            sub_item,
+                            (
+                                str,
+                                TextContent,
+                                AudioContent,
+                                DocumentContent,
+                                ImageContent,
+                                VideoContent,
+                            ),
                         ):
                             part = _content_item_to_part(sub_item)
                         else:
                             part = None
                         if part is not None:
                             parts.append(part)
-            elif item_type in ("text", "document"):
-                if part := _content_item_to_part(item_dict):
-                    parts.append(part)
+            elif part := _content_item_to_part(item_dict):
+                parts.append(part)
             continue
 
         if isinstance(item, UserInputStep):
@@ -553,7 +599,16 @@ def _interactions_input_to_messages(
                     parts.append(part)
             continue
 
-        if isinstance(item, (TextContent, DocumentContent)):
+        if isinstance(
+            item,
+            (
+                TextContent,
+                AudioContent,
+                DocumentContent,
+                ImageContent,
+                VideoContent,
+            ),
+        ):
             if part := _content_item_to_part(item):
                 parts.append(part)
             continue
@@ -562,6 +617,8 @@ def _interactions_input_to_messages(
             if part := _interaction_item_to_part(cast(Step, item)):
                 parts.append(part)
 
+    if not parts:
+        return []
     return [InputMessage(role=Role.USER.value, parts=parts)]
 
 
@@ -1183,7 +1240,7 @@ def _maybe_get_tool_definitions(
                 FunctionToolDefinition(
                     name=tool.get("name") or "function",
                     description=tool.get("description"),
-                    parameters=_as_json_value(tool.get("parameters")),
+                    parameters=tool.get("parameters"),
                 )
             )
     return definitions if definitions else None

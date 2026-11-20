@@ -135,7 +135,7 @@ class TestInteractionsParser(unittest.TestCase):
     def test_input_to_messages_drops_unsupported_type(self) -> None:
         steps = [{"type": "some_unsupported_type"}]
         messages = _interactions_input_to_messages(steps)
-        self.assertEqual(messages[0].parts, [])
+        self.assertEqual(messages, [])
 
     def test_input_to_messages_single_non_sequence_step(self) -> None:
         step = {"type": "text", "text": "Hello single step"}
@@ -147,7 +147,7 @@ class TestInteractionsParser(unittest.TestCase):
     def test_input_to_messages_none_type_fall_through(self) -> None:
         step = {"other_field": "no type specified"}
         messages = _interactions_input_to_messages(step)
-        self.assertEqual(len(messages[0].parts), 0)
+        self.assertEqual(messages, [])
 
     def test_response_to_messages(self) -> None:
         mock_interaction = unittest.mock.MagicMock()

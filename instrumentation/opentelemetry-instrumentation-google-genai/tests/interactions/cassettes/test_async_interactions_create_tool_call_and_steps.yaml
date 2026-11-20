@@ -21,6 +21,36 @@ interactions:
                 "type": "document",
                 "mime_type": "application/pdf",
                 "data": "JVBERi0xLjQKaW5saW5lIGRvY3VtZW50"
+              },
+              {
+                "type": "image",
+                "mime_type": "image/png",
+                "uri": "https://example.com/paris.png"
+              },
+              {
+                "type": "image",
+                "mime_type": "image/png",
+                "data": "iVBORw0KGgppbmxpbmUgaW1hZ2U="
+              },
+              {
+                "type": "audio",
+                "mime_type": "audio/wav",
+                "uri": "https://example.com/paris.wav"
+              },
+              {
+                "type": "audio",
+                "mime_type": "audio/wav",
+                "data": "UklGRmlubGluZSBhdWRpbw=="
+              },
+              {
+                "type": "video",
+                "mime_type": "video/mp4",
+                "uri": "https://example.com/paris.mp4"
+              },
+              {
+                "type": "video",
+                "mime_type": "video/mp4",
+                "data": "AAAAGGZ0eXBpbmxpbmUgdmlkZW8="
               }
             ]
           },
@@ -40,6 +70,36 @@ interactions:
                 "type": "document",
                 "mime_type": "application/pdf",
                 "data": "JVBERi0xLjQKaW5saW5lIGRvY3VtZW50"
+              },
+              {
+                "type": "image",
+                "mime_type": "image/png",
+                "uri": "https://example.com/london.png"
+              },
+              {
+                "type": "image",
+                "mime_type": "image/png",
+                "data": "iVBORw0KGgppbmxpbmUgaW1hZ2U="
+              },
+              {
+                "type": "audio",
+                "mime_type": "audio/wav",
+                "uri": "https://example.com/london.wav"
+              },
+              {
+                "type": "audio",
+                "mime_type": "audio/wav",
+                "data": "UklGRmlubGluZSBhdWRpbw=="
+              },
+              {
+                "type": "video",
+                "mime_type": "video/mp4",
+                "uri": "https://example.com/london.mp4"
+              },
+              {
+                "type": "video",
+                "mime_type": "video/mp4",
+                "data": "AAAAGGZ0eXBpbmxpbmUgdmlkZW8="
               }
             ]
           },

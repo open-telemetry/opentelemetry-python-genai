@@ -1,1 +1,1 @@
-Fix Interactions API output message parts, tool definitions, and nested SDK model serialization.
+Fix Interactions API input capture of user input steps and media content, output message parts, tool definitions, and nested SDK model serialization.
