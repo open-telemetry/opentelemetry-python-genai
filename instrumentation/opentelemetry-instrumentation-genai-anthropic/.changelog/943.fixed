@@ -1,0 +1,1 @@
+Restore the caller's context while a message stream is unconsumed, so caller work is not parented under the inference span.

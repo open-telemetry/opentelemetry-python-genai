@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import functools
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -119,6 +120,12 @@ if beta_accumulate_event is not None:
         pass
 
 _accumulation_disabled = False
+
+# ``MessageStream`` helpers that drain the SDK stream through the SDK object
+# itself, so they never pass through the wrapper's scoped reads.
+_DRAINING_HELPERS = frozenset(
+    ("until_done", "get_final_message", "get_final_text")
+)
 
 
 class _StreamWrapperWithStream(Protocol):
@@ -328,16 +335,57 @@ class MessagesStreamWrapper(
     ):
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        invocation.suspend()
         self._self_message = None
         self._self_capture_content = capture_content
         self._self_message_telemetry_finalized = False
         self._self_json_bufs = {}
         self._self_is_beta = is_beta
         self._self_beta_accumulation_disabled = False
+        self._self_text_stream_source: object = None
+        self._self_text_stream: Iterator[str] | None = None
+
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            attribute = super().__getattr__(name)
+            if name == "text_stream":
+                return self._scoped_text_stream(attribute)
+            if name in _DRAINING_HELPERS:
+                return self._scoped_helper(attribute)
+            return attribute
+
+    def _scoped_text_stream(self, text_stream: Iterator[str]) -> Iterator[str]:
+        # The SDK exposes one shared generator, so hand back one shared wrapper.
+        if self._self_text_stream_source is not text_stream:
+            self._self_text_stream_source = text_stream
+            self._self_text_stream = self._read_text_stream(text_stream)
+        return cast("Iterator[str]", self._self_text_stream)
+
+    def _read_text_stream(self, text_stream: Iterator[str]) -> Iterator[str]:
+        while True:
+            with self._execution_context():
+                try:
+                    text = next(text_stream)
+                except StopIteration:
+                    return
+            yield text
+
+    def _scoped_helper(self, helper: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(helper)
+        def scoped(*args: Any, **kwargs: Any) -> Any:
+            with self._execution_context():
+                return helper(*args, **kwargs)
+
+        return scoped
 
     @property
     def response(self) -> _http_lib.Response:
-        return finalize_on_close(self.stream.response, self._stop)
+        return finalize_on_close(
+            self.stream.response,
+            self._stop,
+            execution_context=self._execution_context,
+        )
 
     @property
     def stream(
@@ -386,16 +434,63 @@ class AsyncMessagesStreamWrapper(
     ):
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        invocation.suspend()
         self._self_message = None
         self._self_capture_content = capture_content
         self._self_message_telemetry_finalized = False
         self._self_json_bufs = {}
         self._self_is_beta = is_beta
         self._self_beta_accumulation_disabled = False
+        self._self_text_stream_source: object = None
+        self._self_text_stream: AsyncIterator[str] | None = None
+
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            attribute = super().__getattr__(name)
+            if name == "text_stream":
+                return self._scoped_text_stream(attribute)
+            if name in _DRAINING_HELPERS:
+                return self._scoped_helper(attribute)
+            return attribute
+
+    def _scoped_text_stream(
+        self, text_stream: AsyncIterator[str]
+    ) -> AsyncIterator[str]:
+        # The SDK exposes one shared generator, so hand back one shared wrapper.
+        if self._self_text_stream_source is not text_stream:
+            self._self_text_stream_source = text_stream
+            self._self_text_stream = self._read_text_stream(text_stream)
+        return cast("AsyncIterator[str]", self._self_text_stream)
+
+    async def _read_text_stream(
+        self, text_stream: AsyncIterator[str]
+    ) -> AsyncIterator[str]:
+        while True:
+            with self._execution_context():
+                try:
+                    text = await anext(text_stream)
+                except StopAsyncIteration:
+                    return
+            yield text
+
+    def _scoped_helper(
+        self, helper: Callable[..., Awaitable[Any]]
+    ) -> Callable[..., Awaitable[Any]]:
+        @functools.wraps(helper)
+        async def scoped(*args: Any, **kwargs: Any) -> Any:
+            with self._execution_context():
+                return await helper(*args, **kwargs)
+
+        return scoped
 
     @property
     def response(self) -> _http_lib.Response:
-        return finalize_on_aclose(self.stream.response, self._stop)
+        return finalize_on_aclose(
+            self.stream.response,
+            self._stop,
+            execution_context=self._execution_context,
+        )
 
     @property
     def stream(
