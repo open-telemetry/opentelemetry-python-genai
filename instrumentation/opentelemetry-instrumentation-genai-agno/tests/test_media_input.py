@@ -198,7 +198,7 @@ def test_agent_captures_blob_data_url_and_filepath_media(
         {
             "type": "uri",
             "modality": "image",
-            "uri": "/nonexistent/path/cat.png",
+            "uri": Path("/nonexistent/path/cat.png").absolute().as_uri(),
         },
         {
             "type": "blob",
@@ -321,7 +321,7 @@ def test_agent_media_omitted_when_content_capture_disabled(
     span_exporter,
     is_async: bool,
 ) -> None:
-    """Media input (including generators) reaches Agno untouched and is not recorded when disabled."""
+    """Media input reaches Agno untouched and is not recorded when content capture is disabled."""
     agent = Agent(name="no-capture-agent", model=MockModel(id="mock-model"))
     sent_urls: list[str] = []
     _run_agent(
@@ -329,7 +329,7 @@ def test_agent_media_omitted_when_content_capture_disabled(
         is_async=is_async,
         sent_image_urls=sent_urls,
         input="Describe",
-        images=(Image(url="https://example.com/cat.png") for _ in range(1)),
+        images=[Image(url="https://example.com/cat.png")],
         files=[File(content=b"%PDF", mime_type="application/pdf")],
     )
 
@@ -394,48 +394,12 @@ def test_agent_agno3_file_id_external_and_media_reference(
     )
 
 
-@pytest.mark.parametrize("is_async", [False, True])
-@pytest.mark.parametrize("stream", [False, True])
-def test_agent_generator_media_reaches_sdk_and_is_captured(
-    instrument_agno_content_capture,
-    span_exporter,
-    is_async: bool,
-    stream: bool,
-) -> None:
-    """Generator media inputs are recorded via IteratorCapture without draining them early."""
-    agent = Agent(name="gen-media-agent", model=MockModel(id="mock-model"))
-    urls = ("https://example.com/gen-1.png", "https://example.com/gen-2.png")
-    sent_urls: list[str] = []
-
-    _run_agent(
-        agent,
-        is_async=is_async,
-        stream=stream,
-        sent_image_urls=sent_urls,
-        input="Generator media",
-        images=(Image(url=u) for u in urls),
-    )
-
-    assert sent_urls == list(urls)
-    assert _input_parts(span_exporter) == (
-        {"type": "text", "content": "Generator media"},
-        {"type": "uri", "modality": "image", "uri": urls[0]},
-        {"type": "uri", "modality": "image", "uri": urls[1]},
-    )
-
-
-def test_agent_run_error_preserves_list_and_does_not_drain_generator(
+def test_agent_run_error_preserves_media_input(
     instrument_agno_content_capture,
     span_exporter,
 ) -> None:
-    """Failed Agent.run records list media, leaves unread generators unconsumed, and sets error.type."""
+    """Failed Agent.run still records media inputs and sets error.type."""
     agent = Agent(name="err-media-agent", model=MockModel(id="mock-model"))
-    yielded = 0
-
-    def _gen():
-        nonlocal yielded
-        yielded += 1
-        yield File(url="https://example.com/unread.pdf")
 
     with (
         patch.object(
@@ -446,10 +410,9 @@ def test_agent_run_error_preserves_list_and_does_not_drain_generator(
         agent.run(
             input="Fail with media",
             images=[Image(url="https://example.com/err.png")],
-            files=_gen(),
+            files=[File(url="https://example.com/err.pdf")],
         )
 
-    assert yielded == 0
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].status.status_code == StatusCode.ERROR
@@ -462,6 +425,11 @@ def test_agent_run_error_preserves_list_and_does_not_drain_generator(
             "type": "uri",
             "modality": "image",
             "uri": "https://example.com/err.png",
+        },
+        {
+            "type": "uri",
+            "modality": "document",
+            "uri": "https://example.com/err.pdf",
         },
     )
 

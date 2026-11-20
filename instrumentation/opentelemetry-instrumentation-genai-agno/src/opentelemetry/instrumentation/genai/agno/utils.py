@@ -9,6 +9,7 @@ import mimetypes
 import os
 from collections.abc import Callable, Iterable, Sequence
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 if TYPE_CHECKING:
@@ -194,14 +195,12 @@ def _media_to_part(
             content=media.content.encode("utf-8"),
         )
 
-    if media.filepath is not None:
-        filepath_str = str(media.filepath)
-        if filepath_str:
-            return UriPart(
-                mime_type=mime_type,
-                modality=modality,
-                uri=filepath_str,
-            )
+    if media.filepath:
+        return UriPart(
+            mime_type=mime_type,
+            modality=modality,
+            uri=Path(media.filepath).absolute().as_uri(),
+        )
 
     if media_ref is not None:
         if media_ref.url:
@@ -258,7 +257,7 @@ def extract_media_parts(
 
 def is_agno_message(val: object) -> TypeGuard[Message]:
     """Return True if val is an Agno Message instance."""
-    if val is None or isinstance(val, (str, bytes, dict, list, tuple)):
+    if val is None:
         return False
     return isinstance(val, _load_message_class())
 
