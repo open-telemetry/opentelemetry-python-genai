@@ -16,7 +16,15 @@ from collections.abc import (
 )
 from sys import float_info
 from types import UnionType
-from typing import Annotated, Any, Union, cast, get_args, get_origin
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+)
 
 try:
     # Google GenAI < 2.9.0
@@ -88,90 +96,16 @@ except ImportError:
         _HAS_INTERACTIONS = True
         _MODEL_DUMP_EXCLUDE_UNSET = False
     except ImportError:
+        if TYPE_CHECKING:
+            raise
         _HAS_INTERACTIONS = False
         _MODEL_DUMP_EXCLUDE_UNSET = False
-
-        # Placeholders for older versions where interactions are not supported
-        class InteractionsResource:
-            create = None
-            get = None
-
-        class AsyncInteractionsResource:
-            create = None
-            get = None
-
-        class Interaction:
-            model = None
-            usage = None
-
-        class Usage:
-            total_input_tokens = None
-            total_output_tokens = None
-            total_thought_tokens = None
-            total_cached_tokens = None
-
-        class Content:
-            pass
-
-        class TextContent:
-            type: str = "text"
-            text: str = ""
-
-        class AudioContent:
-            type: str = "audio"
-            data: str | None = None
-            mime_type: str | None = None
-            uri: str | None = None
-
-        class DocumentContent:
-            type: str = "document"
-            data: str | None = None
-            mime_type: str | None = None
-            uri: str | None = None
-
-        class ImageContent:
-            type: str = "image"
-            data: str | None = None
-            mime_type: str | None = None
-            uri: str | None = None
-
-        class VideoContent:
-            type: str = "video"
-            data: str | None = None
-            mime_type: str | None = None
-            uri: str | None = None
-
-        class UserInputStep:
-            type: str = "user_input"
-            content: Sequence[Content] | None = None
-
-        class FunctionCallStep:
-            type: str = "function_call"
-            id: str = ""
-            name: str = ""
-            arguments: dict[str, Any]
-
-        class FunctionResultStep:
-            type: str = "function_result"
-            call_id: str = ""
-            result: Any = None
-
-        ContentParam = dict[str, object]
-
-        class Input:
-            pass
-
-        class InteractionSSEEvent:
-            pass
-
-        class Step:
-            pass
-
-        class Stream:
-            pass
-
-        class AsyncStream:
-            pass
+        # Only names referenced at module/test import time when interactions
+        # are unavailable.
+        InteractionsResource = None
+        AsyncInteractionsResource = None
+        Interaction = None
+        InteractionSSEEvent = object
 
 
 from wrapt import wrap_function_wrapper
