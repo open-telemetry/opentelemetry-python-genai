@@ -403,7 +403,7 @@ class OutputMessage:
 
 
 @dataclass()
-class RetrievalDocument:
+class RetrievalDocument(_AnyValueMapping):
     """Represents a document retrieved from a vector database or search system.
 
     Mirrors the `GenAI retrieval Python model - RetrievalDocument

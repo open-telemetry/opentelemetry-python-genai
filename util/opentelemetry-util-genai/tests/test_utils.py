@@ -1693,6 +1693,26 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
+    def test_retrieval_documents_are_mappings_without_conversion(self):
+        cases = [
+            (RetrievalDocument(), {}),
+            (
+                RetrievalDocument(id="doc-1", score=0.95),
+                {"id": "doc-1", "score": 0.95},
+            ),
+            (RetrievalDocument(id=""), {"id": ""}),
+            (RetrievalDocument(score=0.0), {"score": 0.0}),
+        ]
+        with patch(
+            "opentelemetry.util.genai.utils.object_to_any_value"
+        ) as convert:
+            for document, expected in cases:
+                with self.subTest(document=document):
+                    self.assertIsInstance(document, Mapping)
+                    self.assertEqual(dict(document), expected)
+                    self.assertEqual(len(document), len(expected))
+            convert.assert_not_called()
+
     def test_tool_payload_mappings(self):
         @dataclass
         class Payload:
@@ -1905,13 +1925,7 @@ class TestMessageModels(unittest.TestCase):
             convert.assert_called_once_with(arguments)
 
     def test_empty_content_mapping_is_truthy(self):
-        from opentelemetry.util.genai.types import _AnyValueMapping
-
-        @dataclass
-        class EmptyModel(_AnyValueMapping):
-            value: str | None = None
-
-        model = EmptyModel()
+        model = RetrievalDocument()
         self.assertEqual(dict(model), {})
         self.assertEqual(len(model), 0)
         self.assertTrue(model)
