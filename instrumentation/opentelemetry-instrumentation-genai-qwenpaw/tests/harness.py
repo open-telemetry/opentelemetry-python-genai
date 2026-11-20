@@ -1,17 +1,19 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared helpers to drive ``AgentRunner.query_handler`` without a real agent.
+"""Drive both QwenPaw runtime generations without a real agent.
 
 Tests route a slash-command turn (``/stop``) through ``query_handler`` and
 replace the module-level ``run_command_path`` coroutine with a canned async
-generator, so no model, tool, or network access is involved.
+generator. Runtime tests inject an agent reply stream through the real builder,
+so no model, tool, or network access is involved.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from importlib import import_module
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -28,9 +30,15 @@ def assistant_reply(text: str) -> Any:
 
 
 def user_command_msgs(text: str = "/stop") -> list[Any]:
-    from agentscope.message import Msg
+    from agentscope.message import Msg, TextBlock
 
-    return [Msg(name="user", role="user", content=text)]
+    return [
+        Msg(
+            name="user",
+            role="user",
+            content=[TextBlock(type="text", text=text)],
+        )
+    ]
 
 
 def make_request(
@@ -96,3 +104,65 @@ def patched_command_path(runner_module: Any, fake: Any) -> Iterator[None]:
             mock.patch.object(runner_module, "run_command_path", fake)
         )
         yield
+
+
+def runtime_request(
+    text: str = "/test", session_id: str | None = "sess-2"
+) -> Any:
+    from qwenpaw.schemas import AgentRequest, Message, Role, TextContent
+
+    return AgentRequest(
+        input=[Message(role=Role.USER, content=[TextContent(text=text)])],
+        session_id=session_id,
+    )
+
+
+def make_runtime(response_text: str = "Runtime reply.") -> Any:
+    """Use the real 2.x command registry, hooks, runtime and envelope encoder."""
+    from qwenpaw.runtime.hooks import HookRegistry
+    from qwenpaw.runtime.runtime import Runtime
+    from qwenpaw.runtime.slash_command_registry import (
+        CommandSpec,
+        SlashCommandRegistry,
+    )
+
+    async def reply(ctx: Any, args: str) -> Any:
+        del ctx, args
+        return assistant_reply(response_text)
+
+    commands = SlashCommandRegistry()
+    commands.register(CommandSpec(name="test", handler=reply))
+    workspace = SimpleNamespace(
+        agent_id="test-agent",
+        workspace_dir=None,
+        _config=SimpleNamespace(name="Friday"),
+        plugins=SimpleNamespace(
+            hook_registry=HookRegistry(), slash_command_registry=commands
+        ),
+    )
+    return Runtime(workspace=workspace, app_services=None)
+
+
+@contextmanager
+def patched_runtime_agent(
+    reply_stream: Callable[..., AsyncGenerator[Any, None]],
+) -> Iterator[Any]:
+    runtime_module = import_module("qwenpaw.runtime.runtime")
+    runtime = make_runtime()
+    runtime.workspace.plugins.modes = []
+    agent = SimpleNamespace(reply_stream=reply_stream, close=mock.AsyncMock())
+    with ExitStack() as stack:
+        stack.enter_context(
+            mock.patch.object(
+                runtime_module.AgentBuilder,
+                "build",
+                mock.AsyncMock(return_value=agent),
+            )
+        )
+        if hasattr(runtime_module, "record_agent_activity"):
+            stack.enter_context(
+                mock.patch.object(
+                    runtime_module, "record_agent_activity", mock.AsyncMock()
+                )
+            )
+        yield runtime
