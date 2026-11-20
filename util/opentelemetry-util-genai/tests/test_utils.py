@@ -40,6 +40,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
     BlobPart,
+    CompactionPart,
     ContentCapturingMode,
     File,
     FilePart,
@@ -1751,6 +1752,27 @@ class TestMessageModels(unittest.TestCase):
                 {"content": "thinking", "type": "reasoning"},
             ),
             (ReasoningPart(content=""), {"content": "", "type": "reasoning"}),
+            (CompactionPart(), {"type": "compaction"}),
+            (
+                CompactionPart(id="compact-1"),
+                {"id": "compact-1", "type": "compaction"},
+            ),
+            (
+                CompactionPart(content="summary"),
+                {"content": "summary", "type": "compaction"},
+            ),
+            (
+                CompactionPart(id="compact-1", content="summary"),
+                {
+                    "id": "compact-1",
+                    "content": "summary",
+                    "type": "compaction",
+                },
+            ),
+            (
+                CompactionPart(id="", content=""),
+                {"id": "", "content": "", "type": "compaction"},
+            ),
             (
                 BlobPart(
                     mime_type=None,

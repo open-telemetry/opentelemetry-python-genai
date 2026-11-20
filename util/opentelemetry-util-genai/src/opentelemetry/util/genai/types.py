@@ -185,7 +185,7 @@ class ReasoningPart(_AnyValueMapping):
 
 
 @dataclass()
-class CompactionPart:
+class CompactionPart(_AnyValueMapping):
     """Represents a server-side context compaction event.
 
     A bare ``CompactionPart`` (only ``type`` set) is the common case: it
