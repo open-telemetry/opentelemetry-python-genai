@@ -1,9 +1,11 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import json
 import os
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -24,7 +26,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.test_util_genai.instrumentor import instrument
-from opentelemetry.trace import StatusCode, get_tracer_provider
+from opentelemetry.trace import (
+    StatusCode,
+    get_current_span,
+    get_tracer_provider,
+)
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -996,11 +1002,13 @@ def test_sync_interactions_get_streaming(
     # Proves the real SSE completion event is recognised and applied.
     assert span.attributes["gen_ai.response.status"] == interaction.status
     assert span.attributes["gen_ai.response.model"] == interaction.model
-    # The create call is a separate operation with its own span.
-    assert (
-        otel_mocker.get_span_named(f"interactions.create {_BACKGROUND_MODEL}")
-        is not None
+    # The create call is a separate operation with its own span; an in-progress
+    # background response has no output parts yet and must omit output messages.
+    create_span = otel_mocker.get_span_named(
+        f"interactions.create {_BACKGROUND_MODEL}"
     )
+    assert create_span is not None
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in create_span.attributes
     # The completion event carries metadata only (`steps` comes back null), so
     # the captured content has to come from the step deltas.
     assert interaction.steps is None
@@ -1083,4 +1091,729 @@ def test_sync_interactions_get_resumed_stream(
     assert any(
         f"last_event_id={cursor}" in request.uri
         for request in vcr_cassette.requests
+    )
+
+
+_INLINE_DOCUMENT_BYTES = b"%PDF-1.4\ninline document"
+_INLINE_DOCUMENT_B64 = base64.b64encode(_INLINE_DOCUMENT_BYTES).decode("ascii")
+_INLINE_IMAGE_BYTES = b"\x89PNG\r\n\x1a\ninline image"
+_INLINE_IMAGE_B64 = base64.b64encode(_INLINE_IMAGE_BYTES).decode("ascii")
+_INLINE_AUDIO_BYTES = b"RIFFinline audio"
+_INLINE_AUDIO_B64 = base64.b64encode(_INLINE_AUDIO_BYTES).decode("ascii")
+_INLINE_VIDEO_BYTES = b"\x00\x00\x00\x18ftypinline video"
+_INLINE_VIDEO_B64 = base64.b64encode(_INLINE_VIDEO_BYTES).decode("ascii")
+
+
+def _uses_legacy_interactions_sdk() -> bool:
+    try:
+        from google.genai._interactions.resources.interactions import (  # noqa: F401
+            InteractionsResource,
+        )
+
+        return True
+    except ImportError:
+        return False
+
+
+def _create_tool_call_and_steps_args() -> tuple[list[Any], list[Any]]:
+    try:
+        from google.genai._interactions.types import (
+            AudioContent,
+            DocumentContent,
+            Function,
+            FunctionResultStep,
+            ImageContent,
+            TextContent,
+            UserInputStep,
+            VideoContent,
+        )
+        from google.genai._interactions.types.tool import GoogleSearch
+
+        null_result: Any = {"answer": None, "ok": True}
+    except ImportError:
+        from google.genai._gaos.types.interactions import (
+            AudioContent,
+            DocumentContent,
+            Function,
+            FunctionResultStep,
+            FunctionResultStepResult,
+            GoogleSearch,
+            ImageContent,
+            TextContent,
+            UserInputStep,
+            VideoContent,
+        )
+
+        null_result = FunctionResultStepResult(answer=None, ok=True)
+
+    steps: list[Any] = [
+        UserInputStep(
+            type="user_input",
+            content=[
+                TextContent(type="text", text="What is the weather in Paris?"),
+                DocumentContent(
+                    type="document",
+                    mime_type="application/pdf",
+                    uri="https://example.com/doc.pdf",
+                ),
+                DocumentContent(
+                    type="document",
+                    mime_type="application/pdf",
+                    data=_INLINE_DOCUMENT_B64,
+                ),
+                ImageContent(
+                    type="image",
+                    mime_type="image/png",
+                    uri="https://example.com/paris.png",
+                ),
+                ImageContent(
+                    type="image",
+                    mime_type="image/png",
+                    data=_INLINE_IMAGE_B64,
+                ),
+                AudioContent(
+                    type="audio",
+                    mime_type="audio/wav",
+                    uri="https://example.com/paris.wav",
+                ),
+                AudioContent(
+                    type="audio",
+                    mime_type="audio/wav",
+                    data=_INLINE_AUDIO_B64,
+                ),
+                VideoContent(
+                    type="video",
+                    mime_type="video/mp4",
+                    uri="https://example.com/paris.mp4",
+                ),
+                VideoContent(
+                    type="video",
+                    mime_type="video/mp4",
+                    data=_INLINE_VIDEO_B64,
+                ),
+            ],
+        ),
+        {
+            "type": "user_input",
+            "content": [
+                {"type": "text", "text": "And in London?"},
+                {
+                    "type": "document",
+                    "mime_type": "application/pdf",
+                    "uri": "https://example.com/london.pdf",
+                },
+                {
+                    "type": "document",
+                    "mime_type": "application/pdf",
+                    "data": _INLINE_DOCUMENT_B64,
+                },
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "uri": "https://example.com/london.png",
+                },
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "data": _INLINE_IMAGE_B64,
+                },
+                {
+                    "type": "audio",
+                    "mime_type": "audio/wav",
+                    "uri": "https://example.com/london.wav",
+                },
+                {
+                    "type": "audio",
+                    "mime_type": "audio/wav",
+                    "data": _INLINE_AUDIO_B64,
+                },
+                {
+                    "type": "video",
+                    "mime_type": "video/mp4",
+                    "uri": "https://example.com/london.mp4",
+                },
+                {
+                    "type": "video",
+                    "mime_type": "video/mp4",
+                    "data": _INLINE_VIDEO_B64,
+                },
+            ],
+        },
+        FunctionResultStep(
+            type="function_result",
+            call_id="call-123",
+            name="get_weather",
+            result=[TextContent(type="text", text="22C and Sunny")],
+        ),
+        FunctionResultStep(
+            type="function_result",
+            call_id="call-456",
+            name="get_alert",
+            result=null_result,
+        ),
+    ]
+    tools: list[Any] = [
+        Function(
+            type="function",
+            name="get_weather",
+            description="Get the current weather for a city.",
+            parameters={
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        ),
+        GoogleSearch(type="google_search"),
+        {
+            "type": "function",
+            "name": "get_forecast",
+            "description": "Get forecast.",
+            "parameters": {
+                "type": "object",
+                "properties": {"days": {"type": "integer"}},
+            },
+        },
+    ]
+    return steps, tools
+
+
+def _assert_create_tool_call_and_steps_span(
+    otel_mocker: OTelMocker, response: Any, content_mode: str
+) -> None:
+    assert response.status == "requires_action"
+    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    assert span is not None
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("tool_calls",)
+    assert span.attributes["gen_ai.usage.input_tokens"] == 42
+    assert span.attributes["gen_ai.usage.output_tokens"] == 15
+    assert span.attributes["gen_ai.usage.cache_read.input_tokens"] == 5
+    if content_mode == "no_content_capture":
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+        assert "gen_ai.tool.definitions" not in span.attributes
+        return
+
+    assert get_content_attribute(
+        span.attributes, "gen_ai.tool.definitions"
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+        {"type": "google_search", "name": "google_search"},
+        {
+            "type": "function",
+            "name": "get_forecast",
+            "description": "Get forecast.",
+            "parameters": {
+                "type": "object",
+                "properties": {"days": {"type": "integer"}},
+            },
+        },
+    ]
+    expected_text_result: dict[str, Any] = {
+        "type": "text",
+        "text": "22C and Sunny",
+    }
+    if _uses_legacy_interactions_sdk():
+        expected_text_result["annotations"] = None
+
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    ) == [
+        {
+            "role": "user",
+            "parts": [
+                {"type": "text", "content": "What is the weather in Paris?"},
+                {
+                    "type": "uri",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "uri": "https://example.com/doc.pdf",
+                },
+                {
+                    "type": "blob",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "content": _INLINE_DOCUMENT_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "uri": "https://example.com/paris.png",
+                },
+                {
+                    "type": "blob",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "content": _INLINE_IMAGE_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "uri": "https://example.com/paris.wav",
+                },
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "content": _INLINE_AUDIO_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "video",
+                    "mime_type": "video/mp4",
+                    "uri": "https://example.com/paris.mp4",
+                },
+                {
+                    "type": "blob",
+                    "modality": "video",
+                    "mime_type": "video/mp4",
+                    "content": _INLINE_VIDEO_BYTES,
+                },
+                {"type": "text", "content": "And in London?"},
+                {
+                    "type": "uri",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "uri": "https://example.com/london.pdf",
+                },
+                {
+                    "type": "blob",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "content": _INLINE_DOCUMENT_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "uri": "https://example.com/london.png",
+                },
+                {
+                    "type": "blob",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "content": _INLINE_IMAGE_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "uri": "https://example.com/london.wav",
+                },
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "content": _INLINE_AUDIO_BYTES,
+                },
+                {
+                    "type": "uri",
+                    "modality": "video",
+                    "mime_type": "video/mp4",
+                    "uri": "https://example.com/london.mp4",
+                },
+                {
+                    "type": "blob",
+                    "modality": "video",
+                    "mime_type": "video/mp4",
+                    "content": _INLINE_VIDEO_BYTES,
+                },
+                {
+                    "type": "tool_call_response",
+                    "id": "call-123",
+                    "response": [expected_text_result],
+                },
+                {
+                    "type": "tool_call_response",
+                    "id": "call-456",
+                    "response": {"answer": None, "ok": True},
+                },
+            ],
+        }
+    ]
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "id": "call-2",
+                    "name": "get_forecast",
+                    "arguments": {
+                        "location": {"city": "London"},
+                        "days": 3,
+                    },
+                }
+            ],
+        }
+    ]
+
+
+def _expected_malformed_input_exception() -> type[Exception]:
+    if _uses_legacy_interactions_sdk():
+        from google.genai._interactions import BadRequestError
+
+        return BadRequestError
+    from pydantic import ValidationError
+
+    return ValidationError
+
+
+def _assert_malformed_input_span(
+    otel_mocker: OTelMocker, exc: BaseException
+) -> None:
+    from pydantic import ValidationError
+
+    assert not get_current_span().get_span_context().is_valid
+    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    if isinstance(exc, ValidationError):
+        assert any("input" in err["loc"] for err in exc.errors())
+        assert (
+            span.attributes["error.type"]
+            == "pydantic_core._pydantic_core.ValidationError"
+        )
+    else:
+        from google.genai._interactions import BadRequestError
+
+        assert isinstance(exc, BadRequestError)
+        assert exc.status_code == 400
+        assert (
+            "'input' must be a Content[], string, Turn[], Step[], or Content"
+            in str(exc)
+        )
+        assert span.attributes["error.type"] == "400"
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_malformed_input")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_malformed_input(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    expected_exc = _expected_malformed_input_exception()
+    with pytest.raises(expected_exc) as exc_info:
+        client.interactions.create(
+            model="gemini-2.5-flash",
+            input=[None, {"type": "user_input", "content": [None]}],
+        )
+
+    _assert_malformed_input_span(otel_mocker, exc_info.value)
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_malformed_input")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_malformed_input(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    expected_exc = _expected_malformed_input_exception()
+    with pytest.raises(expected_exc) as exc_info:
+        await client.aio.interactions.create(
+            model="gemini-2.5-flash",
+            input=[None, {"type": "user_input", "content": [None]}],
+        )
+
+    _assert_malformed_input_span(otel_mocker, exc_info.value)
+
+
+@dataclass
+class _ServerToolMeta:
+    source: str
+
+
+def _server_tool_dict_cycle_and_dataclass_steps() -> list[dict[str, Any]]:
+    cyclic_args: dict[str, Any] = {"queries": ["OpenTelemetry"]}
+    cyclic_args["self"] = cyclic_args
+    return [
+        {
+            "type": "google_search_call",
+            "id": "search-1",
+            "arguments": cyclic_args,
+        },
+        {
+            "type": "google_search_result",
+            "call_id": "search-1",
+            "result": [{"meta": _ServerToolMeta(source="docs")}],
+        },
+    ]
+
+
+def _expected_cyclic_server_tool_exception() -> type[Exception]:
+    if _uses_legacy_interactions_sdk():
+        return ValueError
+    from pydantic_core import PydanticSerializationError
+
+    return PydanticSerializationError
+
+
+def _assert_cyclic_server_tool_span(
+    otel_mocker: OTelMocker,
+    exc: BaseException,
+    steps: list[dict[str, Any]],
+    content_mode: str,
+) -> None:
+    assert not get_current_span().get_span_context().is_valid
+    assert "Circular reference detected" in str(exc)
+    # Caller-supplied server-tool dictionaries must not be mutated in place.
+    assert steps[0]["type"] == "google_search_call"
+    assert steps[0]["id"] == "search-1"
+    assert steps[1]["type"] == "google_search_result"
+    assert steps[1]["call_id"] == "search-1"
+
+    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    expected_error_type = (
+        "ValueError"
+        if _uses_legacy_interactions_sdk()
+        else "pydantic_core._pydantic_core.PydanticSerializationError"
+    )
+    assert span.attributes["error.type"] == expected_error_type
+    if content_mode == "no_content_capture":
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+        return
+
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    ) == [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "type": "server_tool_call",
+                    "id": "search-1",
+                    "name": "google_search",
+                    "server_tool_call": {
+                        "type": "google_search",
+                        "arguments": {"queries": ["OpenTelemetry"]},
+                    },
+                },
+                {
+                    "type": "server_tool_call_response",
+                    "id": "search-1",
+                    "server_tool_call_response": {
+                        "type": "google_search",
+                        "result": [{"meta": {"source": "docs"}}],
+                    },
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_server_tool_dict_cycle_and_dataclass(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps = _server_tool_dict_cycle_and_dataclass_steps()
+    expected_exc = _expected_cyclic_server_tool_exception()
+    with pytest.raises(expected_exc) as exc_info:
+        client.interactions.create(
+            model="gemini-2.5-flash",
+            input=steps,
+        )
+
+    _assert_cyclic_server_tool_span(
+        otel_mocker, exc_info.value, steps, content_mode
+    )
+
+
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_server_tool_dict_cycle_and_dataclass(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps = _server_tool_dict_cycle_and_dataclass_steps()
+    expected_exc = _expected_cyclic_server_tool_exception()
+    with pytest.raises(expected_exc) as exc_info:
+        await client.aio.interactions.create(
+            model="gemini-2.5-flash",
+            input=steps,
+        )
+
+    _assert_cyclic_server_tool_span(
+        otel_mocker, exc_info.value, steps, content_mode
+    )
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_tool_call_and_steps")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_tool_call_and_steps(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps, tools = _create_tool_call_and_steps_args()
+    response = client.interactions.create(
+        model="gemini-2.5-flash",
+        input=steps,
+        tools=tools,
+    )
+
+    _assert_create_tool_call_and_steps_span(
+        otel_mocker, response, content_mode
+    )
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_tool_call_and_steps")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_tool_call_and_steps(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps, tools = _create_tool_call_and_steps_args()
+    response = await client.aio.interactions.create(
+        model="gemini-2.5-flash",
+        input=steps,
+        tools=tools,
+    )
+
+    _assert_create_tool_call_and_steps_span(
+        otel_mocker, response, content_mode
+    )
+
+
+def _assert_fetched_tools_and_function_result_span(
+    otel_mocker: OTelMocker, response: Any, content_mode: str
+) -> None:
+    assert response.id == _INTERACTION_ID
+    assert response.status == "completed"
+    span = _fetch_span(otel_mocker)
+    assert span.attributes["gen_ai.response.id"] == response.id
+    assert span.attributes["gen_ai.response.status"] == "completed"
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    if content_mode == "no_content_capture":
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+        assert "gen_ai.tool.definitions" not in span.attributes
+        return
+
+    assert get_content_attribute(
+        span.attributes, "gen_ai.tool.definitions"
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+        {"type": "google_search", "name": "google_search"},
+    ]
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "get_weather",
+                    "arguments": {"location": {"city": "Paris"}},
+                },
+                {
+                    "type": "text",
+                    "content": "It is 22C and Sunny in Paris.",
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.vcr(match_on=_GET_MATCH_ON)
+@pytest.mark.cassette(
+    "test_sync_interactions_get_with_tools_and_function_result"
+)
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_get_with_tools_and_function_result(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    response = client.interactions.get(_INTERACTION_ID)
+
+    _assert_fetched_tools_and_function_result_span(
+        otel_mocker, response, content_mode
+    )
+
+
+@pytest.mark.vcr(match_on=_GET_MATCH_ON)
+@pytest.mark.cassette(
+    "test_async_interactions_get_with_tools_and_function_result"
+)
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_get_with_tools_and_function_result(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    response = await client.aio.interactions.get(id=_INTERACTION_ID)
+
+    _assert_fetched_tools_and_function_result_span(
+        otel_mocker, response, content_mode
     )

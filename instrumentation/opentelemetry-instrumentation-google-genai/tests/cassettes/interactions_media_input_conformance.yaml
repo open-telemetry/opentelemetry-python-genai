@@ -1,0 +1,187 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "gemini-2.5-flash",
+        "input": [
+          {
+            "content": [
+              {
+                "text": "Reply with OK if you received all attachments.",
+                "type": "text"
+              },
+              {
+                "mime_type": "application/pdf",
+                "type": "document",
+                "uri": "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/salary_table.pdf"
+              },
+              {
+                "data": "JVBERi0xLjQKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqCjIgMCBvYmo8PC9UeXBlL1BhZ2VzL0NvdW50IDEvS2lkc1szIDAgUl0+PmVuZG9iagozIDAgb2JqPDwvVHlwZS9QYWdlL01lZGlhQm94WzAgMCAyMDAgMjAwXS9QYXJlbnQgMiAwIFIvUmVzb3VyY2VzPDwvRm9udDw8L0YxIDQgMCBSPj4+Pi9Db250ZW50cyA1IDAgUj4+ZW5kb2JqCjQgMCBvYmo8PC9UeXBlL0ZvbnQvU3VidHlwZS9UeXBlMS9CYXNlRm9udC9IZWx2ZXRpY2E+PmVuZG9iago1IDAgb2JqPDwvTGVuZ3RoIDQ0Pj5zdHJlYW0KQlQgL0YxIDEyIFRmIDIwIDEwMCBUZCAoQ2l0eTogUGFyaXMpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTYgMDAwMDAgbiAKMDAwMDAwMDExMSAwMDAwMCBuIAowMDAwMDAwMjMyIDAwMDAwIG4gCjAwMDAwMDAyOTcgMDAwMDAgbiAKdHJhaWxlcjw8L1NpemUgNi9Sb290IDEgMCBSPj4Kc3RhcnR4cmVmCjM5MQolJUVPRgo=",
+                "mime_type": "application/pdf",
+                "type": "document"
+              },
+              {
+                "mime_type": "image/png",
+                "type": "image",
+                "uri": "https://storage.googleapis.com/cloud-samples-data/generative-ai/image/drawing1.png"
+              },
+              {
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+                "mime_type": "image/png",
+                "type": "image"
+              },
+              {
+                "mime_type": "audio/wav",
+                "type": "audio",
+                "uri": "https://storage.googleapis.com/cloud-samples-data/generative-ai/audio/hello_gemini_are_you_there.wav"
+              },
+              {
+                "data": "UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                "mime_type": "audio/wav",
+                "type": "audio"
+              },
+              {
+                "mime_type": "video/mp4",
+                "type": "video",
+                "uri": "https://storage.googleapis.com/cloud-samples-data/generative-ai/video/cartwheel.mp4"
+              },
+              {
+                "data": "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMGbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAB9AAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAlV0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAB9AAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAfQAAAAAAABAAAAAAHNbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAgABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABeG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAThzdGJsAAAAuHN0c2QAAAAAAAAAAQAAAKhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABDExhdmMgbGlieDI2NAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAALmF2Y0MBQsAK/+EAFmdCwArZHsBEAAADAAQAAAMACDxImSABAAVoy4PLIAAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAAAACIAAAAAAAAABhzdHRzAAAAAAAAAAEAAAACAABAAAAAABRzdHNzAAAAAAAAAAEAAAABAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAACAAAAAQAAABxzdHN6AAAAAAAAAAAAAAACAAAAGAAAAAoAAAAUc3RjbwAAAAAAAAABAAADNgAAAD11ZHRhAAAANW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAACGlsc3QAAAAIZnJlZQAAACptZGF0AAAAFGWIhAW8RigAD9jHAAGwaOAAI0OAAAAABkGaOAr6gA==",
+                "mime_type": "video/mp4",
+                "type": "video"
+              }
+            ],
+            "type": "user_input"
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '3999'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/3.0.0 gl-python/3.14.3
+      x-goog-api-client:
+      - google-genai-sdk/3.0.0 gl-python/3.14.3
+      x-goog-api-key:
+      - test_google_genai_api_key
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: |-
+        {
+          "id": "v1_ChdYcTRBYS12MEZKYXF1TVlQdElhTnFRSRIXWHE0QWEtdjBGSmFxdU1ZUHRJYU5xUUk",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 1785,
+            "total_input_tokens": 1737,
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 15
+              },
+              {
+                "modality": "image",
+                "tokens": 516
+              },
+              {
+                "modality": "video",
+                "tokens": 526
+              },
+              {
+                "modality": "audio",
+                "tokens": 164
+              },
+              {
+                "modality": "document",
+                "tokens": 516
+              }
+            ],
+            "total_cached_tokens": 902,
+            "cached_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 7
+              },
+              {
+                "modality": "image",
+                "tokens": 268
+              },
+              {
+                "modality": "video",
+                "tokens": 274
+              },
+              {
+                "modality": "audio",
+                "tokens": 85
+              },
+              {
+                "modality": "document",
+                "tokens": 268
+              }
+            ],
+            "total_output_tokens": 1,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 47,
+            "initial_input_tokens": 1737
+          },
+          "created": "2026-11-20T20:32:30Z",
+          "updated": "2026-11-20T20:32:30Z",
+          "service_tier": "standard",
+          "steps": [
+            {
+              "signature": "CoYCAWkUfRM5sKr9lcie5SMHHcI7BXlhdax5XZLea2KEjU6Cc5qeewlCwPSwcXiEU8nuqWCcHmf8zjyGDtgh/aRICV049yQVozB/nh8F1k6zG5NTc2I7LUnK/bPqapbhx2FlsXB9gAAmKGqPxnC9VmFqDfxZwY1yJsFwCAyv2XgeVdBKltuFCNqchLCgjr64EDOB8VlA0iRImdldALTMwe7vZoUPBEYARCKjoM88hnxw94dG4SrtNcDnjBmtS1VOchNFasHwk+3KoZsiwcafkK6evKEf5gPUaP8PdwXplm5WegSz9qo0AReKZ7hMF4ZP+ocwJcfzNUe2iIVcYz7kUCedR5R5mbvThg==",
+              "type": "thought"
+            },
+            {
+              "content": [
+                {
+                  "text": "OK",
+                  "type": "text"
+                }
+              ],
+              "type": "model_output"
+            }
+          ],
+          "object": "interaction",
+          "model": "gemini-2.5-flash"
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      content-length:
+      - '1291'
+      content-type:
+      - application/json
+      date:
+      - Fri, 20 Nov 2026 20:32:30 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=11844
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-goog-api-key: test_google_genai_api_key
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1
