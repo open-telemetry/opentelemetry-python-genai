@@ -1,10 +1,13 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 
 import array
 import base64
 import logging
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from openai.types import CreateEmbeddingResponse
 from openai.types.chat import ChatCompletion
@@ -37,6 +40,16 @@ from .utils import (
     map_finish_reason,
     set_chat_usage,
 )
+
+if TYPE_CHECKING:
+    from openai.lib.streaming.chat import (  # pylint: disable=no-name-in-module
+        AsyncChatCompletionStreamManager,
+        ChatCompletionStreamManager,
+    )
+    from openai.resources.chat.completions import (
+        AsyncCompletions,
+        Completions,
+    )
 
 _logger = logging.getLogger(__name__)
 
@@ -128,12 +141,22 @@ def async_chat_completions_create_v_new(
     return traced_method
 
 
-def chat_completions_stream(wrapped, instance, args, kwargs):
+def chat_completions_stream(
+    wrapped: Callable[..., ChatCompletionStreamManager[Any]],
+    instance: Completions,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> ChatStreamManagerWrapper[Any]:
     """Wrap the manager returned by `Completions.stream`."""
     return ChatStreamManagerWrapper(wrapped(*args, **kwargs))
 
 
-def async_chat_completions_stream(wrapped, instance, args, kwargs):
+def async_chat_completions_stream(
+    wrapped: Callable[..., AsyncChatCompletionStreamManager[Any]],
+    instance: AsyncCompletions,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> AsyncChatStreamManagerWrapper[Any]:
     """Wrap the manager returned by `AsyncCompletions.stream`."""
     return AsyncChatStreamManagerWrapper(wrapped(*args, **kwargs))
 
