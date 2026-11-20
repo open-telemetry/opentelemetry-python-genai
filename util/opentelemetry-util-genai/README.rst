@@ -256,6 +256,7 @@ This package sets the following span attributes on LLM invocations:
 - ``gen_ai.input.messages``: Slice([Map({"role": "user", "parts": [{"content": "hello world", "type": "text"}]})])
 - ``gen_ai.output.messages``: Slice([Map({"role": "assistant", "parts": [{"content": "hello back", "type": "text"}], "finish_reason": "stop"})])
 - ``gen_ai.system_instructions``: Slice([Map({"content": "You are a helpful assistant.", "type": "text"})])
+- ``gen_ai.prompt.variables``: Map({"user_name": "Alice", "language": "French"})
 
 **Error attributes:**
 

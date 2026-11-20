@@ -1,0 +1,1 @@
+Fix chat spans from `chat.completions.stream()` not ending when the `with` block is exited before the stream is fully read, and record exceptions raised inside the block.
