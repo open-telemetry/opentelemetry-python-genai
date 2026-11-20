@@ -5386,13 +5386,13 @@ dev = [
     { name = "pre-commit" },
     { name = "towncrier" },
     { name = "tox" },
-    { name = "tox-uv", specifier = ">=1" },
+    { name = "tox-uv", specifier = ">=1.30" },
 ]
 packaging = [{ name = "packaging" }]
 towncrier = [{ name = "towncrier" }]
 tox = [
     { name = "tox" },
-    { name = "tox-uv", specifier = ">=1" },
+    { name = "tox-uv", specifier = ">=1.30" },
 ]
 
 [[package]]

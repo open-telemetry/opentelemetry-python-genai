@@ -192,5 +192,5 @@ towncrier = [
 ]
 tox = [
     "tox",
-    "tox-uv>=1",
+    "tox-uv>=1.30",
 ]
