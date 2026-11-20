@@ -46,6 +46,7 @@ from opentelemetry.util.genai.types import (
     FilePart,
     FunctionToolDefinition,
     GenericPart,
+    GenericToolDefinition,
     InputMessage,
     MessagePart,
     Modality,
@@ -1692,7 +1693,7 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
-    def test_server_tool_parts_mapping(self):
+    def test_tool_payload_mappings(self):
         @dataclass
         class Payload:
             count: int
@@ -1723,6 +1724,13 @@ class TestMessageModels(unittest.TestCase):
                         "type": "server_tool_call_response",
                     },
                 ),
+                (
+                    FunctionToolDefinition(
+                        name="tool", description=None, parameters=payload
+                    ),
+                    "parameters",
+                    {"name": "tool", "type": "function"},
+                ),
             ]
             for part, payload_key, expected in parts:
                 with (
@@ -1742,6 +1750,33 @@ class TestMessageModels(unittest.TestCase):
                         convert.assert_not_called()
                     else:
                         convert.assert_called_once_with(payload)
+
+    def test_typed_tool_definition_fields_without_conversion(self):
+        cases = [
+            (
+                GenericToolDefinition(name="web_search", type="web_search"),
+                {"name": "web_search", "type": "web_search"},
+            ),
+            (
+                GenericToolDefinition(name="", type=""),
+                {"name": "", "type": ""},
+            ),
+            (
+                FunctionToolDefinition(
+                    name="tool", description="", parameters=None
+                ),
+                {"name": "tool", "description": "", "type": "function"},
+            ),
+        ]
+        with patch(
+            "opentelemetry.util.genai.utils.object_to_any_value"
+        ) as convert:
+            for definition, expected in cases:
+                with self.subTest(definition=definition):
+                    self.assertIsInstance(definition, Mapping)
+                    self.assertEqual(dict(definition), expected)
+                    self.assertEqual(len(definition), len(expected))
+            convert.assert_not_called()
 
     def test_typed_parts_are_mappings_without_conversion(self):
         cases = [

@@ -333,8 +333,10 @@ Uri = UriPart
 
 
 @dataclass()
-class FunctionToolDefinition:
+class FunctionToolDefinition(_AnyValueMapping):
     """Represents a function tool definition sent to the model"""
+
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset({"parameters"})
 
     name: str
     description: str | None
@@ -343,7 +345,7 @@ class FunctionToolDefinition:
 
 
 @dataclass()
-class GenericToolDefinition:
+class GenericToolDefinition(_AnyValueMapping):
     """Represents a generic tool definition sent to the model"""
 
     name: str
