@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from opentelemetry import trace
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -1693,6 +1694,110 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
+    def test_messages_are_mappings_without_conversion(self):
+        parts = [TextPart(content="hello")]
+        cases = [
+            (
+                InputMessage(role=Role.USER, parts=parts),
+                {"role": Role.USER, "parts": parts},
+            ),
+            (
+                InputMessage(role="user", parts=[], name=""),
+                {"role": "user", "parts": [], "name": ""},
+            ),
+            (
+                OutputMessage(role=Role.ASSISTANT, parts=parts),
+                {"role": Role.ASSISTANT, "parts": parts},
+            ),
+            (
+                OutputMessage(
+                    role="assistant", parts=[], finish_reason="stop", name=""
+                ),
+                {
+                    "role": "assistant",
+                    "parts": [],
+                    "finish_reason": "stop",
+                    "name": "",
+                },
+            ),
+        ]
+        with patch(
+            "opentelemetry.util.genai.utils.object_to_any_value"
+        ) as convert:
+            for message, expected in cases:
+                with self.subTest(message=message):
+                    self.assertIsInstance(message, Mapping)
+                    self.assertEqual(dict(message), expected)
+                    self.assertEqual(len(message), len(expected))
+                    self.assertIs(message["parts"], message.parts)
+            convert.assert_not_called()
+
+    def test_message_mappings_convert_only_generic_parts(self):
+        @dataclass
+        class CustomPart(GenericPart):
+            items: dict[str, str]
+            keys: list[str]
+            invalid: object
+
+        generic = CustomPart(
+            type="custom",
+            items={"query": "weather"},
+            keys=["result"],
+            invalid=object(),
+        )
+        typed = TextPart(content="hello")
+        parts = [generic, typed]
+        cases = [
+            (
+                InputMessage(role="user", parts=parts),
+                GenAI.GEN_AI_INPUT_MESSAGES,
+            ),
+            (
+                OutputMessage(role="assistant", parts=parts),
+                GenAI.GEN_AI_OUTPUT_MESSAGES,
+            ),
+        ]
+        for message, attribute in cases:
+            for failed_conversion in (False, True):
+                with (
+                    self.subTest(
+                        message=message,
+                        failed_conversion=failed_conversion,
+                    ),
+                    patch(
+                        "opentelemetry.util.genai.utils.object_to_any_value",
+                        wraps=object_to_any_value,
+                    ) as convert,
+                ):
+                    if failed_conversion:
+                        convert.return_value = None
+                    mapped_parts = message["parts"]
+                    self.assertIs(mapped_parts[-1], typed)
+                    convert.assert_called_once_with(generic)
+                    convert.reset_mock()
+                    attributes = BoundedAttributes(
+                        attributes={attribute: [message]},
+                        extended_attributes=True,
+                    )
+                    expected_parts = ({"content": "hello", "type": "text"},)
+                    if not failed_conversion:
+                        expected_parts = (
+                            {
+                                "type": "custom",
+                                "items": {"query": "weather"},
+                                "keys": ("result",),
+                            },
+                            *expected_parts,
+                        )
+                    self.assertEqual(
+                        attributes[attribute],
+                        ({"role": message.role, "parts": expected_parts},),
+                    )
+                    self.assertIs(message.parts, parts)
+                    self.assertIs(message.parts[0], generic)
+                    self.assertIs(message.parts[1], typed)
+                    convert.assert_called_once_with(generic)
+
     def test_retrieval_documents_are_mappings_without_conversion(self):
         cases = [
             (RetrievalDocument(), {}),

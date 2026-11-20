@@ -46,13 +46,30 @@ class _AnyValueMapping(Mapping[str, AnyValue]):
         if key not in self._present_fields():
             raise KeyError(key)
         value = getattr(self, key)
-        if key in self._SANITIZE:
-            from opentelemetry.util.genai.utils import (  # pylint: disable=import-outside-toplevel
-                object_to_any_value,
-            )
+        message_parts: list[MessagePart] | None = None
+        if key == "parts" and isinstance(self, (InputMessage, OutputMessage)):
+            if any(isinstance(part, GenericPart) for part in self.parts):
+                message_parts = self.parts
+        if key not in self._SANITIZE and message_parts is None:
+            return value
 
+        from opentelemetry.util.genai.utils import (  # pylint: disable=import-outside-toplevel
+            object_to_any_value,
+        )
+
+        if message_parts is None:
             return object_to_any_value(value)
-        return value
+
+        # Generic extensions can use Mapping method names as data fields.
+        parts: list[AnyValue] = []
+        for part in message_parts:
+            if isinstance(part, GenericPart):
+                converted = object_to_any_value(part)
+                if converted is not None:
+                    parts.append(converted)
+            else:
+                parts.append(part)
+        return parts
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._present_fields())
@@ -392,14 +409,14 @@ SystemInstructionPart = Union[TextPart, GenericPart]
 
 
 @dataclass()
-class InputMessage:
+class InputMessage(_AnyValueMapping):
     role: str
     parts: list[MessagePart]
     name: str | None = None
 
 
 @dataclass()
-class OutputMessage:
+class OutputMessage(_AnyValueMapping):
     role: str
     parts: list[MessagePart]
     finish_reason: str | FinishReason | None = None
