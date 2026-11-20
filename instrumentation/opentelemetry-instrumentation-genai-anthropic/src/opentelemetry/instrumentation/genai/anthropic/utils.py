@@ -11,13 +11,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from anthropic.types import (
-    InputJSONDelta,
     RedactedThinkingBlock,
     ServerToolUseBlock,
     TextBlock,
-    TextDelta,
     ThinkingBlock,
-    ThinkingDelta,
     ToolUseBlock,
 )
 
@@ -55,6 +52,7 @@ if TYPE_CHECKING:
     from anthropic.types.beta import (
         BetaContentBlock,
         BetaContentBlockParam,
+        BetaRawContentBlockDelta,
         BetaRedactedThinkingBlock,
         BetaTextBlock,
         BetaThinkingBlock,
@@ -450,11 +448,16 @@ def convert_content_to_parts(
     return parts
 
 
-def create_stream_block_state(content_block: ContentBlock) -> StreamBlockState:
-    if isinstance(content_block, TextBlock):
+def create_stream_block_state(
+    content_block: ContentBlock | BetaContentBlock,
+) -> StreamBlockState:
+    if content_block.type == "text":
         return StreamBlockState(type="text", text=content_block.text)
 
-    if isinstance(content_block, (ToolUseBlock, ServerToolUseBlock)):
+    if (
+        content_block.type == "tool_use"
+        or content_block.type == "server_tool_use"
+    ):
         return StreamBlockState(
             type="tool_use",
             tool_id=content_block.id,
@@ -462,27 +465,28 @@ def create_stream_block_state(content_block: ContentBlock) -> StreamBlockState:
             tool_input=content_block.input,
         )
 
-    if isinstance(content_block, ThinkingBlock):
+    if content_block.type == "thinking":
         return StreamBlockState(
             type="thinking", thinking=content_block.thinking
         )
 
-    if isinstance(content_block, RedactedThinkingBlock):
+    if content_block.type == "redacted_thinking":
         return StreamBlockState(type="redacted_thinking")
 
     return StreamBlockState(type=content_block.type)
 
 
 def update_stream_block_state(
-    state: StreamBlockState, delta: RawContentBlockDelta
+    state: StreamBlockState,
+    delta: RawContentBlockDelta | BetaRawContentBlockDelta,
 ) -> None:
-    if isinstance(delta, TextDelta):
+    if delta.type == "text_delta":
         state.type = "text"
         state.text += delta.text
-    elif isinstance(delta, InputJSONDelta):
+    elif delta.type == "input_json_delta":
         state.type = "tool_use"
         state.input_json += delta.partial_json
-    elif isinstance(delta, ThinkingDelta):
+    elif delta.type == "thinking_delta":
         state.type = "thinking"
         state.thinking += delta.thinking
 
