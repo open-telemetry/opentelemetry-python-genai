@@ -1691,23 +1691,61 @@ class TestModality(unittest.TestCase):
 class TestMessageModels(unittest.TestCase):
     def test_typed_parts_are_mappings_without_conversion(self):
         cases = [
-            (TextPart(content="hello"), "text"),
-            (TextPart(content=""), "text"),
-            (ReasoningPart(content="thinking"), "reasoning"),
-            (ReasoningPart(content=""), "reasoning"),
+            (TextPart(content="hello"), {"content": "hello", "type": "text"}),
+            (TextPart(content=""), {"content": "", "type": "text"}),
+            (
+                ReasoningPart(content="thinking"),
+                {"content": "thinking", "type": "reasoning"},
+            ),
+            (ReasoningPart(content=""), {"content": "", "type": "reasoning"}),
+            (
+                BlobPart(
+                    mime_type=None,
+                    modality=Modality.IMAGE,
+                    content=b"\x00\xff",
+                ),
+                {
+                    "modality": Modality.IMAGE,
+                    "content": b"\x00\xff",
+                    "type": "blob",
+                },
+            ),
+            (
+                FilePart(
+                    mime_type="application/pdf",
+                    modality="document",
+                    file_id="",
+                ),
+                {
+                    "mime_type": "application/pdf",
+                    "modality": "document",
+                    "file_id": "",
+                    "type": "file",
+                },
+            ),
+            (
+                UriPart(
+                    mime_type=None,
+                    modality="image",
+                    uri="https://example.test/image.png",
+                ),
+                {
+                    "modality": "image",
+                    "uri": "https://example.test/image.png",
+                    "type": "uri",
+                },
+            ),
         ]
         with patch(
             "opentelemetry.util.genai.utils.object_to_any_value"
         ) as convert:
-            for part, part_type in cases:
+            for part, expected in cases:
                 with self.subTest(part=part):
                     self.assertIsInstance(part, Mapping)
-                    self.assertEqual(
-                        dict(part),
-                        {"content": part.content, "type": part_type},
-                    )
-                    self.assertIs(part["content"], part.content)
-                    self.assertEqual(len(part), 2)
+                    self.assertEqual(dict(part), expected)
+                    if isinstance(part, (TextPart, ReasoningPart, BlobPart)):
+                        self.assertIs(part["content"], part.content)
+                    self.assertEqual(len(part), len(expected))
             convert.assert_not_called()
 
     def test_tool_call_request_mapping(self):

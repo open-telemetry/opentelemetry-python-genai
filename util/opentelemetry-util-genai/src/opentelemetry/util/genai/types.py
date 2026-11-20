@@ -227,8 +227,8 @@ Token setters record only text, image, and audio; other modalities are ignored.
 
 
 @dataclass()
-class BlobPart:
-    """Represents blob binary data sent inline to the model
+class BlobPart(_AnyValueMapping):
+    """Represents binary data sent inline to the model
 
     This model is specified as part of semconv in `GenAI messages Python models - BlobPart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
@@ -241,8 +241,8 @@ class BlobPart:
 
 
 @dataclass()
-class FilePart:
-    """Represents an external referenced file sent to the model by file id
+class FilePart(_AnyValueMapping):
+    """Represents an external file referenced by file ID
 
     This model is specified as part of semconv in `GenAI messages Python models - FilePart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
@@ -255,8 +255,8 @@ class FilePart:
 
 
 @dataclass()
-class UriPart:
-    """Represents an external referenced file sent to the model by URI
+class UriPart(_AnyValueMapping):
+    """Represents an external file referenced by URI
 
     This model is specified as part of semconv in `GenAI messages Python models - UriPart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
