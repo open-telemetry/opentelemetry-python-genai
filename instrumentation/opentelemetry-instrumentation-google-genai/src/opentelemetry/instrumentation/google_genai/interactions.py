@@ -245,8 +245,7 @@ def _apply_usage(
     """Record token usage summed across automatic continuation hops.
 
     Every hop re-prefills and bills the prompt, so the summed input tokens
-    exceed the prompt size; the first hop's input tokens are recorded
-    separately as that size.
+    exceed the prompt size.
     """
     if not hop_usages:
         return
