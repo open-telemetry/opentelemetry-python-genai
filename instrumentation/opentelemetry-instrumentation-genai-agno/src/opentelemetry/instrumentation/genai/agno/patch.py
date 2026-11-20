@@ -12,6 +12,8 @@ import base64
 import functools
 import logging
 import sys
+import threading
+import urllib.parse
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
     from agno.knowledge.knowledge import Knowledge
+    from agno.models.base import MessageData, Model
+    from agno.models.message import Message
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
     from wrapt import BoundFunctionWrapper, FunctionWrapper
@@ -52,17 +56,34 @@ from wrapt import (
 from opentelemetry.context import attach, detach, get_current
 from opentelemetry.instrumentation.genai.agno.stream import (
     AgnoAgentStreamWrapper,
+    AgnoModelStreamWrapper,
+    AgnoOuterSyncStreamWrapper,
     AgnoWorkflowStreamWrapper,
     AsyncAgnoAgentStreamWrapper,
+    AsyncAgnoModelStreamWrapper,
+    AsyncAgnoOuterStreamWrapper,
     AsyncAgnoWorkflowStreamWrapper,
+    get_active_model_stream_invocation,
+    record_model_stream_usage,
+    register_model_delegate_stream,
 )
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
+    extract_model_finish_reasons,
+    extract_model_id,
     extract_session_id,
     format_content,
+    format_model_input_messages,
+    format_model_output_message,
     format_retrieval_document,
+    has_model_output_content,
+    has_model_token_usage,
+    populate_provider_data,
     prepare_tool_definitions,
+    record_model_token_usage,
     resolve_embedder_provider,
+    resolve_model_provider,
+    safe_float,
     safe_int,
 )
 from opentelemetry.instrumentation.utils import unwrap
@@ -72,6 +93,7 @@ from opentelemetry.semconv._incubating.attributes.error_attributes import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
+    InferenceInvocation,
     LocalAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
@@ -108,8 +130,14 @@ _AGNO_WORKFLOW_MODULE = "agno.workflow.workflow"
 _WORKFLOW_CLASS = "Workflow"
 _AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
 _KNOWLEDGE_CLASS = "Knowledge"
+_AGNO_MODELS_MODULE = "agno.models.base"
+_MODEL_CLASS = "Model"
+_AGNO_GEMINI_MODULE = "agno.models.google.gemini"
+_GEMINI_CLASS = "Gemini"
 
 _ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
+_PATCHED_MODEL_STREAM_CLASSES: set[type[Any]] = set()
+_MODEL_STREAM_PATCH_LOCK = threading.Lock()
 _KNOWN_EMBEDDERS: tuple[tuple[str, str], ...] = (
     ("agno.knowledge.embedder.base", "Embedder"),
     ("agno.knowledge.embedder.openai", "OpenAIEmbedder"),
@@ -149,6 +177,9 @@ _is_instrumented: bool = False
 _in_async_embedding: ContextVar[bool] = ContextVar(
     "_in_async_embedding", default=False
 )
+_CURRENT_MODEL_INVOCATION: ContextVar[
+    tuple[Model, InferenceInvocation] | None
+] = ContextVar("_CURRENT_MODEL_INVOCATION", default=None)
 
 
 class _ContextPreservingBoundWrapper(_BoundFunctionWrapperBase):
@@ -222,9 +253,10 @@ def _safe_wrap_function(
 def patch_agent(handler: TelemetryHandler) -> None:
     """Apply patches to Agno class methods."""
     global _instrumentation_generation, _is_instrumented
-    _instrumentation_generation += 1
-    _is_instrumented = True
-    current_generation = _instrumentation_generation
+    with _MODEL_STREAM_PATCH_LOCK:
+        _instrumentation_generation += 1
+        _is_instrumented = True
+        current_generation = _instrumentation_generation
 
     _safe_wrap_function(
         _AGNO_MODULE,
@@ -342,6 +374,60 @@ def patch_agent(handler: TelemetryHandler) -> None:
         _knowledge_asearch(handler),
         current_generation,
     )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}._process_model_response",
+        _model_process_response(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}._aprocess_model_response",
+        _model_aprocess_response(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}.process_response_stream",
+        _model_process_response_stream(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}.aprocess_response_stream",
+        _model_aprocess_response_stream(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}.response_stream",
+        _model_response_stream(),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}.aresponse_stream",
+        _model_aresponse_stream(),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}._ainvoke_stream_with_retry",
+        _model_delegate_stream_hook,
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}._populate_stream_data",
+        _model_populate_stream_data,
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_GEMINI_MODULE,
+        f"{_GEMINI_CLASS}.get_request_params",
+        _gemini_get_request_params,
+        current_generation,
+    )
 
     embedder_wrappers = [
         (method_name, factory(handler))
@@ -361,15 +447,20 @@ def patch_agent(handler: TelemetryHandler) -> None:
 def unpatch_agent() -> None:
     """Remove patches from Agno class methods."""
     global _instrumentation_generation, _is_instrumented
-    _instrumentation_generation += 1
-    _is_instrumented = False
-    _ACTIVE_WORKFLOW_RUN_IDS.clear()
 
     def _safe_unwrap(target: Any, attr: str) -> None:
         try:
             unwrap(target, attr)
         except (AttributeError, ValueError):
             pass
+
+    with _MODEL_STREAM_PATCH_LOCK:
+        _instrumentation_generation += 1
+        _is_instrumented = False
+        for cls in list(_PATCHED_MODEL_STREAM_CLASSES):
+            _safe_unwrap(cls, "ainvoke_stream")
+        _PATCHED_MODEL_STREAM_CLASSES.clear()
+    _ACTIVE_WORKFLOW_RUN_IDS.clear()
 
     for mod_name, cls_name in _KNOWN_EMBEDDERS:
         if mod_name in sys.modules:
@@ -427,15 +518,32 @@ def unpatch_agent() -> None:
                 _safe_unwrap(agno.knowledge.knowledge.Knowledge, attr)
         except ImportError:
             pass
+    if _AGNO_MODELS_MODULE in sys.modules:
+        try:
+            import agno.models.base
 
+            for attr in (
+                "_process_model_response",
+                "_aprocess_model_response",
+                "process_response_stream",
+                "aprocess_response_stream",
+                "response_stream",
+                "aresponse_stream",
+                "_ainvoke_stream_with_retry",
+                "_populate_stream_data",
+            ):
+                _safe_unwrap(agno.models.base.Model, attr)
+        except ImportError:
+            pass
+    if _AGNO_GEMINI_MODULE in sys.modules:
+        try:
+            import agno.models.google.gemini
 
-def _extract_embedder_model(embedder: Embedder) -> str | None:
-    model = (
-        getattr(embedder, "id", None)
-        or getattr(embedder, "model", None)
-        or getattr(embedder, "name", None)
-    )
-    return str(model) if model is not None else None
+            _safe_unwrap(
+                agno.models.google.gemini.Gemini, "get_request_params"
+            )
+        except ImportError:
+            pass
 
 
 def _extract_embedder_input_tokens(usage: Mapping[str, Any]) -> int | None:
@@ -450,7 +558,7 @@ def _start_embedding(
     instance: Embedder,
 ) -> EmbeddingInvocation:
     provider = resolve_embedder_provider(instance)
-    request_model = _extract_embedder_model(instance)
+    request_model = extract_model_id(instance)
     invocation = handler.embedding(
         provider=provider,
         request_model=request_model,
@@ -1644,12 +1752,7 @@ def _start_retrieval_invocation(
     if max_results is None:
         max_results = instance.max_results
 
-    if isinstance(max_results, (int, float, str)):
-        try:
-            invocation.top_k = int(max_results)
-        except (ValueError, TypeError):
-            pass
-
+    invocation.top_k = safe_int(max_results)
     return invocation
 
 
@@ -1705,5 +1808,563 @@ def _knowledge_asearch(
             ]
         invocation.stop()
         return result
+
+    return traced_method
+
+
+def _lookup_request_setting(
+    source: Any,
+    names: tuple[str, ...],
+    excluded: set[str],
+) -> tuple[Any, bool]:
+    """Look up the first matching setting in a mapping or object.
+
+    Any key explicitly present with a ``None`` value in a mapping is added to
+    ``excluded`` so lower-precedence sources do not resurrect a cleared setting.
+    """
+    if isinstance(source, Mapping):
+        typed = cast(Mapping[str, Any], source)
+        for name in names:
+            if name in excluded or name not in typed:
+                continue
+            val = typed[name]
+            if val is not None:
+                return val, True
+            excluded.add(name)
+        return None, False
+    if source is not None:
+        for name in names:
+            if name in excluded:
+                continue
+            if (val := getattr(source, name, None)) is not None:
+                return val, True
+    return None, False
+
+
+def _get_request_setting(instance: Model, *names: str) -> Any:
+    excluded: set[str] = set()
+    req_params = getattr(instance, "request_params", None)
+    if isinstance(req_params, Mapping):
+        typed_params = cast(Mapping[str, Any], req_params)
+        val, found = _lookup_request_setting(typed_params, names, excluded)
+        if found:
+            return val
+        if "config" in typed_params:
+            cfg_val, _ = _lookup_request_setting(
+                typed_params["config"], names, set()
+            )
+            return cfg_val
+
+    for name in names:
+        if name in excluded:
+            continue
+        if (val := getattr(instance, name, None)) is not None:
+            return val
+    return None
+
+
+def _get_active_model_invocation(
+    instance: Model,
+) -> InferenceInvocation | None:
+    active = _CURRENT_MODEL_INVOCATION.get()
+    if active is not None and active[0] is instance:
+        return active[1]
+    return get_active_model_stream_invocation(instance)
+
+
+def _apply_request_settings_from_config(
+    invocation: InferenceInvocation,
+    cfg: Any,
+) -> None:
+    """Sync request settings on ``invocation`` with the effective outgoing Gemini config."""
+    temp, _ = _lookup_request_setting(cfg, ("temperature",), set())
+    invocation.temperature = safe_float(temp)
+    top_p, _ = _lookup_request_setting(cfg, ("top_p",), set())
+    invocation.top_p = safe_float(top_p)
+    top_k, _ = _lookup_request_setting(cfg, ("top_k",), set())
+    invocation.top_k = safe_int(top_k)
+    max_tokens, _ = _lookup_request_setting(
+        cfg,
+        ("max_tokens", "max_completion_tokens", "max_output_tokens"),
+        set(),
+    )
+    invocation.max_tokens = safe_int(max_tokens)
+    freq_penalty, _ = _lookup_request_setting(
+        cfg, ("frequency_penalty",), set()
+    )
+    invocation.frequency_penalty = safe_float(freq_penalty)
+    pres_penalty, _ = _lookup_request_setting(
+        cfg, ("presence_penalty",), set()
+    )
+    invocation.presence_penalty = safe_float(pres_penalty)
+    stop, _ = _lookup_request_setting(cfg, ("stop_sequences", "stop"), set())
+    if isinstance(stop, str):
+        invocation.stop_sequences = [stop]
+    elif isinstance(stop, (list, tuple)):
+        stop_seqs = cast(Sequence[object], stop)
+        invocation.stop_sequences = [str(s) for s in stop_seqs]
+    else:
+        invocation.stop_sequences = None
+    seed, _ = _lookup_request_setting(cfg, ("seed",), set())
+    invocation.seed = safe_int(seed)
+
+
+def _gemini_get_request_params(
+    wrapped: Callable[..., Any],
+    instance: Model,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    result: Any = wrapped(*args, **kwargs)
+    invocation = _get_active_model_invocation(instance)
+    if invocation is not None and isinstance(result, Mapping):
+        typed_result = cast(Mapping[str, Any], result)
+        _apply_request_settings_from_config(
+            invocation, typed_result.get("config")
+        )
+        return typed_result
+    return result
+
+
+def _extract_client_base_url(client: Any) -> Any:
+    if client is None:
+        return None
+    base_url = getattr(client, "base_url", None)
+    if base_url is not None:
+        return base_url
+    api_client = getattr(client, "_api_client", None)
+    if api_client is not None:
+        http_opts = getattr(api_client, "_http_options", None)
+        if http_opts is not None:
+            opt_url = getattr(http_opts, "base_url", None)
+            if opt_url is not None:
+                return opt_url
+    return getattr(client, "host", None)
+
+
+_DEFAULT_SCHEME_PORTS: dict[str, int] = {
+    "http": 80,
+    "https": 443,
+    "ws": 80,
+    "wss": 443,
+}
+
+
+def _parse_endpoint_url(raw_url: Any) -> tuple[str | None, int | None]:
+    if raw_url is None or not (
+        isinstance(raw_url, str) or hasattr(raw_url, "host")
+    ):
+        return None, None
+    try:
+        parsed = urllib.parse.urlparse(str(raw_url))
+        if parsed.scheme in _DEFAULT_SCHEME_PORTS and parsed.hostname:
+            port = safe_int(parsed.port)
+            if port == _DEFAULT_SCHEME_PORTS[parsed.scheme]:
+                port = None
+            return parsed.hostname, port
+    except Exception:
+        pass
+    return None, None
+
+
+def _extract_mapping_or_attr(obj: Any, key: str) -> Any:
+    if isinstance(obj, Mapping):
+        return cast(Mapping[str, Any], obj).get(key)
+    return getattr(obj, key, None)
+
+
+def _resolve_model_endpoint(
+    instance: Model,
+    *,
+    is_async: bool = False,
+) -> tuple[str | None, int | None]:
+    if is_async:
+        effective_client = _get_property_value(instance, "async_client")
+        if (
+            effective_client is None
+            and not hasattr(type(instance), "async_client")
+            and "async_client" not in getattr(instance, "__dict__", {})
+        ):
+            effective_client = _get_property_value(instance, "client")
+    else:
+        effective_client = _get_property_value(instance, "client")
+
+    if effective_client is not None:
+        addr, port = _parse_endpoint_url(
+            _extract_client_base_url(effective_client)
+        )
+        if addr is not None:
+            return addr, port
+
+    client_params = _get_property_value(instance, "client_params")
+    typed_client_params = (
+        cast(Mapping[str, Any], client_params)
+        if isinstance(client_params, Mapping)
+        else None
+    )
+    if typed_client_params is not None:
+        for key in ("base_url", "azure_endpoint", "host"):
+            if key in typed_client_params:
+                addr, port = _parse_endpoint_url(typed_client_params[key])
+                if addr is not None:
+                    return addr, port
+        http_options = typed_client_params.get("http_options")
+        if http_options is not None:
+            addr, port = _parse_endpoint_url(
+                _extract_mapping_or_attr(http_options, "base_url")
+            )
+            if addr is not None:
+                return addr, port
+
+    for key in ("base_url", "azure_endpoint", "host"):
+        if typed_client_params is not None and key in typed_client_params:
+            continue
+        raw_url = _get_property_value(instance, key)
+        if raw_url:
+            addr, port = _parse_endpoint_url(raw_url)
+            if addr is not None:
+                return addr, port
+
+    http_client = _get_property_value(instance, "http_client")
+    if http_client is None and typed_client_params is not None:
+        http_client = typed_client_params.get("http_client")
+    if http_client is not None:
+        return _parse_endpoint_url(_extract_client_base_url(http_client))
+
+    return None, None
+
+
+def _start_model_inference(
+    handler: TelemetryHandler,
+    instance: Model,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    wrapped: Callable[..., Any],
+    *,
+    is_async: bool = False,
+) -> tuple[
+    InferenceInvocation,
+    Message | None,
+    MessageData | None,
+]:
+    """Start an InferenceInvocation for an Agno model response call."""
+    messages = cast(
+        "Sequence[Message] | None",
+        get_argument("messages", wrapped, args, kwargs),
+    )
+    assistant_message = cast(
+        "Message | None",
+        get_argument("assistant_message", wrapped, args, kwargs),
+    )
+    stream_data = cast(
+        "MessageData | None",
+        get_argument("stream_data", wrapped, args, kwargs),
+    )
+    tools = cast(
+        "Iterable[Any] | str | None",
+        get_argument("tools", wrapped, args, kwargs),
+    )
+    run_response = get_argument("run_response", wrapped, args, kwargs)
+
+    provider = resolve_model_provider(instance)
+    request_model = extract_model_id(instance)
+    server_address, server_port = _resolve_model_endpoint(
+        instance, is_async=is_async
+    )
+
+    session_id = extract_session_id(
+        instance=instance,
+        args=args,
+        kwargs=kwargs,
+        run_response=run_response,
+        wrapped=wrapped,
+    )
+    invocation = handler.inference(
+        provider,
+        request_model=request_model,
+        server_address=server_address,
+        server_port=server_port,
+        conversation_id=str(session_id) if session_id is not None else None,
+        _attach_to_context=False,
+    )
+
+    invocation.temperature = safe_float(
+        _get_request_setting(instance, "temperature")
+    )
+    invocation.top_p = safe_float(_get_request_setting(instance, "top_p"))
+    invocation.top_k = safe_int(_get_request_setting(instance, "top_k"))
+    invocation.max_tokens = safe_int(
+        _get_request_setting(
+            instance,
+            "max_tokens",
+            "max_completion_tokens",
+            "max_output_tokens",
+        )
+    )
+    invocation.frequency_penalty = safe_float(
+        _get_request_setting(instance, "frequency_penalty")
+    )
+    invocation.presence_penalty = safe_float(
+        _get_request_setting(instance, "presence_penalty")
+    )
+
+    stop = _get_request_setting(instance, "stop_sequences", "stop")
+    if isinstance(stop, str):
+        invocation.stop_sequences = [stop]
+    elif isinstance(stop, (list, tuple)):
+        stop_seqs = cast(Sequence[object], stop)
+        invocation.stop_sequences = [str(s) for s in stop_seqs]
+
+    invocation.seed = safe_int(_get_request_setting(instance, "seed"))
+
+    if invocation.should_capture_content:
+        if tools:
+            invocation.tool_definitions = prepare_tool_definitions(tools)
+        if messages:
+            invocation.input_messages = format_model_input_messages(messages)
+
+    return invocation, assistant_message, stream_data
+
+
+def _populate_model_response_telemetry(
+    invocation: InferenceInvocation,
+    assistant_message: Message | None,
+    model: Model | None = None,
+) -> None:
+    """Populate final response telemetry on an InferenceInvocation."""
+    provider_data = (
+        getattr(assistant_message, "provider_data", None)
+        if assistant_message is not None
+        else None
+    )
+    populate_provider_data(invocation, provider_data)
+
+    if assistant_message is not None:
+        metrics = getattr(assistant_message, "metrics", None)
+        if has_model_token_usage(metrics):
+            record_model_token_usage(invocation, metrics, model=model)
+
+    finish_reasons = extract_model_finish_reasons(assistant_message)
+    if finish_reasons:
+        invocation.finish_reasons = finish_reasons
+
+    if (
+        invocation.should_capture_content
+        and assistant_message is not None
+        and has_model_output_content(assistant_message)
+    ):
+        invocation.output_messages = [
+            format_model_output_message(
+                assistant_message,
+                model=model,
+            )
+        ]
+
+
+def _model_process_response(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation, assistant_message, _ = _start_model_inference(
+            handler, instance, args, kwargs, wrapped=wrapped
+        )
+        with invocation:
+            token = _CURRENT_MODEL_INVOCATION.set((instance, invocation))
+            try:
+                result = wrapped(*args, **kwargs)
+            finally:
+                _CURRENT_MODEL_INVOCATION.reset(token)
+            _populate_model_response_telemetry(
+                invocation,
+                assistant_message=assistant_message,
+                model=instance,
+            )
+            return result
+
+    return traced_method
+
+
+def _model_aprocess_response(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Any]],
+        instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation, assistant_message, _ = _start_model_inference(
+            handler, instance, args, kwargs, wrapped=wrapped, is_async=True
+        )
+        with invocation:
+            token = _CURRENT_MODEL_INVOCATION.set((instance, invocation))
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                _CURRENT_MODEL_INVOCATION.reset(token)
+            _populate_model_response_telemetry(
+                invocation,
+                assistant_message=assistant_message,
+                model=instance,
+            )
+            return result
+
+    return cast(Callable[..., Any], traced_method)
+
+
+def _model_process_response_stream(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        assistant_message = cast(
+            "Message | None",
+            get_argument("assistant_message", wrapped, args, kwargs),
+        )
+        stream_data = cast(
+            "MessageData | None",
+            get_argument("stream_data", wrapped, args, kwargs),
+        )
+
+        def _start() -> InferenceInvocation:
+            invocation, _, _ = _start_model_inference(
+                handler, instance, args, kwargs, wrapped=wrapped
+            )
+            return invocation
+
+        try:
+            stream = wrapped(*args, **kwargs)
+        except BaseException as error:
+            invocation = _start()
+            invocation.fail(error)
+            raise
+
+        return AgnoModelStreamWrapper(
+            stream,
+            start_invocation=_start,
+            assistant_message=assistant_message,
+            stream_data=stream_data,
+            model=instance,
+        )
+
+    return traced_method
+
+
+def _model_populate_stream_data(
+    wrapped: Callable[..., Any],
+    instance: Model,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    delta = args[1] if len(args) > 1 else kwargs.get("model_response_delta")
+    if delta is not None:
+        usage = getattr(delta, "response_usage", None)
+        if usage is not None:
+            record_model_stream_usage(instance, usage)
+    return wrapped(*args, **kwargs)
+
+
+def _model_delegate_stream_hook(
+    wrapped: Callable[..., Any],
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    stream = wrapped(*args, **kwargs)
+    register_model_delegate_stream(instance, stream)
+    return stream
+
+
+def _ensure_model_ainvoke_stream_wrapped(model_cls: type[Any]) -> None:
+    with _MODEL_STREAM_PATCH_LOCK:
+        if not _is_instrumented:
+            return
+        for cls in model_cls.__mro__:
+            if cls in _PATCHED_MODEL_STREAM_CLASSES:
+                continue
+            fn = cls.__dict__.get("ainvoke_stream")
+            if fn is None or getattr(fn, "__isabstractmethod__", False):
+                continue
+            if not hasattr(fn, "__wrapped__"):
+                wrap_function_wrapper(
+                    cls, "ainvoke_stream", _model_delegate_stream_hook
+                )
+                _PATCHED_MODEL_STREAM_CLASSES.add(cls)
+
+
+def _model_aprocess_response_stream(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        _ensure_model_ainvoke_stream_wrapped(type(instance))
+        assistant_message = cast(
+            "Message | None",
+            get_argument("assistant_message", wrapped, args, kwargs),
+        )
+        stream_data = cast(
+            "MessageData | None",
+            get_argument("stream_data", wrapped, args, kwargs),
+        )
+
+        def _start() -> InferenceInvocation:
+            invocation, _, _ = _start_model_inference(
+                handler, instance, args, kwargs, wrapped=wrapped, is_async=True
+            )
+            return invocation
+
+        try:
+            stream = wrapped(*args, **kwargs)
+        except BaseException as error:
+            invocation = _start()
+            invocation.fail(error)
+            raise
+
+        return AsyncAgnoModelStreamWrapper(
+            stream,
+            start_invocation=_start,
+            assistant_message=assistant_message,
+            stream_data=stream_data,
+            model=instance,
+        )
+
+    return traced_method
+
+
+def _model_response_stream() -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        _instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        stream = wrapped(*args, **kwargs)
+        return AgnoOuterSyncStreamWrapper(stream)
+
+    return traced_method
+
+
+def _model_aresponse_stream() -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        _instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        stream = wrapped(*args, **kwargs)
+        return AsyncAgnoOuterStreamWrapper(stream)
 
     return traced_method
