@@ -32,6 +32,7 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     has_stream_data_content,
     populate_provider_data,
     record_model_token_usage,
+    uses_cumulative_stream_usage,
 )
 from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
@@ -351,6 +352,7 @@ class _ModelStreamMixin:
     _self_model: Model | None
     _self_stream_images: list[Image]
     _self_stream_videos: list[Video]
+    _self_last_chunk_usage: Any
 
     def _ensure_invocation(self) -> InferenceInvocation:
         if self._self_invocation is None:
@@ -360,9 +362,16 @@ class _ModelStreamMixin:
             self._self_invocation = invocation
         return self._self_invocation
 
+    def _record_chunk_usage(self, usage: Any) -> None:
+        if has_model_token_usage(usage):
+            self._self_last_chunk_usage = usage
+
     def _process_chunk(self, chunk: ModelResponse) -> None:
         invocation = self._ensure_invocation()
         populate_provider_data(invocation, chunk.provider_data)
+        chunk_usage = getattr(chunk, "response_usage", None)
+        if chunk_usage is not None:
+            self._record_chunk_usage(chunk_usage)
         if invocation.should_capture_content:
             if chunk.images:
                 self._self_stream_images.extend(chunk.images)
@@ -382,19 +391,28 @@ class _ModelStreamMixin:
                 self._self_stream_data.response_provider_data,
             )
 
-        metrics = getattr(self._self_assistant_message, "metrics", None)
-        if has_model_token_usage(metrics):
+        metrics: Any = None
+        if (
+            self._self_last_chunk_usage is not None
+            and uses_cumulative_stream_usage(invocation, self._self_model)
+        ):
+            metrics = self._self_last_chunk_usage
+        else:
+            assistant_metrics = getattr(
+                self._self_assistant_message, "metrics", None
+            )
+            if has_model_token_usage(assistant_metrics):
+                metrics = assistant_metrics
+            elif self._self_stream_data is not None:
+                sd_metrics = getattr(
+                    self._self_stream_data, "response_metrics", None
+                )
+                if has_model_token_usage(sd_metrics):
+                    metrics = sd_metrics
+        if metrics is not None:
             record_model_token_usage(
                 invocation, metrics, model=self._self_model
             )
-        elif self._self_stream_data is not None:
-            sd_metrics = getattr(
-                self._self_stream_data, "response_metrics", None
-            )
-            if has_model_token_usage(sd_metrics):
-                record_model_token_usage(
-                    invocation, sd_metrics, model=self._self_model
-                )
 
         finish_reasons = extract_model_finish_reasons(
             self._self_assistant_message, self._self_stream_data
@@ -450,19 +468,39 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         self._self_model = model
         self._self_stream_images = []
         self._self_stream_videos = []
+        self._self_last_chunk_usage = None
         outer = _CURRENT_OUTER_STREAM.get()
         if outer is not None:
             outer._bind_inner(self)
+
+    @contextlib.contextmanager
+    def _execution_context(self) -> Iterator[None]:
+        token = _CURRENT_MODEL_STREAM.set(self)
+        try:
+            with super()._execution_context():
+                yield
+        finally:
+            _CURRENT_MODEL_STREAM.reset(token)
 
     def _advance(self, read: Callable[[], Any]) -> Any:
         self._ensure_invocation()
         return super()._advance(read)
 
 
+def record_model_stream_usage(model: Any, usage: Any) -> None:
+    """Record per-chunk provider usage on the active model stream wrapper."""
+    current = _CURRENT_MODEL_STREAM.get()
+    if current is not None and current._self_model is model:
+        current._record_chunk_usage(usage)
+
+
 def register_model_delegate_stream(model: Any, stream: Any) -> None:
     """Register an async delegate stream on the active model stream wrapper."""
-    current = _CURRENT_MODEL_ASTREAM.get()
-    if current is not None and current._self_model is model:
+    current = _CURRENT_MODEL_STREAM.get()
+    if (
+        isinstance(current, AsyncAgnoModelStreamWrapper)
+        and current._self_model is model
+    ):
         current._register_delegate_stream(stream)
 
 
@@ -486,6 +524,7 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         self._self_model = model
         self._self_stream_images = []
         self._self_stream_videos = []
+        self._self_last_chunk_usage = None
         self._self_delegate_streams: list[Any] = []
         outer = _CURRENT_OUTER_ASTREAM.get()
         if outer is not None:
@@ -497,12 +536,12 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
 
     @contextlib.contextmanager
     def _execution_context(self) -> Iterator[None]:
-        token = _CURRENT_MODEL_ASTREAM.set(self)
+        token = _CURRENT_MODEL_STREAM.set(self)
         try:
             with super()._execution_context():
                 yield
         finally:
-            _CURRENT_MODEL_ASTREAM.reset(token)
+            _CURRENT_MODEL_STREAM.reset(token)
 
     async def _advance(self, read: Callable[[], Awaitable[Any]]) -> Any:
         self._ensure_invocation()
@@ -530,8 +569,8 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
             raise first_error
 
 
-_CURRENT_MODEL_ASTREAM: ContextVar[AsyncAgnoModelStreamWrapper | None] = (
-    ContextVar("_CURRENT_MODEL_ASTREAM", default=None)
+_CURRENT_MODEL_STREAM: ContextVar[_ModelStreamMixin | None] = ContextVar(
+    "_CURRENT_MODEL_STREAM", default=None
 )
 _CURRENT_OUTER_STREAM: ContextVar[AgnoOuterSyncStreamWrapper | None] = (
     ContextVar("_CURRENT_OUTER_STREAM", default=None)

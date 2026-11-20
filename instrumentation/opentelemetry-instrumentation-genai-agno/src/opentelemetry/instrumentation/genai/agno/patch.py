@@ -12,6 +12,7 @@ import base64
 import functools
 import logging
 import sys
+import threading
 import urllib.parse
 from collections.abc import (
     AsyncIterator,
@@ -62,6 +63,7 @@ from opentelemetry.instrumentation.genai.agno.stream import (
     AsyncAgnoModelStreamWrapper,
     AsyncAgnoOuterStreamWrapper,
     AsyncAgnoWorkflowStreamWrapper,
+    record_model_stream_usage,
     register_model_delegate_stream,
 )
 from opentelemetry.instrumentation.genai.agno.utils import (
@@ -132,6 +134,7 @@ _MODEL_CLASS = "Model"
 
 _ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
 _PATCHED_MODEL_STREAM_CLASSES: set[type[Any]] = set()
+_MODEL_STREAM_PATCH_LOCK = threading.Lock()
 _KNOWN_EMBEDDERS: tuple[tuple[str, str], ...] = (
     ("agno.knowledge.embedder.base", "Embedder"),
     ("agno.knowledge.embedder.openai", "OpenAIEmbedder"),
@@ -244,9 +247,10 @@ def _safe_wrap_function(
 def patch_agent(handler: TelemetryHandler) -> None:
     """Apply patches to Agno class methods."""
     global _instrumentation_generation, _is_instrumented
-    _instrumentation_generation += 1
-    _is_instrumented = True
-    current_generation = _instrumentation_generation
+    with _MODEL_STREAM_PATCH_LOCK:
+        _instrumentation_generation += 1
+        _is_instrumented = True
+        current_generation = _instrumentation_generation
 
     _safe_wrap_function(
         _AGNO_MODULE,
@@ -406,6 +410,12 @@ def patch_agent(handler: TelemetryHandler) -> None:
         _model_delegate_stream_hook,
         current_generation,
     )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}._populate_stream_data",
+        _model_populate_stream_data,
+        current_generation,
+    )
 
     embedder_wrappers = [
         (method_name, factory(handler))
@@ -425,15 +435,20 @@ def patch_agent(handler: TelemetryHandler) -> None:
 def unpatch_agent() -> None:
     """Remove patches from Agno class methods."""
     global _instrumentation_generation, _is_instrumented
-    _instrumentation_generation += 1
-    _is_instrumented = False
-    _ACTIVE_WORKFLOW_RUN_IDS.clear()
 
     def _safe_unwrap(target: Any, attr: str) -> None:
         try:
             unwrap(target, attr)
         except (AttributeError, ValueError):
             pass
+
+    with _MODEL_STREAM_PATCH_LOCK:
+        _instrumentation_generation += 1
+        _is_instrumented = False
+        for cls in list(_PATCHED_MODEL_STREAM_CLASSES):
+            _safe_unwrap(cls, "ainvoke_stream")
+        _PATCHED_MODEL_STREAM_CLASSES.clear()
+    _ACTIVE_WORKFLOW_RUN_IDS.clear()
 
     for mod_name, cls_name in _KNOWN_EMBEDDERS:
         if mod_name in sys.modules:
@@ -503,14 +518,11 @@ def unpatch_agent() -> None:
                 "response_stream",
                 "aresponse_stream",
                 "_ainvoke_stream_with_retry",
+                "_populate_stream_data",
             ):
                 _safe_unwrap(agno.models.base.Model, attr)
         except ImportError:
             pass
-
-    for cls in list(_PATCHED_MODEL_STREAM_CLASSES):
-        _safe_unwrap(cls, "ainvoke_stream")
-    _PATCHED_MODEL_STREAM_CLASSES.clear()
 
 
 def _extract_embedder_input_tokens(usage: Mapping[str, Any]) -> int | None:
@@ -2165,6 +2177,20 @@ def _model_process_response_stream(
     return traced_method
 
 
+def _model_populate_stream_data(
+    wrapped: Callable[..., Any],
+    instance: Model,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    delta = args[1] if len(args) > 1 else kwargs.get("model_response_delta")
+    if delta is not None:
+        usage = getattr(delta, "response_usage", None)
+        if usage is not None:
+            record_model_stream_usage(instance, usage)
+    return wrapped(*args, **kwargs)
+
+
 def _model_delegate_stream_hook(
     wrapped: Callable[..., Any],
     instance: Any,
@@ -2177,17 +2203,20 @@ def _model_delegate_stream_hook(
 
 
 def _ensure_model_ainvoke_stream_wrapped(model_cls: type[Any]) -> None:
-    if not _is_instrumented:
-        return
-    for cls in model_cls.__mro__:
-        fn = cls.__dict__.get("ainvoke_stream")
-        if fn is None or getattr(fn, "__isabstractmethod__", False):
-            continue
-        if not hasattr(fn, "__wrapped__"):
-            wrap_function_wrapper(
-                cls, "ainvoke_stream", _model_delegate_stream_hook
-            )
-            _PATCHED_MODEL_STREAM_CLASSES.add(cls)
+    with _MODEL_STREAM_PATCH_LOCK:
+        if not _is_instrumented:
+            return
+        for cls in model_cls.__mro__:
+            if cls in _PATCHED_MODEL_STREAM_CLASSES:
+                continue
+            fn = cls.__dict__.get("ainvoke_stream")
+            if fn is None or getattr(fn, "__isabstractmethod__", False):
+                continue
+            if not hasattr(fn, "__wrapped__"):
+                wrap_function_wrapper(
+                    cls, "ainvoke_stream", _model_delegate_stream_hook
+                )
+                _PATCHED_MODEL_STREAM_CLASSES.add(cls)
 
 
 def _model_aprocess_response_stream(

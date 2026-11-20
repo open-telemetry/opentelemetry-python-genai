@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 
 import httpx
@@ -749,7 +750,11 @@ class ChatMultimodalScenario(Scenario):
                             Image(
                                 url="https://example.com/photo.jpg",
                                 format="jpg",
-                            )
+                            ),
+                            Image(
+                                content=base64.b64decode(_REAL_PNG_B64),
+                                format="png",
+                            ),
                         ],
                         audio=[
                             Audio(content=b"\x00\x01\x02\x03", format="wav")
@@ -759,7 +764,12 @@ class ChatMultimodalScenario(Scenario):
                                 id="file-conformance-123",
                                 mime_type="application/pdf",
                                 external={"id": "file-conformance-123"},
-                            )
+                            ),
+                            File(
+                                content=b"%PDF-1.4\nconformance",
+                                mime_type="application/pdf",
+                                filename="report.pdf",
+                            ),
                         ],
                     )
                 ]
@@ -796,13 +806,29 @@ class ChatMultimodalScenario(Scenario):
             )
         for expected_input in (
             ("uri", "image"),
+            ("blob", "image"),
             ("blob", "audio"),
             ("file", "document"),
+            ("blob", "document"),
             ("uri", "video"),
         ):
             assert expected_input in input_parts, (
                 f"expected {expected_input!r} on input messages, saw {input_parts}"
             )
+        input_blobs_by_modality: dict[str, list[Any]] = {}
+        for span in spans:
+            for message in _attr(span, "gen_ai.input.messages") or ():
+                for part in message.get("parts", ()):
+                    if part.get("type") == "blob":
+                        input_blobs_by_modality.setdefault(
+                            part.get("modality"), []
+                        ).append(part.get("content"))
+        assert base64.b64decode(_REAL_PNG_B64) in input_blobs_by_modality.get(
+            "image", []
+        )
+        assert b"%PDF-1.4\nconformance" in input_blobs_by_modality.get(
+            "document", []
+        )
         assert ("blob", "image") in output_parts, (
             f"expected ('blob', 'image') on output messages, saw {output_parts}"
         )
