@@ -31,6 +31,7 @@ _AnyInvocation: TypeAlias = (
 class _PromptContext:
     name: str | None
     variables: Mapping[str, object]
+    version: str | None = None
 
 
 @dataclass
