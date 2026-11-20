@@ -485,6 +485,32 @@ def _set_embedding_attributes(
         invocation.input_tokens = _extract_embedder_input_tokens(usage)
 
 
+def _set_batch_embedding_attributes(
+    invocation: EmbeddingInvocation,
+    instance: Embedder,
+    embeddings: Sequence[Sequence[float] | str],
+    usage: Sequence[Mapping[str, Any] | None],
+) -> None:
+    embedding = next((item for item in embeddings if item), None)
+    _set_embedding_attributes(invocation, instance, embedding)
+
+    # Agno repeats the same per-request usage mapping for every embedding in a
+    # chunk. Count each mapping object once so token usage reflects provider
+    # requests rather than the number of returned texts.
+    seen_usage: set[int] = set()
+    input_tokens = 0
+    has_input_tokens = False
+    for item in usage:
+        if not isinstance(item, Mapping) or id(item) in seen_usage:
+            continue
+        seen_usage.add(id(item))
+        if (tokens := _extract_embedder_input_tokens(item)) is not None:
+            input_tokens += tokens
+            has_input_tokens = True
+    if has_input_tokens:
+        invocation.input_tokens = input_tokens
+
+
 def _embedder_get_embedding(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
@@ -567,6 +593,38 @@ def _embedder_async_get_embedding_and_usage(
     return cast(Callable[..., Any], traced_method)
 
 
+def _embedder_async_get_embeddings_batch_and_usage(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[
+            ...,
+            Awaitable[
+                tuple[
+                    list[Sequence[float] | str],
+                    list[Mapping[str, Any] | None],
+                ]
+            ],
+        ],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[list[Sequence[float] | str], list[Mapping[str, Any] | None]]:
+        with _start_embedding(handler, instance) as invocation:
+            token = _in_async_embedding.set(True)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                _in_async_embedding.reset(token)
+            embeddings, usage = result
+            _set_batch_embedding_attributes(
+                invocation, instance, embeddings, usage
+            )
+            return result
+
+    return cast(Callable[..., Any], traced_method)
+
+
 _EMBEDDER_METHOD_FACTORIES: tuple[
     tuple[str, Callable[[TelemetryHandler], Callable[..., Any]]], ...
 ] = (
@@ -574,6 +632,10 @@ _EMBEDDER_METHOD_FACTORIES: tuple[
     ("get_embedding_and_usage", _embedder_get_embedding_and_usage),
     ("async_get_embedding", _embedder_async_get_embedding),
     ("async_get_embedding_and_usage", _embedder_async_get_embedding_and_usage),
+    (
+        "async_get_embeddings_batch_and_usage",
+        _embedder_async_get_embeddings_batch_and_usage,
+    ),
 )
 
 
