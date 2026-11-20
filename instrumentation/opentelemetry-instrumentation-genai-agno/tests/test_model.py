@@ -6056,6 +6056,77 @@ def test_gemini_generation_config_and_generative_model_kwargs_precedence(
     assert GenAIAttributes.GEN_AI_REQUEST_TOP_P not in req_span.attributes
     assert GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS not in req_span.attributes
 
+    span_exporter.clear()
+
+    # 5. Custom Gemini subclass: telemetry observes actual request params without
+    #    constructing any probe instance or invoking get_request_params extra times.
+    init_calls = 0
+    get_params_calls = 0
+
+    class _CountingGemini(Gemini):
+        def __post_init__(self) -> None:
+            nonlocal init_calls
+            init_calls += 1
+            super().__post_init__()
+
+        def get_request_params(self, *args: Any, **kwargs: Any) -> Any:
+            nonlocal get_params_calls
+            get_params_calls += 1
+            return super().get_request_params(*args, **kwargs)
+
+    custom_model = _CountingGemini(
+        id="gemini-2.5-flash",
+        generation_config={"temperature": 0.4, "max_output_tokens": 96},
+        client=_make_client(),
+    )
+    assert init_calls == 1
+    custom_model.response(
+        messages=[Message(role="user", content="custom subclass")]
+    )
+    assert init_calls == 1
+    assert get_params_calls == 1
+    (custom_span,) = span_exporter.get_finished_spans()
+    _assert_telemetry_matches_wire(custom_span, captured_gen_configs[-1])
+
+    span_exporter.clear()
+    sse_body = (
+        b'data: {"candidates":[{"content":{"parts":[{"text":"hi"}],"role":"model"},"finishReason":"STOP","index":0}],'
+        b'"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":2,"totalTokenCount":10}}\r\n\r\n'
+    )
+    stream_wire_cfgs: list[dict[str, Any]] = []
+
+    def _stream_handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content.decode("utf-8"))
+        stream_wire_cfgs.append(body.get("generationConfig") or {})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=sse_body,
+        )
+
+    stream_custom = _CountingGemini(
+        id="gemini-2.5-flash",
+        generation_config={"temperature": 0.45, "max_output_tokens": 64},
+        client=genai.Client(
+            api_key="test-key",
+            http_options=HttpOptions(
+                httpx_client=httpx.Client(
+                    transport=httpx.MockTransport(_stream_handler)
+                ),
+            ),
+        ),
+    )
+    assert init_calls == 2
+    list(
+        stream_custom.response_stream(
+            messages=[Message(role="user", content="custom stream")]
+        )
+    )
+    assert init_calls == 2
+    assert get_params_calls == 2
+    (stream_custom_span,) = span_exporter.get_finished_spans()
+    _assert_telemetry_matches_wire(stream_custom_span, stream_wire_cfgs[-1])
+
 
 def test_openai_responses_input_file_url_content_block(
     instrument_agno_content_capture,
