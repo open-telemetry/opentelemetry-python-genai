@@ -9,38 +9,38 @@ interactions:
             "content": "Say hi."
           }
         ],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-5-5",
         "stream": true
       }
     headers:
       accept:
       - application/json
       accept-encoding:
-      - gzip, deflate
+      - gzip, deflate, zstd
       anthropic-version:
       - '2023-06-01'
       connection:
       - keep-alive
       content-length:
-      - '116'
+      - '109'
       content-type:
       - application/json
       host:
       - api.anthropic.com
       user-agent:
-      - Anthropic/Python 0.75.0
+      - Anthropic/Python 1.17.0
       x-api-key:
       - test_anthropic_api_key
       x-stainless-arch:
-      - arm64
+      - x64
       x-stainless-async:
       - 'false'
       x-stainless-lang:
       - python
       x-stainless-os:
-      - MacOS
+      - Linux
       x-stainless-package-version:
-      - 0.75.0
+      - 1.17.0
       x-stainless-read-timeout:
       - '600'
       x-stainless-retry-count:
@@ -48,7 +48,7 @@ interactions:
       x-stainless-runtime:
       - CPython
       x-stainless-runtime-version:
-      - 3.9.6
+      - 3.14.3
       x-stainless-timeout:
       - NOT_GIVEN
     method: POST
@@ -57,90 +57,86 @@ interactions:
     body:
       string: |+
         event: message_start
-        data: {"type":"message_start","message":{"model":"claude-sonnet-4-20250514","id":"msg_01AqjPamWtxvjFRhdM532SJo","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"not_available"}}  }
+        data: {"type":"message_start","message":{"model":"claude-sonnet-5-5","id":"msg_011CgwjJcNurdP8LTKVNuPsN","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":13,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":8,"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}  }
 
         event: content_block_start
-        data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}       }
+        data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}  }
 
         event: ping
         data: {"type": "ping"}
 
         event: content_block_delta
-        data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}  }
+        data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi there! 👋"}          }
 
         event: content_block_delta
-        data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"! How"}       }
-
-        event: content_block_delta
-        data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" are"}        }
-
-        event: content_block_delta
-        data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" you doing today?"}             }
+        data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" How can I help you today?"}     }
 
         event: content_block_stop
-        data: {"type":"content_block_stop","index":0       }
+        data: {"type":"content_block_stop","index":0}
 
         event: message_delta
-        data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":11}               }
+        data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":13,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":18,"output_tokens_details":{"thinking_tokens":0}}          }
 
         event: message_stop
-        data: {"type":"message_stop"         }
+        data: {"type":"message_stop"       }
 
     headers:
-      CF-RAY:
-      - 9d6567fd7d44c269-EWR
-      Cache-Control:
-      - no-cache
-      Connection:
-      - keep-alive
-      Content-Security-Policy:
-      - default-src 'none'; frame-ancestors 'none'
-      Content-Type:
-      - text/event-stream; charset=utf-8
-      Date:
-      - Tue, 03 Mar 2026 03:03:07 GMT
-      Server:
-      - cloudflare
-      Transfer-Encoding:
-      - chunked
-      X-Robots-Tag:
-      - none
       anthropic-ratelimit-input-tokens-limit:
-      - '450000'
+      - '10000000'
       anthropic-ratelimit-input-tokens-remaining:
-      - '450000'
+      - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-03-03T03:03:07Z'
+      - '2026-11-11T19:56:43Z'
       anthropic-ratelimit-output-tokens-limit:
-      - '90000'
+      - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
-      - '90000'
+      - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-03-03T03:03:07Z'
+      - '2026-11-11T19:56:43Z'
       anthropic-ratelimit-requests-limit:
-      - '1000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-03-03T03:03:07Z'
+      - '2026-11-11T19:56:43Z'
       anthropic-ratelimit-tokens-limit:
-      - '540000'
+      - '12000000'
       anthropic-ratelimit-tokens-remaining:
-      - '540000'
+      - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-03-03T03:03:07Z'
+      - '2026-11-11T19:56:43Z'
+      cache-control:
+      - no-cache
       cf-cache-status:
       - DYNAMIC
+      cf-ray:
+      - a58fdca2eafd4b25-IAD
+      connection:
+      - keep-alive
       content-length:
-      - '1519'
+      - '1411'
+      content-security-policy:
+      - default-src 'none'; frame-ancestors 'none'
+      content-type:
+      - text/event-stream; charset=utf-8
+      date:
+      - Wed, 11 Nov 2026 19:56:43 GMT
       request-id:
-      - req_011CYfQMuohKD5gG9juMpkR9
+      - req_011CgwjJc53cbUJQgLZJv8Km
+      server:
+      - cloudflare
+      server-timing:
+      - x-originResponse;dur=141
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
+      traceresponse:
+      - 00-b3130e0658540aae83a7970dfcfef021-69f450d99b26133f-01
+      transfer-encoding:
+      - chunked
       vary:
       - Accept-Encoding
-      x-envoy-upstream-service-time:
-      - '784'
+      x-robots-tag:
+      - none
     status:
       code: 200
       message: OK

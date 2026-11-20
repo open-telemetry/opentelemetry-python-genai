@@ -15,10 +15,32 @@ from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import (
     Scenario,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
+
+
+def validate_tool_calling(report: LiveCheckReport, tool_call_id: str) -> None:
+    output_messages = [
+        attribute["value"]
+        for entry in report["samples"]
+        if "span" in entry
+        for attribute in entry["span"]["attributes"]
+        if attribute["name"] == "gen_ai.output.messages"
+    ]
+    assert len(output_messages) == 1
+    parts = output_messages[0][0]["parts"]
+    calls = [p for p in parts if p["type"] == "tool_call"]
+    assert calls == [
+        {
+            "type": "tool_call",
+            "id": tool_call_id,
+            "name": "get_weather",
+            "arguments": {"city": "San Francisco"},
+        }
+    ]
 
 
 class ToolCallingScenario(Scenario):
@@ -27,6 +49,10 @@ class ToolCallingScenario(Scenario):
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
     )
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        validate_tool_calling(report, "toolu_0158vynsTUvXVpdDAgPPSEJc")
 
     def run(
         self,
@@ -51,7 +77,7 @@ class ToolCallingScenario(Scenario):
             ):
                 with vcr.use_cassette("tool_calling_conformance.yaml"):
                     Anthropic().messages.create(
-                        model="claude-sonnet-4-20250514",
+                        model="claude-sonnet-5-5",
                         max_tokens=256,
                         messages=[
                             {
@@ -70,5 +96,4 @@ class ToolCallingScenario(Scenario):
                                 },
                             }
                         ],
-                        tool_choice={"type": "tool", "name": "get_weather"},
                     )

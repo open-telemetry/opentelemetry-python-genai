@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import json
 import os
 import unittest
 from unittest.mock import patch
@@ -205,7 +204,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertIn(GenAI.GEN_AI_INPUT_MESSAGES, log_record.attributes)
         # Verify system instruction in both span and event
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
-        span_system = json.loads(span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
+        span_system = span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]
         self.assertEqual(span_system[0]["content"], "System prompt here")
         event_attrs = log_record.attributes
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, event_attrs)
