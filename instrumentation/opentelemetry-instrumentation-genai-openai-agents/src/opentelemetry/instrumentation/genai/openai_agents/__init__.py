@@ -61,6 +61,11 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
+from ._conversation import (
+    _current_conversation_id,
+    _current_session,
+    _extract_conversation_id,
+)
 from .package import _instruments
 from .processor import GenAIRunHooks, GenAITracingProcessor
 
@@ -149,7 +154,32 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         hooks = bound.arguments.get("hooks")
         if processor is not None and not isinstance(hooks, GenAIRunHooks):
             bound.arguments["hooks"] = GenAIRunHooks(hooks, processor)
-        return wrapped(*bound.args, **bound.kwargs)
+
+        conv_id = _extract_conversation_id(bound.arguments)
+        session = bound.arguments.get("session")
+        if session is None and isinstance(bound.arguments.get("kwargs"), dict):
+            session = bound.arguments["kwargs"].get("session")
+
+        if inspect.iscoroutinefunction(wrapped):
+
+            async def _run_async() -> Any:
+                token_conv = _current_conversation_id.set(conv_id)
+                token_sess = _current_session.set(session)
+                try:
+                    return await wrapped(*bound.args, **bound.kwargs)
+                finally:
+                    _current_conversation_id.reset(token_conv)
+                    _current_session.reset(token_sess)
+
+            return _run_async()
+
+        token_conv = _current_conversation_id.set(conv_id)
+        token_sess = _current_session.set(session)
+        try:
+            return wrapped(*bound.args, **bound.kwargs)
+        finally:
+            _current_conversation_id.reset(token_conv)
+            _current_session.reset(token_sess)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._processor is None:
