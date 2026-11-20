@@ -54,8 +54,31 @@ class ChoiceBuffer:
     def append_text_content(self, content: str) -> None:
         self.text_content.append(content)
 
+    def _tool_call_index(self, tool_call: Any) -> int:
+        index = get_property_value(tool_call, "index")
+        call_id = get_property_value(tool_call, "id")
+        if call_id:
+            # A known id always continues its own call, even when deltas of
+            # parallel calls interleave.
+            for i, buffer in enumerate(self.tool_calls_buffers):
+                if buffer is not None and buffer.tool_call_id == str(call_id):
+                    return i
+            # A new id opens a new call. Some servers (Gemini via Portkey)
+            # send `index` as the position inside each chunk, so every
+            # parallel call arrives as index=0: honour the index only while
+            # its slot is still free.
+            if index is not None and (
+                index >= len(self.tool_calls_buffers)
+                or self.tool_calls_buffers[index] is None
+            ):
+                return index
+            return len(self.tool_calls_buffers)
+        if index is not None:
+            return index
+        return max(len(self.tool_calls_buffers) - 1, 0)
+
     def append_tool_call(self, tool_call: Any) -> None:
-        idx = get_property_value(tool_call, "index") or 0
+        idx = self._tool_call_index(tool_call)
         for _ in range(len(self.tool_calls_buffers), idx + 1):
             self.tool_calls_buffers.append(None)
 
