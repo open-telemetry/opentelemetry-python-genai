@@ -1751,6 +1751,11 @@ class TestMessageModels(unittest.TestCase):
                     "parameters",
                     {"name": "tool", "type": "function"},
                 ),
+                (
+                    ToolCallResponsePart(response=payload, id=None),
+                    "response",
+                    {"response": None, "type": "tool_call_response"},
+                ),
             ]
             for part, payload_key, expected in parts:
                 with (
@@ -1765,7 +1770,7 @@ class TestMessageModels(unittest.TestCase):
                     self.assertIsInstance(part, Mapping)
                     self.assertEqual(dict(part), expected)
                     self.assertEqual(len(part), len(expected))
-                    if payload is None:
+                    if payload_key not in expected:
                         self.assertNotIn(payload_key, part)
                         convert.assert_not_called()
                     else:

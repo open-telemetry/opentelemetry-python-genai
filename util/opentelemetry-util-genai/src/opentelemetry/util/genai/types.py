@@ -40,6 +40,7 @@ class ContentCapturingMode(Enum):
 class _AnyValueMapping(Mapping[str, AnyValue]):
     __dataclass_fields__: ClassVar[dict[str, Field[object]]]
     _SANITIZE: ClassVar[frozenset[str]] = frozenset()
+    _KEEP_NONE: ClassVar[frozenset[str]] = frozenset()
 
     def __getitem__(self, key: str) -> AnyValue:
         if key not in self._present_fields():
@@ -64,6 +65,7 @@ class _AnyValueMapping(Mapping[str, AnyValue]):
             field.name
             for field in fields(self)
             if getattr(self, field.name) is not None
+            or field.name in self._KEEP_NONE
         ]
 
     def __bool__(self) -> bool:
@@ -107,12 +109,15 @@ class ToolCallRequestPart(_AnyValueMapping):
 
 
 @dataclass()
-class ToolCallResponsePart:
+class ToolCallResponsePart(_AnyValueMapping):
     """Represents a tool call result sent to the model or a built-in tool call outcome and details
 
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallResponsePart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
+
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset({"response"})
+    _KEEP_NONE: ClassVar[frozenset[str]] = frozenset({"response"})
 
     response: Any
     id: str | None
