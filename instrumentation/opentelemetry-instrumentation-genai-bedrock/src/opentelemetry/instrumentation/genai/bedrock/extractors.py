@@ -95,8 +95,10 @@ def _total_input_tokens(
     cache_read_input_tokens: int | None,
     cache_creation_input_tokens: int | None,
 ) -> int | None:
-    """Converse ``inputTokens`` excludes cached tokens; the semantic
-    conventions want ``gen_ai.usage.input_tokens`` to include them."""
+    """Bedrock input token counts (Converse ``inputTokens`` and InvokeModel's
+    ``x-amzn-bedrock-input-token-count`` / ``inputTokenCount``) exclude cached
+    tokens; the semantic conventions want ``gen_ai.usage.input_tokens`` to
+    include them."""
     if (
         input_tokens is None
         and cache_read_input_tokens is None
@@ -348,14 +350,16 @@ def extract_converse_request(
             if text_format_str in ("json", "text"):
                 invocation.output_type = text_format_str
 
-    # Prompt variables (opt-in under content capture)
     prompt_variables = kwargs.get("promptVariables")
-    if capture_content and _is_dict(prompt_variables):
-        for var_name, var_val in prompt_variables.items():
-            if _is_dict(var_val) and "text" in var_val:
-                invocation.attributes[f"gen_ai.prompt.variable.{var_name}"] = (
-                    str(var_val["text"])
-                )
+    if capture_content and _is_dict(prompt_variables) and prompt_variables:
+        invocation.prompt_variables = {
+            var_name: (
+                str(var_val["text"])
+                if _is_dict(var_val) and "text" in var_val
+                else var_val
+            )
+            for var_name, var_val in prompt_variables.items()
+        }
 
     # system instruction
     raw_system = kwargs.get("system")
@@ -443,13 +447,13 @@ def extract_converse_response(
         invocation.cache_read_input_tokens = _safe_int(
             usage.get("cacheReadInputTokens")
         )
-        invocation.cache_creation_input_tokens = _safe_int(
+        invocation.cache_write_input_tokens = _safe_int(
             usage.get("cacheWriteInputTokens")
         )
         invocation.input_tokens = _total_input_tokens(
             _safe_int(usage.get("inputTokens")),
             invocation.cache_read_input_tokens,
-            invocation.cache_creation_input_tokens,
+            invocation.cache_write_input_tokens,
         )
 
 
@@ -508,6 +512,7 @@ def extract_invoke_model_request(
             body.get("p"),
             text_gen_config.get("topP") if text_gen_config else None,
             inf_config.get("top_p") if inf_config else None,
+            inf_config.get("topP") if inf_config else None,
         )
     )
 
@@ -518,6 +523,7 @@ def extract_invoke_model_request(
             body.get("topK"),
             body.get("k"),
             inf_config.get("top_k") if inf_config else None,
+            inf_config.get("topK") if inf_config else None,
         )
     )
 
@@ -530,6 +536,7 @@ def extract_invoke_model_request(
             body.get("maxTokens"),
             text_gen_config.get("maxTokenCount") if text_gen_config else None,
             inf_config.get("max_new_tokens") if inf_config else None,
+            inf_config.get("maxTokens") if inf_config else None,
         )
     )
 
@@ -538,6 +545,7 @@ def extract_invoke_model_request(
         body.get("stop_sequences"),
         body.get("stopSequences"),
         text_gen_config.get("stopSequences") if text_gen_config else None,
+        inf_config.get("stopSequences") if inf_config else None,
     )
     if _is_list(stop_seqs):
         invocation.stop_sequences = [str(s) for s in stop_seqs]
@@ -662,11 +670,17 @@ def extract_invoke_model_response(
                 usage.get("cacheReadInputTokens"),
             )
         )
-        invocation.cache_creation_input_tokens = _safe_int(
+        invocation.cache_write_input_tokens = _safe_int(
             _first_not_none(
                 usage.get("cache_creation_input_tokens"),
                 usage.get("cacheWriteInputTokens"),
             )
+        )
+
+        invocation.input_tokens = _total_input_tokens(
+            invocation.input_tokens,
+            invocation.cache_read_input_tokens,
+            invocation.cache_write_input_tokens,
         )
 
     if invocation.input_tokens is None and "inputTextTokenCount" in body:
