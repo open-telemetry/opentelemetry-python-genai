@@ -44,7 +44,6 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
 )
-from opentelemetry.instrumentation.genai.langchain.package import _instruments
 from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
@@ -68,7 +67,7 @@ class LangChainInstrumentor(BaseInstrumentor):
         super().__init__()
 
     def instrumentation_dependencies(self) -> Collection[str]:
-        return _instruments
+        return ("langchain-core >= 0.3.49, < 2",)
 
     def _instrument(self, **kwargs: Any):
         """
