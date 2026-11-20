@@ -684,7 +684,12 @@ async def test_async_invoke_model_read_in_task_restores_context(
 
             async def consume() -> bytes:
                 assert trace.get_current_span() is caller_span
-                return await response["body"].read()
+                data = await response["body"].read()
+                # asyncio.create_task() copies the context, so an assertion in
+                # the parent cannot observe an invocation left current inside
+                # this task. Check the restoration where the read happened.
+                assert trace.get_current_span() is caller_span
+                return data
 
             assert await asyncio.create_task(consume()) == body_content
             assert trace.get_current_span() is caller_span
