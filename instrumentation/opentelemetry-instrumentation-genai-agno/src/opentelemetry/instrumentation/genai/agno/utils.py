@@ -115,6 +115,8 @@ _UNCACHED_INPUT_CLASSES = frozenset(
     {"Claude", "Anthropic", "AnthropicClaude", "AwsBedrock", "Bedrock"}
 )
 
+_CUMULATIVE_STREAM_USAGE_CLASSES = frozenset({"Gemini", "Google"})
+
 _TOKEN_USAGE_ATTRS = (
     "input_tokens",
     "output_tokens",
@@ -146,6 +148,20 @@ def _uses_uncached_input_tokens(
     if model is not None:
         for cls in type(model).__mro__:
             if cls.__name__ in _UNCACHED_INPUT_CLASSES:
+                return True
+    return False
+
+
+def uses_cumulative_stream_usage(
+    invocation: InferenceInvocation,
+    model: Model | None = None,
+) -> bool:
+    """Return True for providers whose streaming chunks carry cumulative usage totals."""
+    if invocation.provider in _GOOGLE_PROVIDERS:
+        return True
+    if model is not None:
+        for cls in type(model).__mro__:
+            if cls.__name__ in _CUMULATIVE_STREAM_USAGE_CLASSES:
                 return True
     return False
 
@@ -1336,12 +1352,15 @@ def _content_block_to_part(item: Any) -> MessagePart | None:
                     part.mime_type = mime_type
                 return part
             if mime_type is None:
-                mime_type = (
-                    mimetypes.guess_type(urllib.parse.urlparse(file_url).path)[
-                        0
-                    ]
-                    or mimetypes.guess_type(file_url)[0]
-                )
+                try:
+                    mime_type = (
+                        mimetypes.guess_type(
+                            urllib.parse.urlparse(file_url).path
+                        )[0]
+                        or mimetypes.guess_type(file_url)[0]
+                    )
+                except ValueError:
+                    mime_type = None
             return UriPart(
                 mime_type=mime_type,
                 modality=Modality.DOCUMENT,

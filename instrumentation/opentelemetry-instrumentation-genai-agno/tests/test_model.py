@@ -5700,16 +5700,9 @@ def test_recorded_gemini_stream_generate_content(
         assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
         assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.2
         assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 1024
-        if is_agno_v2:
-            # Agno 2.3.x sums per-chunk cumulative Gemini usageMetadata across
-            # the 3 streamed SSE chunks rather than taking the final cumulative value.
-            assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 48
-            assert (
-                attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 2538
-            )
-        else:
-            assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 16
-            assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 870
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 16
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 870
+        if not is_agno_v2:
             assert (
                 attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)
                 == 800
@@ -5725,14 +5718,147 @@ def test_recorded_gemini_stream_generate_content(
             in output_msgs[0]["parts"][0]["content"]
         )
 
-    metric_names = {
-        metric.name
-        for rm in metric_reader.get_metrics_data().resource_metrics
-        for sm in rm.scope_metrics
-        for metric in sm.metrics
-    }
+    metrics_data = metric_reader.get_metrics_data()
+    metric_names: set[str] = set()
+    token_sums_by_type: dict[Any, tuple[int, float]] = {}
+    for rm in metrics_data.resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                metric_names.add(metric.name)
+                if metric.name == "gen_ai.client.token.usage":
+                    for dp in metric.data.data_points:
+                        tok_type = dp.attributes.get(
+                            GenAIAttributes.GEN_AI_TOKEN_TYPE
+                        )
+                        prev_count, prev_sum = token_sums_by_type.get(
+                            tok_type, (0, 0.0)
+                        )
+                        token_sums_by_type[tok_type] = (
+                            prev_count + dp.count,
+                            prev_sum + dp.sum,
+                        )
     assert "gen_ai.client.operation.time_to_first_chunk" in metric_names
     assert "gen_ai.client.operation.time_per_output_chunk" in metric_names
+    assert token_sums_by_type == {
+        "input": (2, 32.0),
+        "output": (2, 1740.0),
+    }
+
+
+def test_gemini_stream_preserves_final_usage_across_chunks_and_usage_only_tail(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+    monkeypatch,
+) -> None:
+    """Cumulative per-chunk Gemini stream usage and a non-yielded final usage chunk record final totals, not summed totals."""
+    import dataclasses
+
+    import httpx
+    from agno.models.google import Gemini
+    from google import genai
+    from google.genai.types import HttpOptions
+
+    for env_var in (
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+
+    sse_body = (
+        b'data: {"candidates":[{"content":{"parts":[{"text":"Hello "}],"role":"model"},"index":0}],'
+        b'"usageMetadata":{"promptTokenCount":16,"candidatesTokenCount":10,"thoughtsTokenCount":50,"totalTokenCount":76}}\r\n\r\n'
+        b'data: {"candidates":[{"content":{"parts":[{"text":"world"}],"role":"model"},"index":0}],'
+        b'"usageMetadata":{"promptTokenCount":16,"candidatesTokenCount":25,"thoughtsTokenCount":50,"totalTokenCount":91}}\r\n\r\n'
+        b'data: {"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP","index":0}],'
+        b'"usageMetadata":{"promptTokenCount":16,"candidatesTokenCount":30,"thoughtsTokenCount":50,"totalTokenCount":96}}\r\n\r\n'
+    )
+
+    def _sync_handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=sse_body,
+        )
+
+    async def _async_handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=sse_body,
+        )
+
+    def _make_gemini() -> Gemini:
+        extra_kwargs: dict[str, Any] = {}
+        if any(
+            f.name == "collect_metrics_on_completion"
+            for f in dataclasses.fields(Gemini)
+        ):
+            # Force per-chunk usage emission on Agno 3.x to match Agno 2.3.x behavior.
+            extra_kwargs["collect_metrics_on_completion"] = False
+        return Gemini(
+            id="gemini-2.5-flash",
+            client=genai.Client(
+                api_key="test-key",
+                http_options=HttpOptions(
+                    api_version="v1beta",
+                    httpx_client=httpx.Client(
+                        transport=httpx.MockTransport(_sync_handler)
+                    ),
+                    httpx_async_client=httpx.AsyncClient(
+                        transport=httpx.MockTransport(_async_handler)
+                    ),
+                ),
+            ),
+            **extra_kwargs,
+        )
+
+    prompt = [Message(role="user", content="hello")]
+    sync_chunks = list(_make_gemini().response_stream(messages=prompt))
+    assert any(getattr(c, "content", None) for c in sync_chunks)
+
+    async def _run_async() -> list[Any]:
+        out: list[Any] = []
+        async for chunk in _make_gemini().aresponse_stream(messages=prompt):
+            out.append(chunk)
+        return out
+
+    async_chunks = asyncio.run(_run_async())
+    assert any(getattr(c, "content", None) for c in async_chunks)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    for span in spans:
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 16
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 80
+        )
+
+    token_sums_by_type: dict[Any, tuple[int, float]] = {}
+    for rm in metric_reader.get_metrics_data().resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                if metric.name == "gen_ai.client.token.usage":
+                    for dp in metric.data.data_points:
+                        tok_type = dp.attributes.get(
+                            GenAIAttributes.GEN_AI_TOKEN_TYPE
+                        )
+                        prev_count, prev_sum = token_sums_by_type.get(
+                            tok_type, (0, 0.0)
+                        )
+                        token_sums_by_type[tok_type] = (
+                            prev_count + dp.count,
+                            prev_sum + dp.sum,
+                        )
+    assert token_sums_by_type == {
+        "input": (2, 32.0),
+        "output": (2, 160.0),
+    }
 
 
 def test_gemini_generation_config_and_generative_model_kwargs_precedence(
@@ -5980,6 +6106,10 @@ def test_openai_responses_input_file_url_content_block(
                         "type": "input_file",
                         "file_url": pdf_data_url,
                     },
+                    {
+                        "type": "input_file",
+                        "file_url": "http://[invalid/report.pdf",
+                    },
                 ],
             )
         ]
@@ -6002,6 +6132,11 @@ def test_openai_responses_input_file_url_content_block(
             "modality": "document",
             "mime_type": "application/pdf",
             "content": pdf_bytes,
+        },
+        {
+            "type": "uri",
+            "modality": "document",
+            "uri": "http://[invalid/report.pdf",
         },
     ]
 
@@ -6045,3 +6180,150 @@ def test_model_endpoint_omitted_when_base_url_missing(
                         assert "server.address" not in dp.attributes
                         assert "server.port" not in dp.attributes
     assert observed_duration_points == 2
+
+
+def test_concurrent_first_use_ainvoke_stream_wrapping_and_uninstrument(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """Concurrent first-use aresponse_stream calls wrap ainvoke_stream only once and uninstrument removes all wrappers."""
+    import threading
+
+    from agno.models.base import Model
+
+    from opentelemetry.instrumentation.genai.agno import AgnoInstrumentor
+
+    class _ConcurrentFirstUseModel(Model):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="sync")
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(content="async")
+
+        def invoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> Iterator[ModelResponse]:
+            yield ModelResponse(content="sync-chunk")
+
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            yield ModelResponse(content="async-chunk")
+
+        def _parse_provider_response(
+            self, response: Any, **kwargs: Any
+        ) -> ModelResponse:
+            return response
+
+        def _parse_provider_response_delta(
+            self, response: Any
+        ) -> ModelResponse:
+            return response
+
+    instrumentor = AgnoInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    )
+    try:
+        worker_count = 8
+        barrier = threading.Barrier(worker_count)
+        errors: list[BaseException] = []
+
+        def _worker(idx: int) -> None:
+            try:
+                model = _ConcurrentFirstUseModel(
+                    id=f"concurrent-model-{idx}", provider="OpenAI"
+                )
+                barrier.wait()
+
+                async def _drain() -> list[Any]:
+                    return [
+                        chunk
+                        async for chunk in model.aresponse_stream(
+                            messages=[Message(role="user", content="hi")]
+                        )
+                    ]
+
+                chunks = asyncio.run(_drain())
+                assert any(getattr(c, "content", None) for c in chunks)
+            except BaseException as exc:  # pragma: no cover
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=_worker, args=(i,))
+            for i in range(worker_count)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        wrapped_fn = _ConcurrentFirstUseModel.__dict__["ainvoke_stream"]
+        assert hasattr(wrapped_fn, "__wrapped__")
+        assert not hasattr(wrapped_fn.__wrapped__, "__wrapped__")
+        assert len(span_exporter.get_finished_spans()) == worker_count
+    finally:
+        instrumentor.uninstrument()
+
+    assert not hasattr(
+        _ConcurrentFirstUseModel.__dict__["ainvoke_stream"], "__wrapped__"
+    )
+
+    # Also verify racing first-use wrapping against uninstrument leaves no wrapper behind.
+    for cycle in range(5):
+
+        class _RaceUninstrumentModel(_ConcurrentFirstUseModel):
+            async def ainvoke_stream(
+                self, *args: Any, **kwargs: Any
+            ) -> AsyncIterator[ModelResponse]:
+                yield ModelResponse(content=f"race-{cycle}")
+
+        instrumentor.instrument(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        )
+        race_barrier = threading.Barrier(5)
+        race_errors: list[BaseException] = []
+
+        def _stream_racer() -> None:
+            try:
+                model = _RaceUninstrumentModel(
+                    id=f"race-model-{cycle}", provider="OpenAI"
+                )
+                race_barrier.wait()
+
+                async def _drain() -> None:
+                    async for _ in model.aresponse_stream(
+                        messages=[Message(role="user", content="race")]
+                    ):
+                        pass
+
+                asyncio.run(_drain())
+            except BaseException as exc:  # pragma: no cover
+                race_errors.append(exc)
+
+        def _uninstrument_racer() -> None:
+            try:
+                race_barrier.wait()
+                instrumentor.uninstrument()
+            except BaseException as exc:  # pragma: no cover
+                race_errors.append(exc)
+
+        racers = [threading.Thread(target=_stream_racer) for _ in range(4)] + [
+            threading.Thread(target=_uninstrument_racer)
+        ]
+        for t in racers:
+            t.start()
+        for t in racers:
+            t.join()
+
+        assert not race_errors
+        assert not hasattr(
+            _RaceUninstrumentModel.__dict__["ainvoke_stream"], "__wrapped__"
+        )
