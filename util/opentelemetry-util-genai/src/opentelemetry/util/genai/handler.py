@@ -69,6 +69,12 @@ from opentelemetry.util.genai._inference_invocation import (
     SuppressedInferenceInvocation,
 )
 from opentelemetry.util.genai._instruments import _Instruments
+from opentelemetry.util.genai._realtime_invocation import (
+    SuppressedRealtimeInferenceInvocation,
+    emit_realtime_session_ended_event,
+    emit_realtime_session_started_event,
+    should_capture_realtime_content,
+)
 from opentelemetry.util.genai._retrieval_invocation import (
     SuppressedRetrievalInvocation,
 )
@@ -84,22 +90,28 @@ from opentelemetry.util.genai.invocation import (
     CLIENT_RETRIEVAL_CONTEXT_KEY,
     EmbeddingData,
     EmbeddingInvocation,
+    Error,
     FetchResponseData,
     FetchResponseInvocation,
     InferenceData,
     InferenceInvocation,
     LocalAgentInvocation,
+    RealtimeInferenceInvocation,
     RemoteAgentInvocation,
     RetrievalData,
     RetrievalInvocation,
     ToolInvocation,
+    UserSpeechInvocation,
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
 )
-from opentelemetry.util.genai.utils import get_content_capturing_mode
+from opentelemetry.util.genai.utils import (
+    get_content_capturing_mode,
+    get_emit_user_speech,
+)
 from opentelemetry.util.genai.version import __version__
 
 
@@ -157,6 +169,7 @@ class TelemetryHandler:
             schema_url=schema_url,
         )
         self._content_capturing_mode = get_content_capturing_mode()
+        self._emit_user_speech = get_emit_user_speech()
         if completion_hook is None or isinstance(
             completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
         ):
@@ -191,6 +204,34 @@ class TelemetryHandler:
         when a real completion hook is configured (not a no-op).
         """
         return self._capture_content
+
+    def should_capture_realtime_content(
+        self, *, context: Context | None = None
+    ) -> bool:
+        """Returns True when content should be captured for a realtime inference turn.
+
+        Unlike :meth:`should_capture_content`, this accounts for realtime
+        inference's span-only event behavior (``EVENT_ONLY`` without an active
+        completion hook or an opting-in outer inference context does not
+        capture content) and enclosing suppressed inference contexts.
+
+        Args:
+            context: An optional OpenTelemetry Context to inspect for an
+                enclosing inference context. Defaults to the current context.
+        """
+        return should_capture_realtime_content(
+            self._content_capturing_mode,
+            self._completion_hook,
+            context=context,
+        )
+
+    def should_emit_user_speech(self) -> bool:
+        """Returns True when opt-in ``user_speech`` spans are enabled.
+
+        Controlled by the ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH``
+        environment variable (defaults to ``False``).
+        """
+        return self._emit_user_speech
 
     def retrieval(
         self,
@@ -287,6 +328,121 @@ class TelemetryHandler:
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
+        )
+
+    def realtime_inference(
+        self,
+        provider: str,
+        *,
+        request_model: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        realtime_session_id: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+        conversation_id: str | None = None,
+    ) -> RealtimeInferenceInvocation:
+        """Returns a ``realtime_inference`` invocation. Starts span when called."""
+        invocation_cls: type[RealtimeInferenceInvocation] = (
+            SuppressedRealtimeInferenceInvocation
+            if isinstance(
+                get_value(CLIENT_INFERENCE_CONTEXT_KEY, context=context),
+                InferenceData,
+            )
+            else RealtimeInferenceInvocation
+        )
+        return invocation_cls(
+            self._tracer,
+            self._instruments,
+            self._logger,
+            self._completion_hook,
+            provider=provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+            realtime_session_id=realtime_session_id,
+            error_type_resolver=error_type_resolver,
+            content_capturing_mode=self._content_capturing_mode,
+            context=context,
+            _attach_to_context=_attach_to_context,
+            conversation_id=conversation_id,
+        )
+
+    def user_speech(
+        self,
+        *,
+        provider: str | None = None,
+        realtime_session_id: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+    ) -> UserSpeechInvocation:
+        """Returns a ``user_speech`` invocation (INTERNAL span kind).
+
+        ``user_speech`` is an opt-in semantic convention signal disabled by
+        default. When ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH`` is not
+        enabled, the returned invocation is a no-op that does not start or end
+        a span.
+        """
+        return UserSpeechInvocation(
+            self._tracer,
+            self._instruments,
+            self._logger,
+            self._completion_hook,
+            provider=provider,
+            realtime_session_id=realtime_session_id,
+            error_type_resolver=error_type_resolver,
+            content_capturing_mode=self._content_capturing_mode,
+            start_span=self._emit_user_speech,
+            context=context,
+            _attach_to_context=_attach_to_context,
+        )
+
+    def emit_realtime_session_started(
+        self,
+        provider: str,
+        *,
+        request_model: str | None = None,
+        realtime_session_id: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        context: Context | None = None,
+    ) -> None:
+        """Emit a ``gen_ai.client.realtime_session.started`` event."""
+        emit_realtime_session_started_event(
+            self._logger,
+            provider,
+            request_model=request_model,
+            realtime_session_id=realtime_session_id,
+            server_address=server_address,
+            server_port=server_port,
+            context=context,
+        )
+
+    def emit_realtime_session_ended(
+        self,
+        provider: str,
+        *,
+        request_model: str | None = None,
+        realtime_session_id: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        error: Error | BaseException | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+        context: Context | None = None,
+    ) -> None:
+        """Emit a ``gen_ai.client.realtime_session.ended`` event."""
+        emit_realtime_session_ended_event(
+            self._logger,
+            provider,
+            request_model=request_model,
+            realtime_session_id=realtime_session_id,
+            server_address=server_address,
+            server_port=server_port,
+            error=error,
+            error_type_resolver=error_type_resolver,
+            context=context,
         )
 
     def embedding(

@@ -194,12 +194,28 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 - ``EVENT_ONLY``: Capture message content in events only.
 - ``SPAN_AND_EVENT``: Capture message content in both spans and events.
 
+Realtime opt-in signals:
+
+- ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH``: Set to ``true`` (case-insensitive) to enable
+  opt-in ``user_speech`` spans for realtime sessions. Defaults to ``false`` (disabled).
+
 When a ``LoggerProvider`` is configured, the package emits ``gen_ai.client.inference.operation.details``
 events (with ``DEBUG`` severity) regardless of the content capturing mode. Message content is
 included as structured dictionaries in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
 To suppress these events while keeping a ``LoggerProvider`` active, configure your logger or
 ``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
 <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
+
+When content capture is enabled, ``BlobPart.content`` carries raw ``bytes`` inside structured
+``AnyValue`` message dictionaries on both spans and log events. To truncate large ``bytes`` (and
+``str``) values without corrupting the surrounding message structure, set
+``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT``, ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` /
+``SpanLimits(max_span_attribute_length=...)``, or
+``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`` /
+``LogRecordLimits(max_log_record_attribute_length=...)``. Note that truncating ``bytes`` /
+``bytearray`` attribute values requires `open-telemetry/opentelemetry-python#5855
+<https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased
+version of ``opentelemetry-api``).
 
 When an inference, embeddings, retrieval, fetch response, agent invocation, or tool execution
 operation fails with an exception, the package also emits the operation's exception event (for
