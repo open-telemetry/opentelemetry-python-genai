@@ -10,6 +10,7 @@ import asyncio
 import ollama
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -113,6 +114,24 @@ async def test_async_chat_error_is_recorded_and_reraised(
 
 
 @pytest.mark.asyncio
+async def test_async_chat_stop_async_iteration_from_sdk_is_recorded(
+    instrument_no_content, span_exporter, monkeypatch
+):
+    async def _raise(*_args, **_kwargs):
+        raise StopAsyncIteration
+
+    monkeypatch.setattr(ollama.AsyncClient, "_request", _raise)
+    with pytest.raises(StopAsyncIteration):
+        await ollama.AsyncClient(host=HOST).chat(
+            model=CHAT_MODEL, messages=MESSAGES
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "StopAsyncIteration"
+
+
+@pytest.mark.asyncio
 async def test_async_chat_stream_error_is_recorded(
     instrument_no_content, span_exporter, vcr
 ):
@@ -171,3 +190,47 @@ async def test_async_chat_stream_caller_error_in_async_with_is_recorded(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[error_attributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_async_chat_stream_span_is_not_current_between_reads(
+    instrument_no_content, span_exporter, vcr
+):
+    seen: list[int] = []
+
+    async def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    with vcr.use_cassette(
+        "test_async_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = await ollama.AsyncClient(
+            host=HOST, event_hooks={"request": [hook]}
+        ).chat(model=CHAT_MODEL, messages=MESSAGES, stream=True)
+        assert not trace.get_current_span().get_span_context().is_valid
+        await asyncio.create_task(anext(stream))
+        assert not trace.get_current_span().get_span_context().is_valid
+        async for _ in stream:
+            assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+@pytest.mark.asyncio
+async def test_async_chat_span_is_current_only_during_the_request(
+    instrument_no_content, span_exporter, vcr
+):
+    seen: list[int] = []
+
+    async def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    with vcr.use_cassette("test_async_chat_records_a_chat_span.yaml"):
+        await ollama.AsyncClient(
+            host=HOST, event_hooks={"request": [hook]}
+        ).chat(model=CHAT_MODEL, messages=MESSAGES)
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]

@@ -91,19 +91,21 @@ def _chat(handler: TelemetryHandler) -> Callable[..., Any]:
             kwargs, "tools", enabled=capture_content
         )
         invocation = create_chat_invocation(handler, instance, args, kwargs)
-        try:
+        with invocation.activate():
             try:
-                result = wrapped(*args, **kwargs)
-            finally:
-                invocation.input_messages = (
-                    messages_capture.extract(get_input_messages) or []
-                )
-                invocation.tool_definitions = tools_capture.extract(
-                    get_tool_definitions
-                )
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+                try:
+                    result = wrapped(*args, **kwargs)
+                finally:
+                    invocation.input_messages = (
+                        messages_capture.extract(get_input_messages) or []
+                    )
+                    invocation.tool_definitions = tools_capture.extract(
+                        get_tool_definitions
+                    )
+            # activate() doesn't fail on StopIteration or GeneratorExit.
+            except BaseException as error:
+                invocation.fail(error)
+                raise
         if kwargs.get("stream"):
             return ChatStreamWrapper(result, invocation, capture_content)
         set_chat_response(invocation, result, capture_content)
@@ -131,19 +133,21 @@ def _async_chat(handler: TelemetryHandler) -> Callable[..., Any]:
             kwargs, "tools", enabled=capture_content
         )
         invocation = create_chat_invocation(handler, instance, args, kwargs)
-        try:
+        with invocation.activate():
             try:
-                result = await wrapped(*args, **kwargs)
-            finally:
-                invocation.input_messages = (
-                    messages_capture.extract(get_input_messages) or []
-                )
-                invocation.tool_definitions = tools_capture.extract(
-                    get_tool_definitions
-                )
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+                try:
+                    result = await wrapped(*args, **kwargs)
+                finally:
+                    invocation.input_messages = (
+                        messages_capture.extract(get_input_messages) or []
+                    )
+                    invocation.tool_definitions = tools_capture.extract(
+                        get_tool_definitions
+                    )
+            # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
+            except BaseException as error:
+                invocation.fail(error)
+                raise
         if kwargs.get("stream"):
             return AsyncChatStreamWrapper(result, invocation, capture_content)
         set_chat_response(invocation, result, capture_content)
@@ -162,14 +166,11 @@ def _embed(handler: TelemetryHandler) -> Callable[..., Any]:
     ) -> Any:
         if is_empty_embed_request(args, kwargs):
             return wrapped(*args, **kwargs)
-        invocation = create_embed_invocation(handler, instance, args, kwargs)
-        try:
+        with create_embed_invocation(
+            handler, instance, args, kwargs
+        ) as invocation:
             result = wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
-        set_embed_response(invocation, result)
-        invocation.stop()
+            set_embed_response(invocation, result)
         return result
 
     return traced_method
@@ -184,14 +185,11 @@ def _async_embed(handler: TelemetryHandler) -> Callable[..., Any]:
     ) -> Any:
         if is_empty_embed_request(args, kwargs):
             return await wrapped(*args, **kwargs)
-        invocation = create_embed_invocation(handler, instance, args, kwargs)
-        try:
+        with create_embed_invocation(
+            handler, instance, args, kwargs
+        ) as invocation:
             result = await wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
-        set_embed_response(invocation, result)
-        invocation.stop()
+            set_embed_response(invocation, result)
         return result
 
     return traced_method
