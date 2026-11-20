@@ -330,7 +330,7 @@ def _to_server_tool_part(
     if tool_name is None and response_name is None:
         return None
 
-    payload = _as_payload(item)
+    payload = dict(item) if isinstance(item, dict) else _as_payload(item)
     if payload is None:
         return None
 

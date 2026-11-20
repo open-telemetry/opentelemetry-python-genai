@@ -5,6 +5,7 @@ import base64
 import json
 import os
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -1541,6 +1542,138 @@ async def test_async_interactions_create_malformed_input(
         )
 
     _assert_malformed_input_span(otel_mocker, exc_info.value)
+
+
+@dataclass
+class _ServerToolMeta:
+    source: str
+
+
+def _server_tool_dict_cycle_and_dataclass_steps() -> list[dict[str, Any]]:
+    cyclic_args: dict[str, Any] = {"queries": ["OpenTelemetry"]}
+    cyclic_args["self"] = cyclic_args
+    return [
+        {
+            "type": "google_search_call",
+            "id": "search-1",
+            "arguments": cyclic_args,
+        },
+        {
+            "type": "google_search_result",
+            "call_id": "search-1",
+            "result": [{"meta": _ServerToolMeta(source="docs")}],
+        },
+    ]
+
+
+def _expected_cyclic_server_tool_exception() -> type[Exception]:
+    if _uses_legacy_interactions_sdk():
+        return ValueError
+    from pydantic_core import PydanticSerializationError
+
+    return PydanticSerializationError
+
+
+def _assert_cyclic_server_tool_span(
+    otel_mocker: OTelMocker,
+    exc: BaseException,
+    steps: list[dict[str, Any]],
+    content_mode: str,
+) -> None:
+    assert not get_current_span().get_span_context().is_valid
+    assert "Circular reference detected" in str(exc)
+    # Caller-supplied server-tool dictionaries must not be mutated in place.
+    assert steps[0]["type"] == "google_search_call"
+    assert steps[0]["id"] == "search-1"
+    assert steps[1]["type"] == "google_search_result"
+    assert steps[1]["call_id"] == "search-1"
+
+    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    expected_error_type = (
+        "ValueError"
+        if _uses_legacy_interactions_sdk()
+        else "pydantic_core._pydantic_core.PydanticSerializationError"
+    )
+    assert span.attributes["error.type"] == expected_error_type
+    if content_mode == "no_content_capture":
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+        return
+
+    assert get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    ) == [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "type": "server_tool_call",
+                    "id": "search-1",
+                    "name": "google_search",
+                    "server_tool_call": {
+                        "type": "google_search",
+                        "arguments": {"queries": ["OpenTelemetry"]},
+                    },
+                },
+                {
+                    "type": "server_tool_call_response",
+                    "id": "search-1",
+                    "server_tool_call_response": {
+                        "type": "google_search",
+                        "result": [{"meta": {"source": "docs"}}],
+                    },
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_server_tool_dict_cycle_and_dataclass(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps = _server_tool_dict_cycle_and_dataclass_steps()
+    expected_exc = _expected_cyclic_server_tool_exception()
+    with pytest.raises(expected_exc) as exc_info:
+        client.interactions.create(
+            model="gemini-2.5-flash",
+            input=steps,
+        )
+
+    _assert_cyclic_server_tool_span(
+        otel_mocker, exc_info.value, steps, content_mode
+    )
+
+
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_server_tool_dict_cycle_and_dataclass(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    steps = _server_tool_dict_cycle_and_dataclass_steps()
+    expected_exc = _expected_cyclic_server_tool_exception()
+    with pytest.raises(expected_exc) as exc_info:
+        await client.aio.interactions.create(
+            model="gemini-2.5-flash",
+            input=steps,
+        )
+
+    _assert_cyclic_server_tool_span(
+        otel_mocker, exc_info.value, steps, content_mode
+    )
 
 
 @pytest.mark.vcr
