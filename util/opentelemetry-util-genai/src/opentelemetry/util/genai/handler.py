@@ -121,7 +121,7 @@ class TelemetryHandler:
         completion_hook: CompletionHook | None = None,
         instrumentation_scope_name: str | None = None,
         instrumentation_scope_version: str | None = None,
-        content_capturing_mode: ContentCapturingMode | str | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ):
         """Creates a new telemetry handler.
 
@@ -164,26 +164,11 @@ class TelemetryHandler:
             logger_provider,
             schema_url=schema_url,
         )
-        if content_capturing_mode is None:
-            content_capturing_mode = get_content_capturing_mode()
-        elif isinstance(content_capturing_mode, str):
-            mode_name = content_capturing_mode.strip()
-            if not mode_name:
-                content_capturing_mode = ContentCapturingMode.NO_CONTENT
-            else:
-                try:
-                    content_capturing_mode = ContentCapturingMode[
-                        mode_name.upper()
-                    ]
-                except KeyError:
-                    _logger.warning(
-                        "%s is not a valid option for `content_capturing_mode`. "
-                        "Must be one of %s. Defaulting to `NO_CONTENT`.",
-                        mode_name,
-                        ", ".join(mode.name for mode in ContentCapturingMode),
-                    )
-                    content_capturing_mode = ContentCapturingMode.NO_CONTENT
-        self._content_capturing_mode = content_capturing_mode
+        self._content_capturing_mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
         if completion_hook is None or isinstance(
             completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
         ):
