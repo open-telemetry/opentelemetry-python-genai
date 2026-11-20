@@ -90,6 +90,30 @@ def test_chat_stream_records_token_usage_from_the_final_chunk(
     assert usage["output"].sum == chunks[-1].eval_count
 
 
+def test_chat_stream_chunk_timings_share_one_series(
+    instrument_no_content, metric_reader, vcr
+):
+    with vcr.use_cassette(
+        "test_chat_stream_records_the_drained_response.yaml"
+    ):
+        chunks = list(
+            ollama.Client(host=HOST).chat(
+                model=CHAT_MODEL, messages=MESSAGES, stream=True
+            )
+        )
+
+    metrics = _metrics(metric_reader)
+    (first_chunk,) = metrics[
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK
+    ].data.data_points
+    (per_chunk,) = metrics[
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_PER_OUTPUT_CHUNK
+    ].data.data_points
+    assert first_chunk.count == 1
+    assert per_chunk.count == len(chunks) - 1
+    assert per_chunk.attributes == first_chunk.attributes
+
+
 def test_chat_error_records_duration_with_error_type(
     instrument_no_content, metric_reader, vcr
 ):
