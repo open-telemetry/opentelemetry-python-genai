@@ -118,6 +118,50 @@ If both variables are set, the includes list is applied first, then the
 excludes list filters the result further.
 
 
+Adding extra attributes
+***********************
+
+Callers can attach extra attributes to the ``generate_content`` telemetry by
+putting them on the OpenTelemetry ``context``.
+Two public context keys are exported from
+``opentelemetry.instrumentation.google_genai``:
+
+* ``GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY`` — attributes recorded on
+  both the ``generate_content`` span and the
+  ``gen_ai.client.inference.operation.details`` event. They are not recorded on
+  metrics.
+* ``GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY`` — attributes
+  recorded only on the ``gen_ai.client.inference.operation.details`` event.
+  They never appear on the span or on metrics. When the same attribute key is
+  set through both channels, the event-only value wins on the event.
+
+Attach the dictionary for the duration of the call using
+``opentelemetry.context.attach`` / ``opentelemetry.context.detach``. The
+instrumentation reads the value once per call; sync, async, streamed and
+non-streamed variants are all covered:
+
+.. code-block:: python
+
+    from opentelemetry import context as context_api
+    from opentelemetry.instrumentation.google_genai import (
+        GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+    )
+
+    token = context_api.attach(
+        context_api.set_value(
+            GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+            {"my.event.attribute": "value"},
+        )
+    )
+    try:
+        client.models.generate_content(
+            model="gemini-1.5-flash-002",
+            contents="Write a short poem on OpenTelemetry.",
+        )
+    finally:
+        context_api.detach(token)
+
+
 Uninstrument
 ************
 
