@@ -199,12 +199,12 @@ class AnthropicInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             "anthropic._response",
             "ResponseContextManager.__exit__",
-            self._active(response_context_manager_exit),
+            response_context_manager_exit,
         )
         wrap_function_wrapper(
             "anthropic._response",
             "AsyncResponseContextManager.__aexit__",
-            self._active(async_response_context_manager_exit),
+            async_response_context_manager_exit,
         )
 
         if self._beta_messages_supported:

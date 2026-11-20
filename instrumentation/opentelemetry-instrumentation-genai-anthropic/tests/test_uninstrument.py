@@ -140,3 +140,25 @@ async def test_uninstrument_stops_tracing_cached_async_with_streaming_response(
     async with client.messages.with_streaming_response.create(**_KW) as r:
         await r.parse()
     assert len(span_exporter.get_finished_spans()) == 0
+
+
+def test_uninstrument_stops_tracing_cached_beta_with_raw_response(
+    span_exporter: InMemorySpanExporter,
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+) -> None:
+    client = _client()
+    with instrument(
+        AnthropicInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        client.beta.messages.with_raw_response.create(**_KW)
+        assert len(span_exporter.get_finished_spans()) == 1
+
+    span_exporter.clear()
+    client.beta.messages.with_raw_response.create(**_KW)
+    assert len(span_exporter.get_finished_spans()) == 0
+
