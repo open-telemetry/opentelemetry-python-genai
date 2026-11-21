@@ -44,10 +44,16 @@ def safe_int(val: Any) -> int | None:
         return None
 
 
-# agno reports cache reads and writes outside ``input_tokens`` only for these
-# providers. OpenAI, Azure and Gemini fold the cached part into ``input_tokens``,
-# so adding it there would count the same tokens twice.
-_CACHE_TOKENS_OUTSIDE_INPUT = frozenset({"anthropic", "awsbedrock"})
+# agno reports cache reads and writes outside ``input_tokens`` for the
+# Anthropic-shaped model classes: Anthropic itself, Bedrock, and the Vertex AI
+# and Azure AI Foundry classes, which inherit the Anthropic ``_get_metrics``
+# while carrying their own provider string. OpenAI, Azure and Gemini fold the
+# cached part into ``input_tokens``, so adding it there would count the same
+# tokens twice. A new provider that inherits the Anthropic accounting belongs
+# in this set.
+_CACHE_TOKENS_OUTSIDE_INPUT = frozenset(
+    {"anthropic", "awsbedrock", "vertexai", "azurefoundry"}
+)
 
 
 def _normalize_provider(provider: str | None) -> str | None:
@@ -71,9 +77,9 @@ def total_input_tokens(
     """Fold agno's cached prompt tokens into ``gen_ai.usage.input_tokens``.
 
     Whether the cached tokens belong in the sum depends on the provider: agno
-    keeps them outside ``input_tokens`` for Anthropic and Bedrock, and inside it
-    for OpenAI, Azure and Gemini. An unrecognized or missing provider is left
-    unsummed rather than guessed at.
+    keeps them outside ``input_tokens`` for Anthropic, Bedrock, Vertex AI and
+    Azure AI Foundry, and inside it for OpenAI, Azure and Gemini. An
+    unrecognized or missing provider is left unsummed rather than guessed at.
 
     A zero total means agno had nothing to report, so it returns ``None``
     rather than recording ``0`` on the span.

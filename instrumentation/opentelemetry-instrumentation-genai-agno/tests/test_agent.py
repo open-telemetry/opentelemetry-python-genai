@@ -2526,18 +2526,23 @@ def test_agent_run_records_token_usage(
     assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3
 
 
+@pytest.mark.parametrize(
+    "provider",
+    ["Anthropic", "AwsBedrock", "VertexAI", "AzureFoundry"],
+)
 def test_agent_run_input_tokens_include_cached_tokens(
     instrument_agno,
     span_exporter,
+    provider: str,
 ) -> None:
-    """Anthropic and Bedrock report cached tokens outside input_tokens."""
+    """Anthropic-shaped providers report cached tokens outside input_tokens."""
     from agno.agent import RunOutput
     from agno.metrics import RunMetrics
 
     agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
     run_output = RunOutput(
         content="hello back",
-        model_provider="Anthropic",
+        model_provider=provider,
         # agno reports the cache reads and writes outside input_tokens here
         metrics=RunMetrics(
             input_tokens=12,
