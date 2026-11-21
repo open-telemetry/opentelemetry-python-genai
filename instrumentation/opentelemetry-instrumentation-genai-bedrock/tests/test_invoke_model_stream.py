@@ -264,13 +264,11 @@ def test_stream_wrapper_nova_text_and_tool_call(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_call",
     )
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
-    assert output_msgs == [
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert output_msgs == (
         {
             "role": "assistant",
-            "parts": [
+            "parts": (
                 {"type": "text", "content": "Checking the weather."},
                 {
                     "type": "tool_call",
@@ -278,11 +276,10 @@ def test_stream_wrapper_nova_text_and_tool_call(
                     "name": "get_weather",
                     "arguments": {"city": "Seoul"},
                 },
-            ],
+            ),
             "finish_reason": "tool_call",
-            "name": None,
-        }
-    ]
+        },
+    )
 
 
 def test_stream_wrapper_llama_and_mistral(
