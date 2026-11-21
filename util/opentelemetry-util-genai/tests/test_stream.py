@@ -2297,15 +2297,21 @@ def _suspended_tool_invocation():
 
 
 @pytest.mark.parametrize(
-    "wrapper_cls", [_TestSyncStreamWrapper, SyncToolStreamWrapper]
+    "wrapper_cls, expected_error_type",
+    [
+        (_TestSyncStreamWrapper, "_OTHER"),
+        (SyncToolStreamWrapper, "GeneratorExit"),
+    ],
 )
-def test_abandoned_sync_stream_finalizes_without_leaking_context(wrapper_cls):
+def test_abandoned_sync_stream_finalizes_without_leaking_context(
+    wrapper_cls, expected_error_type
+):
     invocation = _suspended_tool_invocation()
-    errors = []
+    spans_at_finalize = []
 
     class _RecordingWrapper(wrapper_cls):
         def _on_stream_error(self, error):
-            errors.append(error)
+            spans_at_finalize.append(get_current_span())
             super()._on_stream_error(error)
 
     wrapper = _RecordingWrapper(iter(["a", "b"]), invocation)
@@ -2316,23 +2322,31 @@ def test_abandoned_sync_stream_finalizes_without_leaking_context(wrapper_cls):
     del wrapper
     gc.collect()
 
-    assert len(errors) == 1
-    assert invocation.span.end_time is not None
+    assert len(spans_at_finalize) == 1
+    assert spans_at_finalize[0] is not invocation.span
     assert get_current_span() is not invocation.span
+    span = invocation.span
+    assert span.end_time is not None
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == expected_error_type
 
 
 @pytest.mark.parametrize(
-    "wrapper_cls", [_TestAsyncStreamWrapper, AsyncToolStreamWrapper]
+    "wrapper_cls, expected_error_type",
+    [
+        (_TestAsyncStreamWrapper, "_OTHER"),
+        (AsyncToolStreamWrapper, "GeneratorExit"),
+    ],
 )
 def test_abandoned_async_stream_finalizes_without_leaking_context(
-    wrapper_cls,
+    wrapper_cls, expected_error_type
 ):
     invocation = _suspended_tool_invocation()
-    errors = []
+    spans_at_finalize = []
 
     class _RecordingWrapper(wrapper_cls):
         def _on_stream_error(self, error):
-            errors.append(error)
+            spans_at_finalize.append(get_current_span())
             super()._on_stream_error(error)
 
     async def chunks():
@@ -2348,9 +2362,13 @@ def test_abandoned_async_stream_finalizes_without_leaking_context(
     asyncio.run(exercise())
     gc.collect()
 
-    assert len(errors) == 1
-    assert invocation.span.end_time is not None
+    assert len(spans_at_finalize) == 1
+    assert spans_at_finalize[0] is not invocation.span
     assert get_current_span() is not invocation.span
+    span = invocation.span
+    assert span.end_time is not None
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == expected_error_type
 
 
 def test_default_execution_context_leaves_suppressed_inference_invocation_alone():
