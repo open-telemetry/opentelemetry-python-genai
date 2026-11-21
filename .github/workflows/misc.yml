@@ -39,6 +39,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Run spellcheck
         run: uv run --only-group tox tox -e spellcheck
@@ -63,6 +66,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Build docs
         run: uv run --only-group tox tox -e docs
@@ -84,6 +90,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Run generate
         run: uv run --only-group tox tox -e generate
@@ -108,6 +117,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Check READMEs render on PyPI
         run: uv run --only-group tox tox -e readme
@@ -129,6 +141,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Run shellcheck
         run: uv run --only-group tox tox -e shellcheck
@@ -150,13 +165,16 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Run pre-commit
         run: uv run --only-group tox tox -e precommit
 
   typecheck:
     name: typecheck
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -171,13 +189,16 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Run typecheck
         run: uv run --only-group tox tox -e typecheck
 
   typecheck-py314:
     name: typecheck-py314
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -193,6 +214,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Run typecheck
         run: uv run --only-group tox tox -e typecheck-py314
@@ -214,6 +238,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Run dependency check
         run: uv run --only-group packaging scripts/check_deps.py
@@ -240,6 +267,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Check util public API
         run: uv run --only-group tox tox -e check-util-api
@@ -261,6 +291,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Check license headers
         run: uv run --only-group tox tox -e license-header-check
@@ -282,6 +315,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Check versions
         run: uv run --only-group tox tox -e check-versions

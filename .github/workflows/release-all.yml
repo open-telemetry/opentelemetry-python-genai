@@ -91,7 +91,7 @@ jobs:
 
   publish:
     needs: [enumerate, build]
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:

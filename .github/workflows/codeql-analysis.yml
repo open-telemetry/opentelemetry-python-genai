@@ -21,7 +21,7 @@ jobs:
   CodeQL-Build:
     permissions:
       security-events: write # for github/codeql-action/analyze to upload SARIF results
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
