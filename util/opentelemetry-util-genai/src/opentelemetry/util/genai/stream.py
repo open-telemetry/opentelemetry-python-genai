@@ -237,6 +237,10 @@ class SyncStreamWrapper(
                 try:
                     self._self_stream.close()
                 except Exception:  # pylint: disable=broad-exception-caught
+                    # A stream that isn't a context manager (e.g. a generator)
+                    # would never be closed here without instrumentation.
+                    if hasattr(self._self_stream, "__exit__"):
+                        raise
                     _logger.debug(
                         "GenAI stream close error after user exception",
                         exc_info=True,
@@ -361,6 +365,9 @@ class AsyncStreamWrapper(
                 try:
                     await self._close_stream()
                 except Exception:  # pylint: disable=broad-exception-caught
+                    # See SyncStreamWrapper.__exit__.
+                    if hasattr(self._self_stream, "__aexit__"):
+                        raise
                     _logger.debug(
                         "GenAI stream close error after user exception",
                         exc_info=True,
@@ -750,20 +757,18 @@ class SyncStreamManagerWrapper(
                 )
             except BaseException as error:
                 if stream_wrapper is not None:
-                    stream_wrapper.__exit__(
-                        type(error), error, error.__traceback__
-                    )
+                    stream_wrapper._finalize_failure(error)
                 elif self._self_invocation is not None:
                     self._self_invocation.fail(error)
                 raise
             if stream_wrapper is not None:
-                if suppressed:
-                    # The manager swallowed the caller's exception, so the
-                    # stream ended successfully as far as telemetry is
-                    # concerned.
-                    stream_wrapper.__exit__(None, None, None)
+                # The manager already closed the stream. If it swallowed the
+                # caller's exception, the stream ended successfully as far as
+                # telemetry is concerned.
+                if exc_val is not None and not suppressed:
+                    stream_wrapper._finalize_failure(exc_val)
                 else:
-                    stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
+                    stream_wrapper._finalize_success()
             return suppressed
 
 
@@ -826,17 +831,15 @@ class AsyncStreamManagerWrapper(
                 )
             except BaseException as error:
                 if stream_wrapper is not None:
-                    await stream_wrapper.__aexit__(
-                        type(error), error, error.__traceback__
-                    )
+                    stream_wrapper._finalize_failure(error)
                 elif self._self_invocation is not None:
                     self._self_invocation.fail(error)
                 raise
             if stream_wrapper is not None:
-                if suppressed:
-                    await stream_wrapper.__aexit__(None, None, None)
+                if exc_val is not None and not suppressed:
+                    stream_wrapper._finalize_failure(exc_val)
                 else:
-                    await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
+                    stream_wrapper._finalize_success()
             return suppressed
 
 
