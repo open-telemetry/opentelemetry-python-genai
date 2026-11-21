@@ -25,6 +25,7 @@ from .interactions import (
     instrument_interactions,
     uninstrument_interactions,
 )
+from .package import _instruments
 
 
 class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
@@ -49,7 +50,7 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
     # Inherited, abstract function from 'BaseInstrumentor'. Even though 'self' is
     # not used in the definition, a method is required per the API contract.
     def instrumentation_dependencies(self) -> Collection[str]:  # pylint: disable=no-self-use
-        return ["google-genai>=1.32.0,<3"]
+        return _instruments
 
     def _instrument(self, **kwargs: Any):
         tracer_provider = (
@@ -69,6 +70,7 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
             completion_hook=completion_hook,
             instrumentation_scope_name=__package__,
             instrumentation_scope_version=__version__,
+            content_capturing_mode=kwargs.get("content_capturing_mode"),
         )
         self._generate_content_snapshot = instrument_generate_content(
             telemetry_handler,

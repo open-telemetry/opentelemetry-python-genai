@@ -18,23 +18,32 @@ Usage:
         instrumentation_scope_version=__version__,
     )
 
-    # Factory method: construct and start in one call, then stop or fail.
-    invocation = handler.inference("my-provider", request_model="my-model")
-    invocation.input_messages = [...]
-    invocation.temperature = 0.7
-    try:
-        # ... call the underlying library ...
-        invocation.output_messages = [...]
-        invocation.stop()
-    except Exception as exc:
-        invocation.fail(exc)
-        raise
-
-    # Or use the context manager form — exception handling is automatic.
-    with handler.inference("my-provider", request_model="my-model") as invocation:
+    # Context manager form: the span is current inside the block and exception
+    # handling is automatic.
+    # Pass ``_attach_to_context=False`` so the span is current only inside
+    # ``with invocation:``, ``invocation.activate()`` and stream reads. Attaching
+    # on creation is the legacy default and will be removed.
+    with handler.inference(
+        "my-provider", request_model="my-model", _attach_to_context=False
+    ) as invocation:
         invocation.input_messages = [...]
         # ... call the underlying library ...
         invocation.output_messages = [...]
+
+    # Explicit form: make the span current only around work that belongs to it.
+    invocation = handler.inference(
+        "my-provider", request_model="my-model", _attach_to_context=False
+    )
+    invocation.input_messages = [...]
+    try:
+        with invocation.activate():
+            stream = client.stream(...)
+    except Exception as exc:
+        invocation.fail(exc)
+        raise
+    # Stream wrappers make the span current around each read and stop or fail
+    # the invocation when the stream ends.
+    return MyStreamWrapper(stream, invocation)
 """
 
 from __future__ import annotations
@@ -108,6 +117,7 @@ class TelemetryHandler:
         completion_hook: CompletionHook | None = None,
         instrumentation_scope_name: str | None = None,
         instrumentation_scope_version: str | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ):
         """Creates a new telemetry handler.
 
@@ -119,6 +129,9 @@ class TelemetryHandler:
                 backwards compatibility.
             instrumentation_scope_version: the version of the instrumentation
                 library, reported as the instrumentation scope version.
+            content_capturing_mode: overrides the environment-configured
+                content-capturing mode. When None, the value is read from
+                OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
         """
         schema_url = Schemas.V1_37_0.value
         # The scope name and version must describe the same library, so a
@@ -147,7 +160,11 @@ class TelemetryHandler:
             logger_provider,
             schema_url=schema_url,
         )
-        self._content_capturing_mode = get_content_capturing_mode()
+        self._content_capturing_mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
         if completion_hook is None or isinstance(
             completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
         ):

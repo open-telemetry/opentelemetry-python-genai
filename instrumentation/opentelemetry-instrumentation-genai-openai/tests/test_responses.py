@@ -38,6 +38,7 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.utils import is_experimental_mode
 
@@ -178,9 +179,7 @@ def _skip_if_not_latest():
 
 
 def _load_span_messages(span, attribute):
-    value = span.attributes.get(attribute)
-    assert value is not None
-    return json.loads(value)
+    return get_content_attribute(span.attributes, attribute)
 
 
 def _local_computer_call_response_item() -> dict[str, object]:
@@ -222,9 +221,9 @@ def _assert_response_content(span, response, log_exporter):
         span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
         USER_ONLY_EXPECTED_INPUT_MESSAGES,
     )
-    assert (
-        json.loads(span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS])
-        == EXPECTED_SYSTEM_INSTRUCTIONS
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS],
+        EXPECTED_SYSTEM_INSTRUCTIONS,
     )
     assert_messages_attribute(
         span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
@@ -568,16 +567,16 @@ def test_responses_streaming_stream_error_after_compaction_records_compaction(
 
 
 RETRIEVE_RESPONSE_ID = (
-    "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237025"
+    "resp_0a7ce3756805d7b1006af3356ea88087d2a5d9d1c9f9a62de4"
 )
 RETRIEVE_INCOMPLETE_RESPONSE_ID = (
-    "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237026"
+    "resp_0c436e01c08c0f13006af3356ffe5487d2ad3d5192056bfd9f"
 )
 RETRIEVE_FAILED_RESPONSE_ID = (
     "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237027"
 )
 RETRIEVE_STREAM_RESPONSE_ID = (
-    "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237028"
+    "resp_00ee3bff4090fb05006af335712cc087d29d67d187fd25e890"
 )
 RETRIEVE_MISSING_RESPONSE_ID = (
     "resp_doesnotexist0000000000000000000000000000000000"
@@ -619,9 +618,9 @@ def test_responses_retrieve_captures_content(
         span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
         format_simple_expected_output_message(response.output_text),
     )
-    assert (
-        json.loads(span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS])
-        == EXPECTED_SYSTEM_INSTRUCTIONS
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS],
+        EXPECTED_SYSTEM_INSTRUCTIONS,
     )
     # A fetched response does not carry the original input messages.
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes

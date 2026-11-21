@@ -163,7 +163,7 @@ def _process_converse_event(
                 usage["cacheReadInputTokens"]
             )
         if "cacheWriteInputTokens" in usage:
-            stream._self_cache_creation_input_tokens = _safe_int(
+            stream._self_cache_write_input_tokens = _safe_int(
                 usage["cacheWriteInputTokens"]
             )
 
@@ -176,7 +176,7 @@ class _BedrockConverseStreamMixin:
     _self_input_tokens: int | None
     _self_output_tokens: int | None
     _self_cache_read_input_tokens: int | None
-    _self_cache_creation_input_tokens: int | None
+    _self_cache_write_input_tokens: int | None
     _self_text_blocks: dict[int, str]
     _self_reasoning_blocks: dict[int, str]
     _self_tool_blocks: dict[int, dict[str, Any]]
@@ -195,7 +195,7 @@ class _BedrockConverseStreamMixin:
         self._self_input_tokens = None
         self._self_output_tokens = None
         self._self_cache_read_input_tokens = None
-        self._self_cache_creation_input_tokens = None
+        self._self_cache_write_input_tokens = None
         self._self_text_blocks = {}
         self._self_reasoning_blocks = {}
         self._self_tool_blocks = {}
@@ -228,14 +228,14 @@ class _BedrockConverseStreamMixin:
         self._self_invocation.input_tokens = _total_input_tokens(
             self._self_input_tokens,
             self._self_cache_read_input_tokens,
-            self._self_cache_creation_input_tokens,
+            self._self_cache_write_input_tokens,
         )
         self._self_invocation.output_tokens = self._self_output_tokens
         self._self_invocation.cache_read_input_tokens = (
             self._self_cache_read_input_tokens
         )
-        self._self_invocation.cache_creation_input_tokens = (
-            self._self_cache_creation_input_tokens
+        self._self_invocation.cache_write_input_tokens = (
+            self._self_cache_write_input_tokens
         )
 
         self._self_invocation.stop()
@@ -286,7 +286,7 @@ class _BedrockInvokeModelStreamMixin:
     _self_input_tokens: int | None
     _self_output_tokens: int | None
     _self_cache_read_input_tokens: int | None
-    _self_cache_creation_input_tokens: int | None
+    _self_cache_write_input_tokens: int | None
     _self_accumulated_text: list[str]
     _self_text_blocks: dict[int, str]
     _self_reasoning_blocks: dict[int, str]
@@ -306,7 +306,7 @@ class _BedrockInvokeModelStreamMixin:
         self._self_input_tokens = None
         self._self_output_tokens = None
         self._self_cache_read_input_tokens = None
-        self._self_cache_creation_input_tokens = None
+        self._self_cache_write_input_tokens = None
         self._self_accumulated_text = []
         self._self_text_blocks = {}
         self._self_reasoning_blocks = {}
@@ -375,7 +375,7 @@ class _BedrockInvokeModelStreamMixin:
                         "cache_creation_input_tokens" in usage
                         or "cacheWriteInputTokens" in usage
                     ):
-                        self._self_cache_creation_input_tokens = _safe_int(
+                        self._self_cache_write_input_tokens = _safe_int(
                             _first_not_none(
                                 usage.get("cache_creation_input_tokens"),
                                 usage.get("cacheWriteInputTokens"),
@@ -492,17 +492,20 @@ class _BedrockInvokeModelStreamMixin:
         if finish_reason:
             self._self_invocation.finish_reasons = [finish_reason]
 
-        if self._self_input_tokens is not None:
-            self._self_invocation.input_tokens = self._self_input_tokens
+        self._self_invocation.input_tokens = _total_input_tokens(
+            self._self_input_tokens,
+            self._self_cache_read_input_tokens,
+            self._self_cache_write_input_tokens,
+        )
         if self._self_output_tokens is not None:
             self._self_invocation.output_tokens = self._self_output_tokens
         if self._self_cache_read_input_tokens is not None:
             self._self_invocation.cache_read_input_tokens = (
                 self._self_cache_read_input_tokens
             )
-        if self._self_cache_creation_input_tokens is not None:
-            self._self_invocation.cache_creation_input_tokens = (
-                self._self_cache_creation_input_tokens
+        if self._self_cache_write_input_tokens is not None:
+            self._self_invocation.cache_write_input_tokens = (
+                self._self_cache_write_input_tokens
             )
 
         if self._self_capture_content:

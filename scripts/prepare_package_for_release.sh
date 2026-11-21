@@ -24,9 +24,9 @@ fi
 
 version="${version_dev%.dev}"
 
-python3 ./scripts/version_utils.py bump --package "$package" --release
+uv run --locked --only-group packaging ./scripts/version_utils.py bump --package "$package" --release
 
 python3 ./scripts/generate_instrumentation_readme.py
-uv run --no-project --exclude-newer 3d --with towncrier towncrier build --yes --version "$version" --dir "$(dirname "$changelog")"
+uv run --locked --only-group towncrier towncrier build --yes --version "$version" --dir "$(dirname "$changelog")"
 
 echo "Prepared ${package} for release v${version}"
