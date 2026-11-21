@@ -220,11 +220,21 @@ class TestCase(CommonTestCaseBase):
                         {
                             "event_type": "step.start",
                             "index": 1,
+                            "step": {
+                                "type": "function_result",
+                                "call_id": "call-1",
+                                "name": "lookup",
+                                "result": "OTel docs",
+                            },
+                        },
+                        {
+                            "event_type": "step.start",
+                            "index": 2,
                             "step": {"type": "model_output"},
                         },
                         {
                             "event_type": "step.delta",
-                            "index": 1,
+                            "index": 2,
                             "delta": {
                                 "type": "text",
                                 "text": "An observability framework.",
