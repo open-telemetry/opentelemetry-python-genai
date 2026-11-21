@@ -12,9 +12,15 @@ from typing import TYPE_CHECKING, Any, cast
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
+    from agno.metrics import RunMetrics
+    from agno.workflow.types import WorkflowMetrics
 
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
+)
+from opentelemetry.util.genai.invocation import (
+    LocalAgentInvocation,
+    WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
@@ -36,6 +42,87 @@ def safe_int(val: Any) -> int | None:
         return int(val)
     except (ValueError, TypeError):
         return None
+
+
+# agno reports cache reads and writes outside ``input_tokens`` for the
+# Anthropic-shaped model classes: Anthropic itself, Bedrock, and the Vertex AI
+# and Azure AI Foundry classes, which inherit the Anthropic ``_get_metrics``
+# while carrying their own provider string. OpenAI, Azure and Gemini fold the
+# cached part into ``input_tokens``, so adding it there would count the same
+# tokens twice. A new provider that inherits the Anthropic accounting belongs
+# in this set.
+_CACHE_TOKENS_OUTSIDE_INPUT = frozenset(
+    {"anthropic", "awsbedrock", "vertexai", "azurefoundry"}
+)
+
+
+def _normalize_provider(provider: str | None) -> str | None:
+    """Reduce agno's provider string to the shape the lookup uses.
+
+    agno sets ``provider`` on each model class ("Anthropic", "AwsBedrock"), and
+    falls back to ``"{name} ({id})"`` when a model leaves it unset.
+    """
+    if not provider:
+        return None
+    name = provider.split(" (")[0]
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def total_input_tokens(
+    input_tokens: int | None,
+    cache_read_input_tokens: int | None,
+    cache_write_input_tokens: int | None,
+    provider: str | None = None,
+) -> int | None:
+    """Fold agno's cached prompt tokens into ``gen_ai.usage.input_tokens``.
+
+    Whether the cached tokens belong in the sum depends on the provider: agno
+    keeps them outside ``input_tokens`` for Anthropic, Bedrock, Vertex AI and
+    Azure AI Foundry, and inside it for OpenAI, Azure and Gemini. An
+    unrecognized or missing provider is left unsummed rather than guessed at.
+
+    A zero total means agno had nothing to report, so it returns ``None``
+    rather than recording ``0`` on the span.
+    """
+    total = input_tokens or 0
+    if _normalize_provider(provider) in _CACHE_TOKENS_OUTSIDE_INPUT:
+        total += (cache_read_input_tokens or 0) + (
+            cache_write_input_tokens or 0
+        )
+    return total or None
+
+
+def record_token_usage(
+    invocation: LocalAgentInvocation | WorkflowInvocation,
+    metrics: RunMetrics | WorkflowMetrics | None,
+    provider: str | None = None,
+) -> None:
+    """Record agno run metrics as ``gen_ai.usage.*`` on an invocation.
+
+    ``provider`` is agno's ``RunOutput.model_provider``; it decides whether the
+    cached prompt tokens sit outside ``input_tokens``. Workflow results carry a
+    ``WorkflowMetrics`` with no token fields, and workflow invocations carry no
+    ``input_tokens``, so both are left alone.
+    """
+    # Imported here rather than at module level: this module must stay
+    # importable before agno is installed, the same way the instrumentor does.
+    from agno.metrics import RunMetrics
+
+    if not isinstance(invocation, LocalAgentInvocation) or not isinstance(
+        metrics, RunMetrics
+    ):
+        return
+    input_tokens = total_input_tokens(
+        safe_int(metrics.input_tokens),
+        safe_int(metrics.cache_read_tokens),
+        safe_int(metrics.cache_write_tokens),
+        provider,
+    )
+    if input_tokens:
+        invocation.input_tokens = input_tokens
+    output_tokens = safe_int(metrics.output_tokens)
+    if output_tokens:
+        invocation.output_tokens = output_tokens
 
 
 def safe_float(val: Any) -> float | None:

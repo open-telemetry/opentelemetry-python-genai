@@ -2483,3 +2483,143 @@ def test_agent_continue_run_unresolved_tool_has_none_response(
     messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(messages) == 1
     assert messages[0]["parts"][0]["response"] is None
+
+
+def test_agent_run_records_token_usage(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that Agent.run records usage from RunOutput.metrics."""
+    from agno.agent import RunOutput
+    from agno.metrics import RunMetrics
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        metrics=RunMetrics(input_tokens=12, output_tokens=3),
+    )
+
+    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+        res = agent.run("hello world")
+    assert res is run_output
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 12
+    assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ["Anthropic", "AwsBedrock", "VertexAI", "AzureFoundry"],
+)
+def test_agent_run_input_tokens_include_cached_tokens(
+    instrument_agno,
+    span_exporter,
+    provider: str,
+) -> None:
+    """Anthropic-shaped providers report cached tokens outside input_tokens."""
+    from agno.agent import RunOutput
+    from agno.metrics import RunMetrics
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        model_provider=provider,
+        # agno reports the cache reads and writes outside input_tokens here
+        metrics=RunMetrics(
+            input_tokens=12,
+            output_tokens=3,
+            cache_read_tokens=1000,
+            cache_write_tokens=40,
+        ),
+    )
+
+    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+        agent.run("hello world")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1052
+    )
+    assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3
+
+
+@pytest.mark.parametrize("provider", ["OpenAI", "Azure", "Google"])
+def test_agent_run_cached_tokens_are_not_double_counted(
+    instrument_agno,
+    span_exporter,
+    provider: str,
+) -> None:
+    """OpenAI-shaped providers already count the cached part in input_tokens."""
+    from agno.agent import RunOutput
+    from agno.metrics import RunMetrics
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        model_provider=provider,
+        # prompt_tokens (1000) already contains the 800 cached tokens
+        metrics=RunMetrics(
+            input_tokens=1000,
+            output_tokens=3,
+            cache_read_tokens=800,
+        ),
+    )
+
+    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+        agent.run("hello world")
+
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1000
+    )
+
+
+def test_agent_run_unknown_provider_does_not_sum_cached_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Without a provider to decide on, the raw input_tokens are reported."""
+    from agno.agent import RunOutput
+    from agno.metrics import RunMetrics
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        metrics=RunMetrics(
+            input_tokens=1000,
+            output_tokens=3,
+            cache_read_tokens=800,
+        ),
+    )
+
+    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+        agent.run("hello world")
+
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1000
+    )
+
+
+def test_agent_run_without_metrics_records_no_usage(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that a RunOutput without metrics leaves usage unset."""
+    from agno.agent import RunOutput
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+
+    with patch(
+        "agno.agent._run.run_dispatch", return_value=RunOutput(content="hi")
+    ):
+        agent.run("hello world")
+
+    span = span_exporter.get_finished_spans()[0]
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
