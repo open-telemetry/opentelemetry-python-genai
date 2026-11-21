@@ -104,27 +104,27 @@ class AbandonedStreamError(Exception):
         super().__init__(message)
 
 
+def _activation(
+    invocation: _StreamInvocation | None,
+) -> AbstractContextManager[None]:
+    """Make an unattached invocation current; leave the context alone otherwise.
+
+    Applies when the invocation was created with ``_attach_to_context=False``
+    or was suspended. Invocations that are still attached, or that reuse the
+    current span, leave the context alone.
+    """
+    if (
+        isinstance(invocation, GenAIInvocation)
+        and invocation._needs_activation
+    ):
+        return invocation.activate()
+    return nullcontext()
+
+
 class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     """Finalize-once bookkeeping and telemetry hooks shared by both wrappers."""
 
     _self_finalized: bool
-
-    def _execution_context(self) -> AbstractContextManager[None]:
-        """Scope stream reads and cleanup, restoring context before returning a chunk.
-
-        By default the invocation is made current for each read when it is not
-        attached to the context: it was created with
-        ``_attach_to_context=False``, or it was suspended. Invocations that are
-        still attached, or that reuse the current span, leave the context alone.
-        """
-        # getattr: __del__ can run on a wrapper whose __init__ raised.
-        invocation = getattr(self, "_self_invocation", None)
-        if (
-            isinstance(invocation, GenAIInvocation)
-            and invocation._needs_activation
-        ):
-            return invocation.activate()
-        return nullcontext()
 
     def _finalize_success(self) -> None:
         if self._self_finalized:
@@ -151,8 +151,7 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
         if getattr(self, "_self_finalized", True):
             return
         try:
-            with self._execution_context():
-                self._finalize_failure(AbandonedStreamError())
+            self._finalize_failure(AbandonedStreamError())
         except BaseException:  # pylint: disable=broad-exception-caught
             _logger.debug(
                 "GenAI stream finalization error for abandoned stream",
@@ -207,6 +206,10 @@ class SyncStreamWrapper(
     # The SDK stream, held loosely typed: subclasses re-expose it through a
     # ``stream`` property carrying the SDK's own type.
     _self_stream: Any
+
+    def _execution_context(self) -> AbstractContextManager[None]:
+        """Scope stream reads and cleanup, restoring context before returning a chunk."""
+        return _activation(self._self_invocation)
 
     def _bind_stream(self, stream: _SyncStream[ChunkT]) -> None:
         self._self_stream = stream
@@ -333,6 +336,10 @@ class AsyncStreamWrapper(
 
     # See ``SyncStreamWrapper._self_stream``.
     _self_stream: Any
+
+    def _execution_context(self) -> AbstractContextManager[None]:
+        """See ``SyncStreamWrapper._execution_context``."""
+        return _activation(self._self_invocation)
 
     def _bind_stream(self, stream: _AsyncStream[ChunkT]) -> None:
         self._self_stream = stream
@@ -534,10 +541,9 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
 
     def __del__(self) -> None:
         try:
-            with self._execution_context():
-                self._finalize_failure(
-                    GeneratorExit("Stream garbage collected before completion")
-                )
+            self._finalize_failure(
+                GeneratorExit("Stream garbage collected before completion")
+            )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
@@ -580,10 +586,9 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
 
     def __del__(self) -> None:
         try:
-            with self._execution_context():
-                self._finalize_failure(
-                    GeneratorExit("Stream garbage collected before completion")
-                )
+            self._finalize_failure(
+                GeneratorExit("Stream garbage collected before completion")
+            )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
