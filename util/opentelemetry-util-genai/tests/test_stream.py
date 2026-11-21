@@ -1438,6 +1438,21 @@ def test_sync_manager_wrapper_forwards_caller_error_to_stream_wrapper():
     assert stream_wrapper._self_failures == [error]
 
 
+def test_sync_manager_wrapper_does_not_close_stream_after_manager_exit():
+    stream = _FakeSyncContextStream(close_error=RuntimeError("close failure"))
+    wrapper = _TestSyncManagerWrapper(
+        _FakeSyncManager(stream), _FakeInvocation
+    )
+    error = ValueError("caller failure")
+
+    with pytest.raises(ValueError, match="caller failure"):
+        with wrapper as stream_wrapper:
+            raise error
+
+    assert stream.close_count == 0
+    assert stream_wrapper._self_failures == [error]
+
+
 def test_sync_manager_wrapper_stops_stream_when_manager_suppresses():
     manager = _FakeSyncManager(_FakeSyncStream(), suppressed=True)
     wrapper = _TestSyncManagerWrapper(manager, _FakeInvocation)
@@ -1552,6 +1567,26 @@ def test_async_manager_wrapper_forwards_caller_error_to_stream_wrapper():
                 raise error
 
         assert manager.exit_args[:2] == (ValueError, error)
+        assert stream_wrapper._self_failures == [error]
+
+    asyncio.run(exercise())
+
+
+def test_async_manager_wrapper_does_not_close_stream_after_manager_exit():
+    async def exercise():
+        stream = _FakeAsyncContextStream(
+            close_error=RuntimeError("close failure")
+        )
+        wrapper = _TestAsyncManagerWrapper(
+            _FakeAsyncManager(stream), _FakeInvocation
+        )
+        error = ValueError("caller failure")
+
+        with pytest.raises(ValueError, match="caller failure"):
+            async with wrapper as stream_wrapper:
+                raise error
+
+        assert stream.close_count == 0
         assert stream_wrapper._self_failures == [error]
 
     asyncio.run(exercise())
