@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from contextlib import AbstractContextManager
 from logging import getLogger
 from typing import TYPE_CHECKING, Any
 
@@ -586,9 +585,6 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         self._self_finalized = False
         self._self_body_class = type(body)
 
-    def _execution_context(self) -> AbstractContextManager[None]:
-        return self._self_invocation.activate()
-
     @property
     def __class__(self) -> type:
         return self._self_body_class
@@ -631,7 +627,7 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         self._self_invocation.fail(exc)
 
     async def read(self, amt: int | None = None) -> bytes:
-        with self._execution_context():
+        with self._self_invocation.activate():
             try:
                 chunk: bytes = await self.__wrapped__.read(amt)
             except BaseException as exc:
@@ -673,8 +669,7 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         return self._self_body_class.iter_lines(self, *args, **kwargs)
 
     async def readlines(self) -> list[bytes]:
-        with self._execution_context():
-            return await self._self_body_class.readlines(self)
+        return await self._self_body_class.readlines(self)
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         # ObjectProxy cannot forward this: Python looks special methods up on
@@ -682,20 +677,19 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         return self._self_body_class.__aiter__(self)
 
     async def __anext__(self) -> bytes:
-        with self._execution_context():
-            return await self._self_body_class.__anext__(self)
+        return await self._self_body_class.__anext__(self)
 
     anext = __anext__
 
     async def __aenter__(self) -> AsyncBedrockStreamingBodyWrapper:
         # Returning self is what keeps `async with body as b` instrumented;
         # ObjectProxy would otherwise bind the unwrapped SDK body to b.
-        with self._execution_context():
+        with self._self_invocation.activate():
             await self.__wrapped__.__aenter__()
         return self
 
     async def aclose(self) -> None:
-        with self._execution_context():
+        with self._self_invocation.activate():
             try:
                 if hasattr(self.__wrapped__, "aclose"):
                     await self.__wrapped__.aclose()
@@ -708,7 +702,7 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
                 self._finalize(b"".join(self._self_chunks))
 
     def close(self) -> None:
-        with self._execution_context():
+        with self._self_invocation.activate():
             try:
                 if hasattr(self.__wrapped__, "close"):
                     self.__wrapped__.close()
@@ -724,7 +718,7 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         exc_val: BaseException | None,
         exc_tb: Any,
     ) -> None:
-        with self._execution_context():
+        with self._self_invocation.activate():
             try:
                 if hasattr(self.__wrapped__, "__aexit__"):
                     await self.__wrapped__.__aexit__(exc_type, exc_val, exc_tb)
@@ -746,8 +740,7 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         if getattr(self, "_self_finalized", True):
             return
         try:
-            with self._execution_context():
-                self._finalize_error(AbandonedStreamError())
+            self._finalize_error(AbandonedStreamError())
         except BaseException:  # pylint: disable=broad-exception-caught
             # Mirrors _StreamTelemetry.__del__: suppress errors during GC or
             # interpreter shutdown so sys.unraisablehook is not triggered.

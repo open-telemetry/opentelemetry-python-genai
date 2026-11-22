@@ -733,7 +733,7 @@ def test_invoke_inline_agent_sync_stream_restores_caller_context(
                 inputText="Hi",
             )
             for _ in response["completion"]:
-                # The stream suspends the invoke_agent context between reads,
+                # The invoke_agent span is only current during stream reads,
                 # so caller work here belongs to the enclosing workflow and
                 # inherits its conversation id, not the agent's.
                 with handler.inference(provider="aws.bedrock"):
@@ -1658,7 +1658,7 @@ async def test_async_invoke_inline_agent_stream_restores_caller_context(
                 inputText="Hi async",
             )
             async for _ in response["completion"]:
-                # The stream suspends the invoke_agent context between reads,
+                # The invoke_agent span is only current during stream reads,
                 # so caller work here belongs to the enclosing workflow and
                 # inherits its conversation id, not the agent's.
                 with handler.inference(provider="aws.bedrock"):
