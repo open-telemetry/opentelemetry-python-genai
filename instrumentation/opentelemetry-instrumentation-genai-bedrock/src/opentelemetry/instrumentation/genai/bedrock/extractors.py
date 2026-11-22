@@ -93,20 +93,22 @@ def _safe_int(val: Any) -> int | None:
 def _total_input_tokens(
     input_tokens: int | None,
     cache_read_input_tokens: int | None,
-    cache_write_input_tokens: int | None,
+    cache_creation_input_tokens: int | None,
 ) -> int | None:
-    """Bedrock input token counts exclude cached tokens; the semantic
-    conventions want ``gen_ai.usage.input_tokens`` to include them."""
+    """Bedrock input token counts (Converse ``inputTokens`` and InvokeModel's
+    ``x-amzn-bedrock-input-token-count`` / ``inputTokenCount``) exclude cached
+    tokens; the semantic conventions want ``gen_ai.usage.input_tokens`` to
+    include them."""
     if (
         input_tokens is None
         and cache_read_input_tokens is None
-        and cache_write_input_tokens is None
+        and cache_creation_input_tokens is None
     ):
         return None
     return (
         (input_tokens or 0)
         + (cache_read_input_tokens or 0)
-        + (cache_write_input_tokens or 0)
+        + (cache_creation_input_tokens or 0)
     )
 
 
@@ -348,14 +350,16 @@ def extract_converse_request(
             if text_format_str in ("json", "text"):
                 invocation.output_type = text_format_str
 
-    # Prompt variables (opt-in under content capture)
     prompt_variables = kwargs.get("promptVariables")
-    if capture_content and _is_dict(prompt_variables):
-        for var_name, var_val in prompt_variables.items():
-            if _is_dict(var_val) and "text" in var_val:
-                invocation.attributes[f"gen_ai.prompt.variable.{var_name}"] = (
-                    str(var_val["text"])
-                )
+    if capture_content and _is_dict(prompt_variables) and prompt_variables:
+        invocation.prompt_variables = {
+            var_name: (
+                str(var_val["text"])
+                if _is_dict(var_val) and "text" in var_val
+                else var_val
+            )
+            for var_name, var_val in prompt_variables.items()
+        }
 
     # system instruction
     raw_system = kwargs.get("system")
@@ -508,6 +512,7 @@ def extract_invoke_model_request(
             body.get("p"),
             text_gen_config.get("topP") if text_gen_config else None,
             inf_config.get("top_p") if inf_config else None,
+            inf_config.get("topP") if inf_config else None,
         )
     )
 
@@ -518,6 +523,7 @@ def extract_invoke_model_request(
             body.get("topK"),
             body.get("k"),
             inf_config.get("top_k") if inf_config else None,
+            inf_config.get("topK") if inf_config else None,
         )
     )
 
@@ -530,6 +536,7 @@ def extract_invoke_model_request(
             body.get("maxTokens"),
             text_gen_config.get("maxTokenCount") if text_gen_config else None,
             inf_config.get("max_new_tokens") if inf_config else None,
+            inf_config.get("maxTokens") if inf_config else None,
         )
     )
 
@@ -537,8 +544,12 @@ def extract_invoke_model_request(
     stop_seqs = _first_not_none(
         body.get("stop_sequences"),
         body.get("stopSequences"),
+        body.get("stop"),
         text_gen_config.get("stopSequences") if text_gen_config else None,
+        inf_config.get("stopSequences") if inf_config else None,
     )
+    if isinstance(stop_seqs, str):
+        stop_seqs = [stop_seqs]
     if _is_list(stop_seqs):
         invocation.stop_sequences = [str(s) for s in stop_seqs]
 
@@ -669,6 +680,12 @@ def extract_invoke_model_response(
             )
         )
 
+        invocation.input_tokens = _total_input_tokens(
+            invocation.input_tokens,
+            invocation.cache_read_input_tokens,
+            invocation.cache_write_input_tokens,
+        )
+
     if invocation.input_tokens is None and "inputTextTokenCount" in body:
         invocation.input_tokens = _safe_int(body.get("inputTextTokenCount"))
 
@@ -683,12 +700,6 @@ def extract_invoke_model_response(
         invocation.output_tokens = _safe_int(
             body.get("generation_token_count")
         )
-
-    invocation.input_tokens = _total_input_tokens(
-        invocation.input_tokens,
-        invocation.cache_read_input_tokens,
-        invocation.cache_write_input_tokens,
-    )
 
     # 3. Finish reasons
     raw_finish_reason: str | None = None

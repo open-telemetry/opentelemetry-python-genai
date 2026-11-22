@@ -133,21 +133,17 @@ def test_invoke_model_anthropic_messages(
     )
 
     # Verify captured content
-    input_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["content"] == "Hello!"
 
-    sys_instruction = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
-    )
+    sys_instruction = span.attributes[
+        GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
+    ]
     assert sys_instruction[0]["content"] == "You are a helpful assistant."
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["parts"][0]["content"] == "Hi there!"
@@ -272,6 +268,77 @@ def test_invoke_model_titan_text(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
+
+
+@pytest.mark.parametrize(
+    "top_p,top_k,max_tokens", [(0.0, 0, 0), (0.9, 40, 100)]
+)
+def test_invoke_model_nova_request_settings(
+    bedrock_client,
+    instrument_no_content,
+    span_exporter,
+    top_p: float,
+    top_k: int,
+    max_tokens: int,
+) -> None:
+    request_body = {
+        "messages": [{"role": "user", "content": [{"text": "Hello"}]}],
+        "inferenceConfig": {
+            "topP": top_p,
+            "topK": top_k,
+            "maxTokens": max_tokens,
+            "stopSequences": ["END", "STOP"],
+        },
+    }
+    response_body = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": "Hello!"}],
+            }
+        },
+        "stopReason": "end_turn",
+    }
+    raw_response_bytes = json.dumps(response_body).encode("utf-8")
+    stubber = Stubber(bedrock_client)
+    stubber.add_response(
+        "invoke_model",
+        service_response={
+            "contentType": "application/json",
+            "body": StreamingBody(
+                io.BytesIO(raw_response_bytes), len(raw_response_bytes)
+            ),
+        },
+        expected_params={
+            "modelId": "amazon.nova-micro-v1:0",
+            "body": json.dumps(request_body),
+        },
+    )
+
+    with stubber:
+        response = bedrock_client.invoke_model(
+            modelId="amazon.nova-micro-v1:0",
+            body=json.dumps(request_body),
+        )
+        assert response["body"].read() == raw_response_bytes
+
+    (span,) = span_exporter.get_finished_spans()
+    actual_top_p = span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P]
+    assert actual_top_p == top_p
+    assert isinstance(actual_top_p, float)
+    actual_top_k = span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K]
+    assert actual_top_k == top_k
+    assert isinstance(actual_top_k, int)
+    actual_max_tokens = span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS
+    ]
+    assert actual_max_tokens == max_tokens
+    assert isinstance(actual_max_tokens, int)
+    stop_sequences = span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    ]
+    assert stop_sequences == ("END", "STOP")
+    assert all(isinstance(sequence, str) for sequence in stop_sequences)
 
 
 def test_invoke_model_llama(
@@ -431,6 +498,37 @@ def test_extract_invoke_model_response_headers(tracer_provider) -> None:
         assert invocation.output_tokens == 22
 
 
+def test_extract_invoke_model_response_headers_with_cache(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_invoke_model_response(
+            {
+                "ResponseMetadata": {
+                    "HTTPHeaders": {
+                        "x-amzn-bedrock-input-token-count": "10",
+                        "x-amzn-bedrock-output-token-count": "5",
+                    }
+                }
+            },
+            json.dumps(
+                {
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "cache_read_input_tokens": 4,
+                        "cache_creation_input_tokens": 2,
+                    }
+                }
+            ).encode(),
+            invocation,
+        )
+        assert invocation.input_tokens == 16
+        assert invocation.cache_read_input_tokens == 4
+        assert invocation.cache_write_input_tokens == 2
+
+
 def test_extract_invoke_model_request_zero_values(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     with handler.inference(provider="aws.bedrock") as invocation:
@@ -540,18 +638,14 @@ def test_invoke_model_anthropic_tool_call_and_result(
         "tool_call",
     )
 
-    input_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["type"] == "tool_call_response"
     assert input_msgs[0]["parts"][0]["id"] == "toolu_prev"
     assert input_msgs[0]["parts"][0]["response"] == "72 degrees and sunny"
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["finish_reason"] == "tool_call"
@@ -629,6 +723,8 @@ def test_invoke_model_mistral(
         "max_tokens": 100,
         "temperature": 0.7,
         "top_p": 0.9,
+        "top_k": 40,
+        "stop": ["END", "STOP"],
     }
     response_body = {
         "outputs": [
@@ -672,14 +768,21 @@ def test_invoke_model_mistral(
     span = spans[0]
 
     assert span.name == "chat mistral.mistral-7b-instruct-v0:2"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K], int
+    )
+    stop_sequences = span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    ]
+    assert stop_sequences == ("END", "STOP")
+    assert all(isinstance(sequence, str) for sequence in stop_sequences)
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 15
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         output_msgs[0]["parts"][0]["content"]
         == "The capital of France is Paris."
@@ -749,12 +852,103 @@ def test_invoke_model_cohere(
     )
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 5
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         output_msgs[0]["parts"][0]["content"] == "Spring brings blossoms pink"
     )
+
+
+def test_invoke_model_openai(
+    bedrock_client,
+    content_capture,
+    instrument_bedrock,
+    span_exporter,
+) -> None:
+    model_id = "openai.gpt-oss-20b-1:0"
+    request_body = {
+        "messages": [{"role": "user", "content": "Write a haiku"}],
+        "max_completion_tokens": 50,
+        "temperature": 0.3,
+        "top_p": 0.75,
+        "stop": "--",
+    }
+    response_body = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1754352000,
+        "model": model_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        "<reasoning>Write about spring.</reasoning>"
+                        "Rain taps on new leaves\n"
+                        "A sparrow shakes off the dark\n"
+                        "Morning fills the sky"
+                    ),
+                    "refusal": None,
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "service_tier": "default",
+        "usage": {
+            "prompt_tokens": 25,
+            "completion_tokens": 29,
+            "total_tokens": 54,
+        },
+    }
+    raw_response_bytes = json.dumps(response_body).encode("utf-8")
+    invoke_params = {
+        "modelId": model_id,
+        "contentType": "application/json",
+        "body": json.dumps(request_body),
+    }
+
+    with Stubber(bedrock_client) as stubber:
+        stubber.add_response(
+            "invoke_model",
+            service_response={
+                "contentType": "application/json",
+                "body": StreamingBody(
+                    io.BytesIO(raw_response_bytes), len(raw_response_bytes)
+                ),
+            },
+            expected_params=invoke_params,
+        )
+        response = bedrock_client.invoke_model(**invoke_params)
+        assert response["body"].read() == raw_response_bytes
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == f"chat {model_id}"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model_id
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME]
+        == GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.75
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
+        "--",
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "chatcmpl-123"
+    )
+
+    if content_capture.name == "SPAN_ONLY":
+        (message,) = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+        assert message["role"] == "user"
+        assert message["parts"] == (
+            {"type": "text", "content": "Write a haiku"},
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
 
 
 def test_is_embedding_model() -> None:

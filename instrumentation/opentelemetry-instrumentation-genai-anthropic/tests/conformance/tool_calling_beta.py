@@ -15,10 +15,13 @@ from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import (
     Scenario,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
+
+from .tool_calling import validate_tool_calling
 
 
 class ToolCallingBetaScenario(Scenario):
@@ -27,6 +30,10 @@ class ToolCallingBetaScenario(Scenario):
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
     )
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        validate_tool_calling(report, "toolu_01KxCn7TWECDPTFAuwN3uJ2S")
 
     def run(
         self,
@@ -51,7 +58,7 @@ class ToolCallingBetaScenario(Scenario):
             ):
                 with vcr.use_cassette("tool_calling_beta_conformance.yaml"):
                     Anthropic().beta.messages.create(
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5-5",
                         max_tokens=256,
                         messages=[
                             {
@@ -70,5 +77,4 @@ class ToolCallingBetaScenario(Scenario):
                                 },
                             }
                         ],
-                        tool_choice={"type": "tool", "name": "get_weather"},
                     )

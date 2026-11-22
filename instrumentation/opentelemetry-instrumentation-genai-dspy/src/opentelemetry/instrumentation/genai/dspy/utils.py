@@ -923,8 +923,6 @@ def apply_usage_to_invocation(
         completion_details = _get_field(usage, "output_tokens_details")
 
     thinking = _get_field(usage, "reasoning_tokens")
-    if thinking is None:
-        thinking = _get_field(usage, "thinking_tokens")
     if thinking is None and completion_details is not None:
         thinking = _get_field(completion_details, "reasoning_tokens")
         if thinking is None:
@@ -932,15 +930,11 @@ def apply_usage_to_invocation(
     invocation.thinking_tokens = safe_int(thinking)
 
     cache_read = _get_field(usage, "cache_read_tokens")
-    if cache_read is None:
-        cache_read = _get_field(usage, "cache_read_input_tokens")
     if cache_read is None and prompt_details is not None:
         cache_read = _get_field(prompt_details, "cached_tokens")
     invocation.cache_read_input_tokens = safe_int(cache_read)
 
     cache_write = _get_field(usage, "cache_write_tokens")
-    if cache_write is None:
-        cache_write = _get_field(usage, "cache_creation_input_tokens")
     if cache_write is None and prompt_details is not None:
         cache_write = _get_field(prompt_details, "cache_write_tokens")
         if cache_write is None:

@@ -3,11 +3,11 @@
 
 """Tests for Amazon Bedrock Converse API instrumentation."""
 
-import json
-
 import pytest
 from botocore.exceptions import ClientError
+from botocore.stub import Stubber
 
+from opentelemetry.instrumentation.genai.bedrock import BedrockInstrumentor
 from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_content_block,
     extract_converse_request,
@@ -25,6 +25,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import TextPart
@@ -87,16 +88,12 @@ def test_converse_with_content(
     assert span.status.status_code == StatusCode.UNSET
 
     # Check captured message content
-    input_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["content"] == "Say this is a test"
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert len(output_msgs[0]["parts"]) > 0
@@ -199,9 +196,7 @@ def test_converse_tool_call_with_content(
         "tool_call",
     )
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     parts = output_msgs[0]["parts"]
     tool_calls = [p for p in parts if p.get("type") == "tool_call"]
@@ -596,6 +591,8 @@ def test_extract_converse_request_guardrail_and_prompt_variables(
                 "promptVariables": {
                     "user_name": {"text": "Alice"},
                     "language": {"text": "French"},
+                    "structured": {"items": [1, 2]},
+                    "count": 3,
                 },
             },
             invocation,
@@ -607,14 +604,12 @@ def test_extract_converse_request_guardrail_and_prompt_variables(
             == "sgi5gkybzqak"
         )
         assert invocation.output_type == "json"
-        assert (
-            invocation.attributes.get("gen_ai.prompt.variable.user_name")
-            == "Alice"
-        )
-        assert (
-            invocation.attributes.get("gen_ai.prompt.variable.language")
-            == "French"
-        )
+        assert invocation.prompt_variables == {
+            "user_name": "Alice",
+            "language": "French",
+            "structured": {"items": [1, 2]},
+            "count": 3,
+        }
 
 
 def test_extract_converse_request_prompt_variables_no_content(
@@ -639,7 +634,76 @@ def test_extract_converse_request_prompt_variables_no_content(
             invocation.attributes.get(AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID)
             == "sgi5gkybzqak"
         )
-        assert "gen_ai.prompt.variable.user_name" not in invocation.attributes
+        assert invocation.prompt_variables is None
+
+
+@pytest.mark.parametrize(
+    ("content_capture", "capture_on_span", "capture_on_event"),
+    [
+        ("NO_CONTENT", False, False),
+        ("SPAN_ONLY", True, False),
+        ("EVENT_ONLY", False, True),
+        ("SPAN_AND_EVENT", True, True),
+    ],
+)
+def test_converse_prompt_variables_capture_modes(
+    content_capture,
+    capture_on_span,
+    capture_on_event,
+    bedrock_client,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    log_exporter,
+) -> None:
+    params = {
+        "modelId": "amazon.nova-micro-v1:0",
+        "messages": [{"role": "user", "content": [{"text": "Hello"}]}],
+        "promptVariables": {
+            "user_name": {"text": "Alice"},
+            "language": {"text": "French"},
+        },
+    }
+    response = {
+        "output": {
+            "message": {"role": "assistant", "content": [{"text": "Hi"}]}
+        },
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        "metrics": {"latencyMs": 1},
+    }
+    with Stubber(bedrock_client) as stubber:
+        stubber.add_response("converse", response, params)
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture=content_capture,
+        ):
+            bedrock_client.converse(**params)
+
+    expected = {"user_name": "Alice", "language": "French"}
+    (span,) = span_exporter.get_finished_spans()
+    span_attrs = span.attributes or {}
+    assert not any(k.startswith("gen_ai.prompt.variable.") for k in span_attrs)
+    if capture_on_span:
+        assert span_attrs["gen_ai.prompt.variables"] == expected
+        assert isinstance(span_attrs["gen_ai.prompt.variables"], dict)
+    else:
+        assert "gen_ai.prompt.variables" not in span_attrs
+
+    (log,) = log_exporter.get_finished_logs()
+    event_attrs = log.log_record.attributes or {}
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in event_attrs
+    )
+    if capture_on_event:
+        assert event_attrs["gen_ai.prompt.variables"] == expected
+        assert isinstance(event_attrs["gen_ai.prompt.variables"], dict)
+    else:
+        assert "gen_ai.prompt.variables" not in event_attrs
 
 
 def test_extract_converse_request_system_instruction(tracer_provider) -> None:

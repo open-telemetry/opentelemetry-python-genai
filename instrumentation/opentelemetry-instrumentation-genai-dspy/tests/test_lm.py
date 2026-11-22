@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import copy
-import json
 from collections.abc import Mapping
 from typing import Any
 from unittest import mock
@@ -139,7 +138,7 @@ def test_lm_call_sync_prompt(
     assert span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 10
     assert span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
 
-    input_messages = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    input_messages = span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(input_messages) == 1
     assert input_messages[0]["role"] == "user"
     assert (
@@ -147,7 +146,7 @@ def test_lm_call_sync_prompt(
         == "What is the capital of France?"
     )
 
-    output_messages = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_messages) == 1
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"][0]["content"] == "Paris"
@@ -176,7 +175,7 @@ def test_lm_call_sync_messages(
     assert len(spans) == 1
     span = spans[0]
 
-    input_messages = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    input_messages = span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(input_messages) == 1
     assert input_messages[0]["role"] == "user"
     assert input_messages[0]["parts"][0]["content"] == "Capital of Germany?"
@@ -315,7 +314,7 @@ def test_lm_call_typed_response(
     assert span.attributes["gen_ai.usage.audio.input_tokens"] == 2
     assert span.attributes["gen_ai.usage.audio.output_tokens"] == 3
 
-    output_messages = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_messages) == 1
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["finish_reason"] == "stop"
@@ -439,7 +438,7 @@ async def test_lm_acall_async(
     assert span.attributes[GenAI.GEN_AI_OPERATION_NAME] == "chat"
     assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
 
-    input_messages = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    input_messages = span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert input_messages[0]["parts"][0]["content"] == "Capital of Japan?"
 
 
@@ -468,7 +467,7 @@ async def test_lm_acall_async_messages(
     assert len(spans) == 1
     span = spans[0]
 
-    input_messages = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    input_messages = span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert input_messages[0]["parts"][0]["content"] == "Capital of UK?"
 
 
@@ -1281,7 +1280,7 @@ def test_lm_multiple_choices_different_finish_reasons(
         "stop",
         "length",
     )
-    output_messages = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_messages) == 2
     assert output_messages[0]["parts"][0]["content"] == "First choice"
     assert output_messages[0]["finish_reason"] == "stop"
@@ -1349,7 +1348,7 @@ async def test_lm_concurrent_history_isolation(
     # Map spans by their prompt content
     span_by_prompt = {}
     for s in spans:
-        input_msgs = json.loads(s.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+        input_msgs = s.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
         prompt_text = input_msgs[0]["parts"][0]["content"]
         span_by_prompt[prompt_text] = s
 
@@ -1358,12 +1357,12 @@ async def test_lm_concurrent_history_isolation(
 
     assert span1.attributes[GenAI.GEN_AI_RESPONSE_MODEL] == "gpt-4o-call-1"
     assert span1.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 5
-    out1 = json.loads(span1.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    out1 = span1.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert out1[0]["parts"][0]["content"] == "Result for call-1"
 
     assert span2.attributes[GenAI.GEN_AI_RESPONSE_MODEL] == "gpt-4o-call-2"
     assert span2.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 10
-    out2 = json.loads(span2.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    out2 = span2.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert out2[0]["parts"][0]["content"] == "Result for call-2"
 
 
@@ -1412,7 +1411,7 @@ def test_lm_signature_binding_and_keyword_history(
     assert span.attributes[GenAI.GEN_AI_RESPONSE_MODEL] == "gpt-4o-positional"
     assert span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 7
     assert span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 3
-    input_msgs = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    input_msgs = span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert input_msgs[0]["parts"][0]["content"] == "Positional message"
 
 
@@ -1585,9 +1584,9 @@ class DetailedUsageLM(FakeLM):
             {
                 "input_tokens": 9,
                 "output_tokens": 4,
-                "cache_read_input_tokens": 3,
-                "cache_creation_input_tokens": 1,
-                "thinking_tokens": 2,
+                "cache_read_tokens": 3,
+                "cache_write_tokens": 1,
+                "reasoning_tokens": 2,
                 "input_audio_tokens": 2,
                 "output_audio_tokens": 3,
             },
@@ -1606,7 +1605,7 @@ class DetailedUsageLM(FakeLM):
                 "gen_ai.usage.text.output_tokens",
                 "gen_ai.usage.image.output_tokens",
             ),
-            id="top_level_aliases",
+            id="lm15_usage_fields",
         ),
         pytest.param(
             {

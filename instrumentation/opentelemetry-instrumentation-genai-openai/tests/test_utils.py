@@ -107,13 +107,12 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
                 "content": USER_ONLY_PROMPT[0]["content"],
             }
         ],
-        "name": None,
     }
 ]
-# Canonical base64, so the payloads round-trip unchanged through the span
-# attribute (the GenAI JSON encoder re-encodes blob bytes).
 _WAV_B64 = "ZmFrZSB3YXYgYnl0ZXM="  # b"fake wav bytes"
+_WAV_BYTES = base64.b64decode(_WAV_B64)
 _PDF_B64 = "JVBERi0xLjQK"  # b"%PDF-1.4\n"
+_PDF_BYTES = base64.b64decode(_PDF_B64)
 AUDIO_AND_FILE_PROMPT = [
     {
         "role": "user",
@@ -146,11 +145,10 @@ AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
                 "type": "blob",
                 "mime_type": "audio/wav",
                 "modality": "audio",
-                "content": _WAV_B64,
+                "content": _WAV_BYTES,
             },
             {
                 "type": "file",
-                "mime_type": None,
                 "modality": "document",
                 "file_id": "file-123",
             },
@@ -158,10 +156,9 @@ AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
                 "type": "blob",
                 "mime_type": "application/pdf",
                 "modality": "document",
-                "content": _PDF_B64,
+                "content": _PDF_BYTES,
             },
         ],
-        "name": None,
     }
 ]
 
@@ -190,11 +187,10 @@ MULTIMODAL_EXPECTED_INPUT_MESSAGES = [
             {
                 "mime_type": "image/png",
                 "modality": "image",
-                "content": _REAL_PNG_B64,
+                "content": _REAL_PNG_BYTES,
                 "type": "blob",
             },
         ],
-        "name": None,
     }
 ]
 WEATHER_TOOL_PROMPT = [
@@ -213,7 +209,6 @@ WEATHER_TOOL_EXPECTED_INPUT_MESSAGES = [
                 "content": WEATHER_TOOL_PROMPT[0]["content"],
             }
         ],
-        "name": None,
     },
     {
         "role": "user",
@@ -223,7 +218,6 @@ WEATHER_TOOL_EXPECTED_INPUT_MESSAGES = [
                 "content": WEATHER_TOOL_PROMPT[1]["content"],
             }
         ],
-        "name": None,
     },
 ]
 
@@ -606,7 +600,6 @@ EXPECTED_TOOL_LOOP_INPUT_MESSAGES = [
     {
         "role": "user",
         "parts": [{"type": "text", "content": TOOL_LOOP_PROMPT}],
-        "name": None,
     },
     {
         "role": "assistant",
@@ -618,7 +611,6 @@ EXPECTED_TOOL_LOOP_INPUT_MESSAGES = [
                 "arguments": {"location": "Seattle, WA"},
             }
         ],
-        "name": None,
     },
     {
         "role": "tool",
@@ -629,7 +621,6 @@ EXPECTED_TOOL_LOOP_INPUT_MESSAGES = [
                 "response": TOOL_LOOP_OUTPUT,
             }
         ],
-        "name": None,
     },
 ]
 
@@ -685,7 +676,6 @@ EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES = [
                 "arguments": CUSTOM_TOOL_INPUT,
             }
         ],
-        "name": None,
     },
     {
         "role": "tool",
@@ -696,7 +686,6 @@ EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES = [
                 "response": CUSTOM_TOOL_OUTPUT,
             }
         ],
-        "name": None,
     },
 ]
 
@@ -781,7 +770,10 @@ def assert_completion_attributes(
 
 
 def assert_messages_attribute(actual, expected):
-    assert json.loads(actual) == expected
+    from opentelemetry.test_util_genai.content import _to_json_like
+
+    assert isinstance(actual, tuple)
+    assert _to_json_like(actual, "messages") == expected
 
 
 def format_simple_expected_output_message(
@@ -797,7 +789,6 @@ def format_simple_expected_output_message(
                 }
             ],
             "finish_reason": finish_reason,
-            "name": None,
         }
     ]
 

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import json
 import os
 import unittest
 from unittest.mock import patch
@@ -205,7 +204,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertIn(GenAI.GEN_AI_INPUT_MESSAGES, log_record.attributes)
         # Verify system instruction in both span and event
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
-        span_system = json.loads(span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
+        span_system = span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]
         self.assertEqual(span_system[0]["content"], "System prompt here")
         event_attrs = log_record.attributes
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, event_attrs)
@@ -268,6 +267,66 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertIsNotNone(span.context)
         self.assertEqual(log_record.trace_id, span.context.trace_id)
         self.assertEqual(log_record.span_id, span.context.span_id)
+
+    def test_programmatic_content_mode_overrides_environment(self) -> None:
+        for env_mode in ContentCapturingMode:
+            for mode in [None, *ContentCapturingMode]:
+                with (
+                    self.subTest(env_mode=env_mode, mode=mode),
+                    patch.dict(
+                        os.environ,
+                        {
+                            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": env_mode.name,
+                        },
+                    ),
+                ):
+                    self.span_exporter.clear()
+                    self.log_exporter.clear()
+                    handler = TelemetryHandler(
+                        tracer_provider=self.tracer_provider,
+                        logger_provider=self.logger_provider,
+                        content_capturing_mode=mode,
+                    )
+                    invocation = handler.inference(
+                        "test-provider", request_model="default-model"
+                    )
+                    invocation.input_messages = [
+                        _create_input_message("test query")
+                    ]
+                    invocation.output_messages = [
+                        _create_output_message("test response")
+                    ]
+                    invocation.stop()
+
+                    expected_mode = env_mode if mode is None else mode
+                    span_attrs = _get_span_attributes(
+                        _get_single_span(self.span_exporter)
+                    )
+                    (log,) = self.log_exporter.get_finished_logs()
+                    for attrs, capture in (
+                        (
+                            span_attrs,
+                            expected_mode
+                            in (
+                                ContentCapturingMode.SPAN_ONLY,
+                                ContentCapturingMode.SPAN_AND_EVENT,
+                            ),
+                        ),
+                        (
+                            log.log_record.attributes,
+                            expected_mode
+                            in (
+                                ContentCapturingMode.EVENT_ONLY,
+                                ContentCapturingMode.SPAN_AND_EVENT,
+                            ),
+                        ),
+                    ):
+                        self.assertEqual(
+                            GenAI.GEN_AI_INPUT_MESSAGES in attrs, capture
+                        )
+                        self.assertEqual(
+                            GenAI.GEN_AI_OUTPUT_MESSAGES in attrs, capture
+                        )
 
     @patch.dict(
         os.environ,
@@ -447,6 +506,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             content_capturing_mode=ContentCapturingMode.NO_CONTENT,
         )
         self.assertTrue(inv_enabled._emit_event)
+        inv_enabled.stop()
 
         logger_disabled = self.logger_provider.get_logger("test-disabled")
         logger_disabled.enabled = unittest.mock.MagicMock(return_value=False)
@@ -460,6 +520,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
         )
         self.assertFalse(inv_disabled._emit_event)
+        inv_disabled.stop()
 
     @patch.dict(
         os.environ,
