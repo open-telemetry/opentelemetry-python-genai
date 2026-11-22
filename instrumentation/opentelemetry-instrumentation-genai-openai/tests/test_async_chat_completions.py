@@ -3,6 +3,7 @@
 
 # pylint: disable=too-many-locals,too-many-lines
 
+import openai._base_client as base_client
 import pytest
 from openai import (
     APIConnectionError,
@@ -48,6 +49,9 @@ from .test_utils import (
     format_simple_expected_output_message,
     get_current_weather_tool_definition,
 )
+
+# Newer openai releases vendor httpx as httpx2.
+httpx = getattr(base_client, "httpx2", None) or base_client.httpx
 
 
 @pytest.mark.asyncio()
@@ -1372,6 +1376,153 @@ async def test_async_chat_completion_streaming_not_complete(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_stream_helper(
+    span_exporter,
+    log_exporter,
+    async_openai_client,
+    instrument_with_content,
+    vcr,
+):
+    if not hasattr(async_openai_client.chat.completions, "stream"):
+        pytest.skip("chat.completions.stream() not available")
+
+    latest_experimental_enabled = is_experimental_mode()
+    llm_model_value = "gpt-4"
+    with vcr.use_cassette("test_async_chat_completion_streaming.yaml"):
+        async with async_openai_client.chat.completions.stream(
+            model=llm_model_value,
+            messages=USER_ONLY_PROMPT,
+            stream_options={"include_usage": True},
+        ) as stream:
+            completion = await stream.get_final_completion()
+
+    response_stream_result = completion.choices[0].message.content
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_all_attributes(
+        spans[0],
+        llm_model_value,
+        latest_experimental_enabled,
+        completion.id,
+        completion.model,
+        completion.usage.prompt_tokens,
+        completion.usage.completion_tokens,
+    )
+
+    logs = log_exporter.get_finished_logs()
+    if latest_experimental_enabled:
+        assert_messages_attribute(
+            spans[0].attributes["gen_ai.input.messages"],
+            USER_ONLY_EXPECTED_INPUT_MESSAGES,
+        )
+        assert_messages_attribute(
+            spans[0].attributes["gen_ai.output.messages"],
+            format_simple_expected_output_message(response_stream_result),
+        )
+    else:
+        assert len(logs) == 2
+        choice_event = {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+                "role": "assistant",
+                "content": response_stream_result,
+            },
+        }
+        assert_message_in_logs(
+            logs[1], "gen_ai.choice", choice_event, spans[0]
+        )
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_stream_helper_not_complete(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    if not hasattr(async_openai_client.chat.completions, "stream"):
+        pytest.skip("chat.completions.stream() not available")
+
+    with vcr.use_cassette(
+        "test_async_chat_completion_streaming_not_complete.yaml"
+    ):
+        async with async_openai_client.chat.completions.stream(
+            model=DEFAULT_MODEL, messages=USER_ONLY_PROMPT
+        ) as stream:
+            async for _ in stream:
+                break
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert ErrorAttributes.ERROR_TYPE not in spans[0].attributes
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_stream_helper_user_exception(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    if not hasattr(async_openai_client.chat.completions, "stream"):
+        pytest.skip("chat.completions.stream() not available")
+
+    with vcr.use_cassette(
+        "test_async_chat_completion_streaming_not_complete.yaml"
+    ):
+        with pytest.raises(RuntimeError, match="user failure"):
+            async with async_openai_client.chat.completions.stream(
+                model=DEFAULT_MODEL, messages=USER_ONLY_PROMPT
+            ):
+                raise RuntimeError("user failure")
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert (
+            spans[0].attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+        )
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_stream_helper_user_exception_reentrant_hook(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    if not hasattr(async_openai_client.chat.completions, "stream"):
+        pytest.skip("chat.completions.stream() not available")
+
+    nested = []
+
+    # See the sync test: the hook opens another streaming request before
+    # the outer stream wrapper exists.
+    async def open_nested_stream(response: httpx.Response) -> None:
+        if nested:
+            return
+        nested.append(
+            await async_openai_client.chat.completions.create(
+                model=DEFAULT_MODEL, messages=USER_ONLY_PROMPT, stream=True
+            )
+        )
+        await nested[0].close()
+
+    client = AsyncOpenAI(
+        http_client=httpx.AsyncClient(
+            event_hooks={"response": [open_nested_stream]}
+        )
+    )
+    with vcr.use_cassette(
+        "test_async_chat_completion_streaming_not_complete.yaml",
+        allow_playback_repeats=True,
+    ):
+        with pytest.raises(RuntimeError, match="user failure"):
+            async with client.chat.completions.stream(
+                model=DEFAULT_MODEL, messages=USER_ONLY_PROMPT
+            ):
+                raise RuntimeError("user failure")
+
+        # The caller's exception belongs to the outer stream's span.
+        error_types = [
+            span.attributes.get(ErrorAttributes.ERROR_TYPE)
+            for span in span_exporter.get_finished_spans()
+        ]
+        assert error_types.count("RuntimeError") == 1
 
 
 @pytest.mark.asyncio()
