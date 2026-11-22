@@ -8,7 +8,6 @@ from __future__ import annotations
 import mimetypes
 import os
 from collections.abc import Callable, Iterable, Sequence
-from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
@@ -79,38 +78,6 @@ def format_content(val: object) -> str:
     if any_value is None:
         return str(val)
     return gen_ai_json_dumps(any_value, ensure_ascii=False)
-
-
-@lru_cache(maxsize=1)
-def _load_media_classes() -> tuple[
-    type[Image], type[Audio], type[Video], type[File]
-]:
-    from agno.media import (  # pylint: disable=import-outside-toplevel
-        Audio,
-        File,
-        Image,
-        Video,
-    )
-
-    return (Image, Audio, Video, File)
-
-
-@lru_cache(maxsize=1)
-def _load_message_class() -> type[Message]:
-    from agno.models.message import (  # pylint: disable=import-outside-toplevel
-        Message,
-    )
-
-    return Message
-
-
-@lru_cache(maxsize=1)
-def _load_workflow_execution_input_class() -> type[WorkflowExecutionInput]:
-    from agno.workflow.types import (  # pylint: disable=import-outside-toplevel
-        WorkflowExecutionInput,
-    )
-
-    return WorkflowExecutionInput
 
 
 def _get_media_reference(media: _AgnoMedia) -> MediaReference | None:
@@ -232,24 +199,30 @@ def extract_media_parts(
     if not (images or audio or videos or files):
         return []
 
-    image_cls, audio_cls, video_cls, file_cls = _load_media_classes()
+    from agno.media import (  # pylint: disable=import-outside-toplevel
+        Audio,
+        File,
+        Image,
+        Video,
+    )
+
     parts: list[MessagePart] = []
     media_groups: tuple[
-        tuple[Sequence[_AgnoMedia] | None, type[_AgnoMedia], Modality], ...
+        tuple[Sequence[Any] | None, type[_AgnoMedia], Modality], ...
     ] = (
-        (images, image_cls, Modality.IMAGE),
-        (audio, audio_cls, Modality.AUDIO),
-        (videos, video_cls, Modality.VIDEO),
-        (files, file_cls, Modality.DOCUMENT),
+        (images, Image, Modality.IMAGE),
+        (audio, Audio, Modality.AUDIO),
+        (videos, Video, Modality.VIDEO),
+        (files, File, Modality.DOCUMENT),
     )
     for items, expected_cls, modality in media_groups:
         if not isinstance(items, Sequence) or isinstance(
             items, (str, bytes, bytearray)
         ):
             continue
-        for item in items:
+        for item in cast("Iterable[object]", items):
             if isinstance(item, expected_cls):
-                part = _media_to_part(item, modality, file_cls)
+                part = _media_to_part(item, modality, File)
                 if part is not None:
                     parts.append(part)
     return parts
@@ -259,7 +232,11 @@ def is_agno_message(val: object) -> TypeGuard[Message]:
     """Return True if val is an Agno Message instance."""
     if val is None:
         return False
-    return isinstance(val, _load_message_class())
+    from agno.models.message import (  # pylint: disable=import-outside-toplevel
+        Message,
+    )
+
+    return isinstance(val, Message)
 
 
 def is_workflow_execution_input(
@@ -268,7 +245,11 @@ def is_workflow_execution_input(
     """Return True if val is an Agno WorkflowExecutionInput instance."""
     if val is None:
         return False
-    return isinstance(val, _load_workflow_execution_input_class())
+    from agno.workflow.types import (  # pylint: disable=import-outside-toplevel
+        WorkflowExecutionInput,
+    )
+
+    return isinstance(val, WorkflowExecutionInput)
 
 
 def _get_property_value(obj: Any, property_name: str) -> Any:
