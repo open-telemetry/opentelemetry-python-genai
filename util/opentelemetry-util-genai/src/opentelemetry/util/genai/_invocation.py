@@ -342,9 +342,12 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Make this invocation's span the current span inside the block.
 
         Restores the previous context on exit. An exception escaping the block
-        fails the invocation; leaving the block normally does not stop it. Does
-        not change the context once the invocation has finished, while it is
-        attached on creation, or when it does not own a span.
+        fails the invocation, except ``StopIteration``, ``StopAsyncIteration``
+        and ``GeneratorExit``: they pass through untouched, so code that raises
+        them inside the block must stop or fail the invocation itself. Leaving
+        the block normally does not stop it. Does not change the context once
+        the invocation has finished, while it is attached on creation, or when
+        it does not own a span.
         """
         token = (
             attach(self.context)
