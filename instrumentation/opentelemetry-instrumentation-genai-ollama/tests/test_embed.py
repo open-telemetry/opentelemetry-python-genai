@@ -170,13 +170,14 @@ def _raises(model: str) -> Any:
     _embed_cases("test_embed_records_an_embeddings_span.yaml"),
 )
 def test_embed_span_is_current_only_during_the_request(
-    instrument_no_content, span_exporter, vcr, model, cassette
+    instrument_no_content,
+    span_exporter,
+    vcr,
+    request_span_capture,
+    model,
+    cassette,
 ):
-    seen: list[int] = []
-
-    def hook(_request: Any) -> None:
-        seen.append(trace.get_current_span().get_span_context().span_id)
-
+    seen, hook, _ = request_span_capture
     with vcr.use_cassette(cassette), _raises(model):
         ollama.Client(host=HOST, event_hooks={"request": [hook]}).embed(
             model=model, input=INPUT
@@ -193,16 +194,17 @@ def test_embed_span_is_current_only_during_the_request(
     _embed_cases("test_async_embed_records_an_embeddings_span.yaml"),
 )
 async def test_async_embed_span_is_current_only_during_the_request(
-    instrument_no_content, span_exporter, vcr, model, cassette
+    instrument_no_content,
+    span_exporter,
+    vcr,
+    request_span_capture,
+    model,
+    cassette,
 ):
-    seen: list[int] = []
-
-    async def hook(_request: Any) -> None:
-        seen.append(trace.get_current_span().get_span_context().span_id)
-
+    seen, _, async_hook = request_span_capture
     with vcr.use_cassette(cassette), _raises(model):
         await ollama.AsyncClient(
-            host=HOST, event_hooks={"request": [hook]}
+            host=HOST, event_hooks={"request": [async_hook]}
         ).embed(model=model, input=INPUT)
     assert not trace.get_current_span().get_span_context().is_valid
 
