@@ -1,1 +1,1 @@
-Capture multimodal media inputs (`images`, `audio`, `videos`, `files`) in `gen_ai.input.messages` on Agno agent and workflow runs.
+Capture multimodal media inputs (`images`, `audio`, `videos`, `files`) in `gen_ai.input.messages` on Agno agent, team, and workflow runs.

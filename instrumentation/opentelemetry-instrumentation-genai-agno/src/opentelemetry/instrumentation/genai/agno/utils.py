@@ -199,32 +199,20 @@ def extract_media_parts(
     if not (images or audio or videos or files):
         return []
 
-    from agno.media import (  # pylint: disable=import-outside-toplevel
-        Audio,
-        File,
-        Image,
-        Video,
-    )
+    from agno.media import File  # pylint: disable=import-outside-toplevel
 
     parts: list[MessagePart] = []
-    media_groups: tuple[
-        tuple[Sequence[Any] | None, type[_AgnoMedia], Modality], ...
-    ] = (
-        (images, Image, Modality.IMAGE),
-        (audio, Audio, Modality.AUDIO),
-        (videos, Video, Modality.VIDEO),
-        (files, File, Modality.DOCUMENT),
+    media_groups: tuple[tuple[Sequence[_AgnoMedia] | None, Modality], ...] = (
+        (images, Modality.IMAGE),
+        (audio, Modality.AUDIO),
+        (videos, Modality.VIDEO),
+        (files, Modality.DOCUMENT),
     )
-    for items, expected_cls, modality in media_groups:
-        if not isinstance(items, Sequence) or isinstance(
-            items, (str, bytes, bytearray)
-        ):
-            continue
-        for item in cast("Iterable[object]", items):
-            if isinstance(item, expected_cls):
-                part = _media_to_part(item, modality, File)
-                if part is not None:
-                    parts.append(part)
+    for items, modality in media_groups:
+        for item in items or ():
+            part = _media_to_part(item, modality, File)
+            if part is not None:
+                parts.append(part)
     return parts
 
 

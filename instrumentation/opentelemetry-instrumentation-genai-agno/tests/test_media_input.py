@@ -533,3 +533,68 @@ def test_workflow_captures_media_parts(
             "content": b"hello",
         },
     )
+
+
+def test_background_workflow_agent_captures_media_parts(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Background Workflow.arun with a WorkflowAgent captures media parts."""
+    import agno
+    import packaging.version
+
+    if packaging.version.parse(agno.__version__) < packaging.version.parse(
+        "3.0.0"
+    ):
+        pytest.skip(
+            "Agno < 3.0.0 execute_workflow_background does not await _aexecute_workflow_agent"
+        )
+    pytest.importorskip("fastapi")
+    from agno.workflow.agent import WorkflowAgent
+    from agno.workflow.workflow import Workflow
+
+    workflow = Workflow(
+        name="media-wf-agent",
+        agent=WorkflowAgent(model=MockModel(id="mock-model")),
+        telemetry=False,
+    )
+
+    async def _run_bg() -> None:
+        with patch(
+            "agno.models.base.Model.aresponse",
+            return_value=ModelResponse(content="ok"),
+        ):
+            await workflow.arun(
+                input="Workflow describe",
+                images=[Image(url="https://example.com/wf.png")],
+                background=True,
+            )
+            current = asyncio.current_task()
+            pending = [t for t in asyncio.all_tasks() if t is not current]
+            if pending:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=5.0,
+                )
+
+    asyncio.run(_run_bg())
+
+    wf_spans = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == "invoke_workflow"
+    ]
+    assert len(wf_spans) == 1
+    messages = wf_spans[0].attributes.get(
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert messages is not None and len(messages) == 1
+    assert messages[0]["parts"] == (
+        {"type": "text", "content": "Workflow describe"},
+        {
+            "type": "uri",
+            "modality": "image",
+            "uri": "https://example.com/wf.png",
+        },
+    )
