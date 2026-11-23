@@ -1,0 +1,20 @@
+interactions:
+- request:
+    body: '{"texts": ["Hello", "World"], "input_type": "search_document", "embedding_types":
+      ["float"]}'
+    headers:
+      Content-Type:
+      - application/json
+    method: POST
+    uri: https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.embed-english-v3/invoke
+  response:
+    body:
+      string: '{"id": "emb_12345", "embeddings": {"float": [[0.1, 0.2], [0.3, 0.4]]},
+        "meta": {"billed_units": {"input_tokens": 10}}}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1
