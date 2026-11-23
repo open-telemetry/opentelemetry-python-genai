@@ -114,6 +114,29 @@ async def test_async_chat_error_is_recorded_and_reraised(
 
 
 @pytest.mark.asyncio
+async def test_async_chat_closed_mid_request_is_recorded(
+    instrument_no_content, span_exporter
+):
+    class _Suspend:
+        def __await__(self):
+            yield
+
+    async def _suspend(_request):
+        await _Suspend()
+
+    coroutine = ollama.AsyncClient(
+        host=HOST, event_hooks={"request": [_suspend]}
+    ).chat(model=CHAT_MODEL, messages=MESSAGES)
+    coroutine.send(None)
+    coroutine.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "GeneratorExit"
+    assert not trace.get_current_span().get_span_context().is_valid
+
+
+@pytest.mark.asyncio
 async def test_async_chat_stream_error_is_recorded(
     instrument_no_content, span_exporter, vcr
 ):

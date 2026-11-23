@@ -15,6 +15,7 @@ import pytest_asyncio
 from aiobotocore.response import StreamingBody as AioStreamingBody
 from botocore.stub import Stubber
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.bedrock.patch import (
     patch_bedrock,
     unpatch_bedrock,
@@ -347,6 +348,31 @@ async def test_async_converse_records_cancelled_error(
         spans[0].attributes[ErrorAttributes.ERROR_TYPE]
         == "asyncio.exceptions.CancelledError"
     )
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_async_converse_closed_while_request_is_pending_fails_the_span(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    async def _pending(*_args: Any, **_kwargs: Any) -> Any:
+        await _Pending()
+
+    async_bedrock_client._endpoint.make_request = _pending
+
+    coro = async_bedrock_client.converse(modelId=NOVA_MODEL_ID, messages=[])
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
 
 
 CONVERSE_STREAM_EVENTS = [
@@ -1392,3 +1418,101 @@ async def test_async_invoke_model_embedding_abandoned_body(
     assert span.status.status_code == StatusCode.ERROR
     assert span.status.description == "abandoned stream"
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "_OTHER"
+
+
+def _current_span_id() -> int:
+    return trace.get_current_span().get_span_context().span_id
+
+
+def _record_current_span_on_call(client: Any, operation: str) -> list[int]:
+    seen: list[int] = []
+
+    def hook(**_kwargs: Any) -> None:
+        seen.append(_current_span_id())
+
+    # Stubber short-circuits before-call, so hook an earlier per-call event.
+    client.meta.events.register(
+        f"before-parameter-build.bedrock-runtime.{operation}", hook
+    )
+    return seen
+
+
+class _RecordingAsyncEventStream(_MockAsyncEventStream):
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        super().__init__(events)
+        self.seen: list[int] = []
+
+    async def __anext__(self) -> dict[str, Any]:
+        self.seen.append(_current_span_id())
+        return await super().__anext__()
+
+
+@pytest.mark.asyncio
+async def test_async_converse_stream_span_is_not_current_between_reads(
+    async_bedrock_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    seen = _record_current_span_on_call(async_bedrock_client, "ConverseStream")
+    stream = _RecordingAsyncEventStream(CONVERSE_STREAM_EVENTS)
+    with _stub(
+        async_bedrock_client,
+        "converse_stream",
+        {"stream": stream},
+        modelId=NOVA_MODEL_ID,
+        messages=[],
+    ):
+        response = await async_bedrock_client.converse_stream(
+            modelId=NOVA_MODEL_ID, messages=[]
+        )
+        assert not trace.get_current_span().get_span_context().is_valid
+        async for _ in response["stream"]:
+            assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+    assert set(stream.seen) == {span.context.span_id}
+
+
+class _RecordingHTTPContent(_FakeHTTPContent):
+    def __init__(self, data: bytes) -> None:
+        super().__init__(data)
+        self.seen: list[int] = []
+
+    async def read(self, n: int = -1) -> bytes:
+        self.seen.append(_current_span_id())
+        return await super().read(n)
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_body_read_runs_under_the_span(
+    async_bedrock_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    seen = _record_current_span_on_call(async_bedrock_client, "InvokeModel")
+    payload = _anthropic_body()
+    http_response = _FakeHTTPResponse(payload)
+    content = _RecordingHTTPContent(payload)
+    http_response.content = content
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": AioStreamingBody(http_response, len(payload)),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+        assert not trace.get_current_span().get_span_context().is_valid
+        assert await response["body"].read() == payload
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+    assert content.seen
+    assert set(content.seen) == {span.context.span_id}

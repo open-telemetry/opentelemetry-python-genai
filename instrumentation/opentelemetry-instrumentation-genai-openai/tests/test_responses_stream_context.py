@@ -77,7 +77,7 @@ async def test_responses_stream_activates_only_during_reads(
 ) -> None:
     before = context.get_current()
     invocation = TelemetryHandler(tracer_provider=tracer_provider).inference(
-        "openai", request_model="test-model"
+        "openai", request_model="test-model", _attach_to_context=False
     )
     error = ConnectionError("stream failed") if ending == "error" else None
     event = SimpleNamespace(type="response.output_text.delta")
@@ -134,7 +134,9 @@ async def test_responses_stream_manager_activates_only_during_reads(
 
     def factory() -> Any:
         invocations.append(
-            handler.inference("openai", request_model="test-model")
+            handler.inference(
+                "openai", request_model="test-model", _attach_to_context=False
+            )
         )
         return invocations[-1]
 
@@ -222,7 +224,7 @@ async def test_responses_stream_response_close_activates_invocation(
     hook = _RecordingHook()
     invocation = TelemetryHandler(
         tracer_provider=tracer_provider, completion_hook=hook
-    ).inference("openai", request_model="test-model")
+    ).inference("openai", request_model="test-model", _attach_to_context=False)
     expected = trace.get_current_span(invocation.context).get_span_context()
     response = _Response()
 

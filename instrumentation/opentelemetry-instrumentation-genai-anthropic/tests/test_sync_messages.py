@@ -20,6 +20,7 @@ from anthropic import (
     NOT_GIVEN,
     Anthropic,
     APIConnectionError,
+    DefaultHttpxClient,
     NotFoundError,
 )
 from anthropic._response import APIResponse, ResponseContextManager
@@ -38,6 +39,7 @@ from anthropic.types import (
 )
 
 from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.instrumentation.genai.anthropic import (
     AnthropicInstrumentor,
     _raw_response,
@@ -409,6 +411,8 @@ class _FakeInvocation:
 
     def stop(self):
         self._stops.append(True)
+
+    context = Context()
 
 
 def _build_message():
@@ -3590,3 +3594,104 @@ def test_sync_messages_create_unset_sentinel_keeps_extra_body_fallback(
     assert (
         spans[0].attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.5
     )
+
+
+def _client_recording_current_span() -> tuple[Anthropic, list[int]]:
+    seen: list[int] = []
+
+    def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    client = Anthropic(
+        http_client=DefaultHttpxClient(event_hooks={"request": [hook]})
+    )
+    return client, seen
+
+
+def test_sync_messages_create_span_is_current_only_during_the_request(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_sync_messages_create_basic.yaml"):
+        client.messages.create(**_UNSET_BASE_KWARGS)
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+def test_sync_messages_create_streaming_span_is_not_current_between_reads(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_sync_messages_create_streaming.yaml"):
+        stream = client.messages.create(**_UNSET_BASE_KWARGS, stream=True)
+        assert not trace.get_current_span().get_span_context().is_valid
+        with stream:
+            for _ in stream:
+                assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+def test_sync_messages_stream_span_is_not_current_between_reads(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_sync_messages_stream.yaml"):
+        with client.messages.stream(**_UNSET_BASE_KWARGS) as stream:
+            assert not trace.get_current_span().get_span_context().is_valid
+            for _ in stream:
+                assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+_RAW_MESSAGE = {
+    "id": "msg_raw",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-20250514",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+def test_sync_raw_response_close_after_parse_runs_in_caller_context(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    closes: list[int] = []
+    close = httpx.Response.close
+
+    def recording_close(self: httpx.Response) -> None:
+        closes.append(trace.get_current_span().get_span_context().span_id)
+        close(self)
+
+    monkeypatch.setattr(httpx.Response, "close", recording_close)
+    body = json.dumps(_RAW_MESSAGE).encode()
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    content=iter([body]),
+                )
+            )
+        ),
+    )
+    with client.messages.with_streaming_response.create(
+        **_UNSET_BASE_KWARGS
+    ) as response:
+        response.parse()
+        assert len(span_exporter.get_finished_spans()) == 1
+        closes.clear()
+
+    assert closes
+    assert set(closes) == {trace.INVALID_SPAN_ID}

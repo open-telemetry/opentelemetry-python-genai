@@ -65,6 +65,7 @@ def _create_embedding_invocation(
         request_model=get_value(kwargs.get("model")),
         server_address=address if address else None,
         server_port=port if port else None,
+        _attach_to_context=False,
     )
 
     if (dimensions := get_value(kwargs.get("dimensions"))) is not None:
@@ -89,7 +90,7 @@ def chat_completions_create_v_new(
             handler, kwargs, instance, capture_content=capture_content
         )
 
-        try:
+        with chat_invocation.activate():
             result = wrapped(*args, **kwargs)
             if is_streaming(kwargs):
                 return wrap_stream_result(
@@ -102,9 +103,6 @@ def chat_completions_create_v_new(
             _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
-        except BaseException as error:
-            chat_invocation.fail(error)
-            raise
 
     return traced_method
 
@@ -120,7 +118,7 @@ def async_chat_completions_create_v_new(
             handler, kwargs, instance, capture_content=capture_content
         )
 
-        try:
+        with chat_invocation.activate():
             result = await wrapped(*args, **kwargs)
             if is_streaming(kwargs):
                 return wrap_stream_result(
@@ -133,10 +131,6 @@ def async_chat_completions_create_v_new(
             _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
-
-        except BaseException as error:
-            chat_invocation.fail(error)
-            raise
 
     return traced_method
 
@@ -165,16 +159,11 @@ def embeddings_create(handler: TelemetryHandler):
     """Wrap the `create` method of the `Embeddings` class to trace it."""
 
     def traced_method(wrapped, instance, args, kwargs):
-        invocation = _create_embedding_invocation(handler, kwargs, instance)
-
-        try:
+        with _create_embedding_invocation(
+            handler, kwargs, instance
+        ) as invocation:
             result = wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
-
-        _safe_set_embeddings_response_properties(invocation, result)
-        invocation.stop()
+            _safe_set_embeddings_response_properties(invocation, result)
         return result
 
     return traced_method
@@ -184,16 +173,11 @@ def async_embeddings_create(handler: TelemetryHandler):
     """Wrap the `create` method of the `AsyncEmbeddings` class to trace it."""
 
     async def traced_method(wrapped, instance, args, kwargs):
-        invocation = _create_embedding_invocation(handler, kwargs, instance)
-
-        try:
+        with _create_embedding_invocation(
+            handler, kwargs, instance
+        ) as invocation:
             result = await wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
-
-        _safe_set_embeddings_response_properties(invocation, result)
-        invocation.stop()
+            _safe_set_embeddings_response_properties(invocation, result)
         return result
 
     return traced_method
