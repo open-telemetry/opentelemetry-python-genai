@@ -174,26 +174,21 @@ def messages_create(
             kwargs, "tools", capture_content
         )
         invocation = _create_invocation(handler, instance, args, kwargs)
-        try:
-            with invocation.activate():
-                try:
-                    # Raw response variants return types outside create's
-                    # annotations, so Any keeps the checks below reachable.
-                    result: Any = wrapped(*args, **kwargs)
-                finally:
-                    invocation.input_messages = (
-                        messages_capture.extract(get_input_messages) or []
-                    )
-                    invocation.system_instruction = (
-                        system_capture.extract(get_system_instruction) or []
-                    )
-                    invocation.tool_definitions = tools_capture.extract(
-                        get_tool_definitions
-                    )
-        # activate() doesn't fail on StopIteration or GeneratorExit.
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+        with invocation.activate():
+            try:
+                # Raw response variants return types outside create's
+                # annotations, so Any keeps the checks below reachable.
+                result: Any = wrapped(*args, **kwargs)
+            finally:
+                invocation.input_messages = (
+                    messages_capture.extract(get_input_messages) or []
+                )
+                invocation.system_instruction = (
+                    system_capture.extract(get_system_instruction) or []
+                )
+                invocation.tool_definitions = tools_capture.extract(
+                    get_tool_definitions
+                )
 
         is_beta = _is_beta_resource(instance)
 
@@ -266,25 +261,20 @@ def async_messages_create(
             kwargs, "tools", capture_content
         )
         invocation = _create_invocation(handler, instance, args, kwargs)
-        try:
-            with invocation.activate():
-                try:
-                    # See ``messages_create`` on why this is Any.
-                    result: Any = await wrapped(*args, **kwargs)
-                finally:
-                    invocation.input_messages = (
-                        messages_capture.extract(get_input_messages) or []
-                    )
-                    invocation.system_instruction = (
-                        system_capture.extract(get_system_instruction) or []
-                    )
-                    invocation.tool_definitions = tools_capture.extract(
-                        get_tool_definitions
-                    )
-        # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+        with invocation.activate():
+            try:
+                # See ``messages_create`` on why this is Any.
+                result: Any = await wrapped(*args, **kwargs)
+            finally:
+                invocation.input_messages = (
+                    messages_capture.extract(get_input_messages) or []
+                )
+                invocation.system_instruction = (
+                    system_capture.extract(get_system_instruction) or []
+                )
+                invocation.tool_definitions = tools_capture.extract(
+                    get_tool_definitions
+                )
 
         is_beta = _is_beta_resource(instance)
 

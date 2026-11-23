@@ -90,26 +90,19 @@ def chat_completions_create_v_new(
             handler, kwargs, instance, capture_content=capture_content
         )
 
-        try:
-            with chat_invocation.activate():
-                result = wrapped(*args, **kwargs)
-                if is_streaming(kwargs):
-                    return wrap_stream_result(
-                        ChatStreamWrapper,
-                        result,
-                        chat_invocation,
-                        capture_content,
-                    )
-
-                _set_response_properties(
-                    chat_invocation, result, capture_content
+        with chat_invocation.activate():
+            result = wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    ChatStreamWrapper,
+                    result,
+                    chat_invocation,
+                    capture_content,
                 )
-                chat_invocation.stop()
-                return result
-        # activate() doesn't fail on StopIteration or GeneratorExit.
-        except BaseException as error:
-            chat_invocation.fail(error)
-            raise
+
+            _set_response_properties(chat_invocation, result, capture_content)
+            chat_invocation.stop()
+            return result
 
     return traced_method
 
@@ -125,26 +118,19 @@ def async_chat_completions_create_v_new(
             handler, kwargs, instance, capture_content=capture_content
         )
 
-        try:
-            with chat_invocation.activate():
-                result = await wrapped(*args, **kwargs)
-                if is_streaming(kwargs):
-                    return wrap_stream_result(
-                        AsyncChatStreamWrapper,
-                        result,
-                        chat_invocation,
-                        capture_content,
-                    )
-
-                _set_response_properties(
-                    chat_invocation, result, capture_content
+        with chat_invocation.activate():
+            result = await wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    AsyncChatStreamWrapper,
+                    result,
+                    chat_invocation,
+                    capture_content,
                 )
-                chat_invocation.stop()
-                return result
-        # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
-        except BaseException as error:
-            chat_invocation.fail(error)
-            raise
+
+            _set_response_properties(chat_invocation, result, capture_content)
+            chat_invocation.stop()
+            return result
 
     return traced_method
 

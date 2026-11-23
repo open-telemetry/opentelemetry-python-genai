@@ -368,16 +368,11 @@ def model_generate_stream(handler: TelemetryHandler) -> _Wrapper[Model]:
         kwargs: dict[str, Any],
     ) -> _ModelStreamWrapper:
         invocation = _start_inference(handler, instance)
-        try:
-            with invocation.activate():
-                _record_request(
-                    handler, invocation, wrapped, instance, args, kwargs
-                )
-                stream = wrapped(*args, **kwargs)
-        # activate() doesn't fail on StopIteration or GeneratorExit.
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+        with invocation.activate():
+            _record_request(
+                handler, invocation, wrapped, instance, args, kwargs
+            )
+            stream = wrapped(*args, **kwargs)
         return _ModelStreamWrapper(stream, invocation, handler)
 
     return wrapper
@@ -529,23 +524,18 @@ def agent_run(handler: TelemetryHandler) -> _Wrapper[MultiStepAgent]:
             _attach_to_context=False,
         )
 
-        try:
-            with invocation.activate():
-                _record_agent(
-                    invocation, agent, bound, capture_content=capture_content
-                )
-                result = wrapped(*args, **kwargs)
-                stream = _record_agent_run(
-                    invocation,
-                    agent,
-                    bound,
-                    result,
-                    capture_content=capture_content,
-                )
-        # activate() doesn't fail on StopIteration or GeneratorExit.
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+        with invocation.activate():
+            _record_agent(
+                invocation, agent, bound, capture_content=capture_content
+            )
+            result = wrapped(*args, **kwargs)
+            stream = _record_agent_run(
+                invocation,
+                agent,
+                bound,
+                result,
+                capture_content=capture_content,
+            )
         if stream is not None:
             return stream
         invocation.stop()

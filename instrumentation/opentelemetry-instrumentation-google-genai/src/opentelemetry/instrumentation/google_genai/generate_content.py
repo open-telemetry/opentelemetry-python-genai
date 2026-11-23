@@ -760,19 +760,14 @@ def _create_instrumented_generate_content_stream(
                             )
                         )[0]
                     )
-            try:
-                with invocation.activate():
-                    stream = wrapped(
-                        model=model,
-                        contents=contents,
-                        config=wrapped_config if has_wrapped_tools else config,
-                        *_args,
-                        **_kwargs,
-                    )
-            # activate() doesn't fail on StopIteration or GeneratorExit.
-            except BaseException as error:
-                invocation.fail(error)
-                raise
+            with invocation.activate():
+                stream = wrapped(
+                    model=model,
+                    contents=contents,
+                    config=wrapped_config if has_wrapped_tools else config,
+                    *_args,
+                    **_kwargs,
+                )
             return GenerateContentStreamWrapper(
                 stream, invocation, telemetry_handler
             )
@@ -925,19 +920,14 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                             )
                         )[0]
                     )
-            try:
-                with invocation.activate():
-                    stream = await wrapped(
-                        model=model,
-                        contents=contents,
-                        config=wrapped_config if has_wrapped_tools else config,
-                        *_args,
-                        **_kwargs,
-                    )
-            # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
-            except BaseException as error:
-                invocation.fail(error)
-                raise
+            with invocation.activate():
+                stream = await wrapped(
+                    model=model,
+                    contents=contents,
+                    config=wrapped_config if has_wrapped_tools else config,
+                    *_args,
+                    **_kwargs,
+                )
             return AsyncGenerateContentStreamWrapper(
                 stream, invocation, telemetry_handler
             )

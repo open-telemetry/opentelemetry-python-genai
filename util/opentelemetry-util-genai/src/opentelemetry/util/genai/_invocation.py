@@ -342,8 +342,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Make this invocation's span the current span inside the block.
 
         Restores the previous context on exit. An exception escaping the block
-        fails the invocation, except ``StopIteration``, ``StopAsyncIteration``
-        and ``GeneratorExit``: they pass through untouched, so code that raises
+        fails the invocation, except ``StopIteration`` and
+        ``StopAsyncIteration``: they pass through untouched, so code that raises
         them inside the block must stop or fail the invocation itself. Leaving
         the block normally does not stop it. Does not change the context once
         the invocation has finished, while it is attached on creation, or when
@@ -356,9 +356,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         )
         try:
             yield
-        # Stream wrappers read inside this block: end of iteration and
-        # generator close are not failures.
-        except (StopIteration, StopAsyncIteration, GeneratorExit):
+        # Stream wrappers read inside this block: end of iteration is not a
+        # failure, and the wrapper finishes the invocation itself.
+        except (StopIteration, StopAsyncIteration):
             raise
         except BaseException as error:
             self.fail(error)

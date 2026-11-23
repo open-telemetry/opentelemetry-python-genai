@@ -90,30 +90,25 @@ def responses_create(
         )
         apply_request_attributes(invocation, params, capture_content)
 
-        try:
-            with invocation.activate():
-                result = wrapped(*args, **kwargs)
-                if is_streaming(kwargs):
-                    return wrap_stream_result(
-                        ResponseStreamWrapper,
-                        result,
-                        invocation,
-                        capture_content,
-                    )
-
-                set_invocation_response_attributes(
-                    invocation, result, capture_content, kwargs
+        with invocation.activate():
+            result = wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    ResponseStreamWrapper,
+                    result,
+                    invocation,
+                    capture_content,
                 )
-                error = get_response_error(result, kwargs)
-                if error is not None:
-                    invocation.fail(error)
-                else:
-                    invocation.stop()
-                return result
-        # activate() doesn't fail on StopIteration or GeneratorExit.
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+
+            set_invocation_response_attributes(
+                invocation, result, capture_content, kwargs
+            )
+            error = get_response_error(result, kwargs)
+            if error is not None:
+                invocation.fail(error)
+            else:
+                invocation.stop()
+            return result
 
     return cast(
         'Callable[..., "ResponseResult" | "ResponseStreamResult" | ResponseStreamWrapper[Any]]',
@@ -166,30 +161,25 @@ def async_responses_create(
         )
         apply_request_attributes(invocation, params, capture_content)
 
-        try:
-            with invocation.activate():
-                result = await wrapped(*args, **kwargs)
-                if is_streaming(kwargs):
-                    return wrap_stream_result(
-                        AsyncResponseStreamWrapper,
-                        result,
-                        invocation,
-                        capture_content,
-                    )
-
-                set_invocation_response_attributes(
-                    invocation, result, capture_content, kwargs
+        with invocation.activate():
+            result = await wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    AsyncResponseStreamWrapper,
+                    result,
+                    invocation,
+                    capture_content,
                 )
-                error = get_response_error(result, kwargs)
-                if error is not None:
-                    invocation.fail(error)
-                else:
-                    invocation.stop()
-                return result
-        # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+
+            set_invocation_response_attributes(
+                invocation, result, capture_content, kwargs
+            )
+            error = get_response_error(result, kwargs)
+            if error is not None:
+                invocation.fail(error)
+            else:
+                invocation.stop()
+            return result
 
     return cast(
         'Callable[..., Awaitable["ResponseResult" | "AsyncResponseStreamResult" | AsyncResponseStreamWrapper[Any]]]',
@@ -272,29 +262,24 @@ def responses_retrieve(
             handler, instance, response_id, kwargs
         )
 
-        try:
-            with invocation.activate():
-                result = wrapped(*args, **kwargs)
-                if is_streaming(kwargs):
-                    return wrap_stream_result(
-                        FetchResponseStreamWrapper,
-                        result,
-                        invocation,
-                        capture_content,
-                    )
-
-                set_fetch_response_attributes(
-                    invocation,
+        with invocation.activate():
+            result = wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    FetchResponseStreamWrapper,
                     result,
+                    invocation,
                     capture_content,
-                    kwargs,
                 )
-                invocation.stop()
-                return result
-        # activate() doesn't fail on StopIteration or GeneratorExit.
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+
+            set_fetch_response_attributes(
+                invocation,
+                result,
+                capture_content,
+                kwargs,
+            )
+            invocation.stop()
+            return result
 
     return cast(
         'Callable[..., Union["ResponseResult", "ResponseStreamResult", FetchResponseStreamWrapper[Any]]]',
@@ -347,26 +332,21 @@ def async_responses_retrieve(
             handler, instance, response_id, kwargs
         )
 
-        try:
-            with invocation.activate():
-                result = await wrapped(*args, **kwargs)
-                if is_streaming(kwargs):
-                    return wrap_stream_result(
-                        AsyncFetchResponseStreamWrapper,
-                        result,
-                        invocation,
-                        capture_content,
-                    )
-
-                set_fetch_response_attributes(
-                    invocation, result, capture_content, kwargs
+        with invocation.activate():
+            result = await wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    AsyncFetchResponseStreamWrapper,
+                    result,
+                    invocation,
+                    capture_content,
                 )
-                invocation.stop()
-                return result
-        # activate() doesn't fail on StopAsyncIteration or GeneratorExit.
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+
+            set_fetch_response_attributes(
+                invocation, result, capture_content, kwargs
+            )
+            invocation.stop()
+            return result
 
     return cast(
         'Callable[..., Awaitable[Union["ResponseResult", "AsyncResponseStreamResult", AsyncFetchResponseStreamWrapper[Any]]]]',
