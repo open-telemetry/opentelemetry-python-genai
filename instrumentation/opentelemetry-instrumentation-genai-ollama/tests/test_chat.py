@@ -617,3 +617,4 @@ def test_abandoned_stream_still_ends_its_span(
 
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "_OTHER"
