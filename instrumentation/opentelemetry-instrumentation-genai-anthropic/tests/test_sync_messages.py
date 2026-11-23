@@ -3647,3 +3647,51 @@ def test_sync_messages_stream_span_is_not_current_between_reads(
 
     (span,) = span_exporter.get_finished_spans()
     assert seen == [span.context.span_id]
+
+
+_RAW_MESSAGE = {
+    "id": "msg_raw",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-20250514",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+def test_sync_raw_response_close_after_parse_runs_in_caller_context(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    closes: list[int] = []
+    close = httpx.Response.close
+
+    def recording_close(self: httpx.Response) -> None:
+        closes.append(trace.get_current_span().get_span_context().span_id)
+        close(self)
+
+    monkeypatch.setattr(httpx.Response, "close", recording_close)
+    body = json.dumps(_RAW_MESSAGE).encode()
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    content=iter([body]),
+                )
+            )
+        ),
+    )
+    with client.messages.with_streaming_response.create(
+        **_UNSET_BASE_KWARGS
+    ) as response:
+        response.parse()
+        assert len(span_exporter.get_finished_spans()) == 1
+        closes.clear()
+
+    assert closes
+    assert set(closes) == {trace.INVALID_SPAN_ID}

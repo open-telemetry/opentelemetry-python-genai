@@ -8,11 +8,18 @@ from functools import wraps
 from typing import Any
 
 import pytest
+
+try:
+    import httpx
+except ImportError:
+    import httpx2 as httpx
 from google.genai import Client
 from google.genai.models import AsyncModels, Models
 from google.genai.types import (
     EmbedContentResponse,
+    GenerateContentConfig,
     GenerateContentResponse,
+    HttpOptions,
 )
 
 from opentelemetry import context, trace
@@ -25,9 +32,6 @@ from opentelemetry.instrumentation.google_genai.interactions import (
     Interaction,
     InteractionsResource,
 )
-from opentelemetry.instrumentation.google_genai.tool_call_wrapper import (
-    wrapped_tool,
-)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
@@ -36,7 +40,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import Span
-from opentelemetry.util.genai.handler import TelemetryHandler
 
 REQUIRES_INTERACTIONS = pytest.mark.skipif(
     not _HAS_INTERACTIONS,
@@ -264,6 +267,37 @@ async def test_async_generate_content_stream_error_before_stream_is_returned(
     _assert_single_error_span(span_exporter)
 
 
+_FUNCTION_CALL = {
+    "candidates": [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "get_weather",
+                            "args": {"city": "Paris"},
+                        }
+                    }
+                ],
+            }
+        }
+    ]
+}
+_TEXT = {
+    "candidates": [
+        {
+            "content": {"role": "model", "parts": [{"text": "sunny"}]},
+            "finishReason": "STOP",
+        }
+    ]
+}
+
+
+@pytest.mark.skipif(
+    "httpx_client" not in HttpOptions.model_fields,
+    reason="HttpOptions.httpx_client is not supported in this version",
+)
 def test_tool_span_is_current_only_during_the_tool(
     tracer_provider: TracerProvider,
     meter_provider: MeterProvider,
@@ -273,21 +307,44 @@ def test_tool_span_is_current_only_during_the_tool(
     seen: list[Span] = []
 
     def get_weather(city: str) -> str:
+        """Get the weather for a city."""
         seen.append(trace.get_current_span())
         return "sunny"
 
-    handler = TelemetryHandler(
+    # Older SDKs skip automatic function calling for string annotations.
+    get_weather.__annotations__ = {"city": str, "return": str}
+    responses = iter([_FUNCTION_CALL, _TEXT])
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json=next(responses))
+    )
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
-    )
-    tool = wrapped_tool(get_weather, handler)
-    before = context.get_current()
-    tool("Paris")
-    assert context.get_current() is before
+        content_capture="NO_CONTENT",
+    ):
+        with httpx.Client(transport=transport) as http_client:
+            client = Client(
+                api_key="test-key",
+                vertexai=False,
+                http_options=HttpOptions(httpx_client=http_client),
+            )
+            before = context.get_current()
+            client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents="Weather in Paris?",
+                config=GenerateContentConfig(tools=[get_weather]),
+            )
+            assert context.get_current() is before
 
-    (span,) = span_exporter.get_finished_spans()
-    assert [s.get_span_context() for s in seen] == [span.context]
+    tool_spans = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.name.startswith("execute_tool")
+    ]
+    (tool_span,) = tool_spans
+    assert [s.get_span_context() for s in seen] == [tool_span.context]
 
 
 class _Pending:

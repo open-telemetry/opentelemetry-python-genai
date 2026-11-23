@@ -3358,3 +3358,54 @@ def test_async_messages_create_closed_while_request_is_pending_fails_the_span(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
+
+
+_RAW_MESSAGE = {
+    "id": "msg_raw",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-20250514",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+async def test_async_raw_response_close_after_parse_runs_in_caller_context(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    closes: list[int] = []
+    aclose = _http_lib.Response.aclose
+
+    async def recording_aclose(self: _http_lib.Response) -> None:
+        closes.append(trace.get_current_span().get_span_context().span_id)
+        await aclose(self)
+
+    async def body():
+        yield json.dumps(_RAW_MESSAGE).encode()
+
+    monkeypatch.setattr(_http_lib.Response, "aclose", recording_aclose)
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(
+                lambda _request: _http_lib.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    content=body(),
+                )
+            )
+        ),
+    )
+    async with client.messages.with_streaming_response.create(
+        **_UNSET_BASE_KWARGS
+    ) as response:
+        await response.parse()
+        assert len(span_exporter.get_finished_spans()) == 1
+        closes.clear()
+
+    assert closes
+    assert set(closes) == {trace.INVALID_SPAN_ID}
