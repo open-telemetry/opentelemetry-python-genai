@@ -27,9 +27,18 @@ from opentelemetry.semconv.attributes import (
 from opentelemetry.util.genai._inference_invocation import (
     InferenceInvocation,
 )
+from opentelemetry.util.genai.completion_hook import (
+    _NoOpCompletionHook,
+    _SafeCompletionHook,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.stream import AbandonedStreamError
-from opentelemetry.util.genai.types import ContentCapturingMode, Error
+from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
+    Error,
+    OutputMessage,
+    ToolCallResponsePart,
+)
 
 from .test_utils import (
     _create_input_message,
@@ -165,6 +174,101 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, span_attrs)
         self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, span_attrs)
         self.assertNotIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+        },
+    )
+    def test_event_receives_message_models_directly(self) -> None:
+        for hook in (
+            None,
+            _NoOpCompletionHook(),
+            _SafeCompletionHook(_NoOpCompletionHook()),
+        ):
+            for error in (None, Error(message="failed", type="TestError")):
+                with self.subTest(
+                    hook=type(hook).__name__, failed=error is not None
+                ):
+                    handler = TelemetryHandler(
+                        tracer_provider=self.tracer_provider,
+                        logger_provider=self.logger_provider,
+                        completion_hook=hook,
+                    )
+                    invocation = handler.inference("test-provider")
+                    invocation.input_messages = [
+                        _create_input_message("test query")
+                    ]
+                    invocation.output_messages = [
+                        _create_output_message("test response")
+                    ]
+                    with patch.object(invocation._logger, "emit") as emit:
+                        if error is None:
+                            invocation.stop()
+                        else:
+                            invocation.fail(error)
+
+                    emit.assert_called_once()
+                    attrs = emit.call_args.args[0].attributes
+                    self.assertIs(
+                        attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+                        invocation.input_messages,
+                    )
+                    self.assertIs(
+                        attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
+                        invocation.output_messages,
+                    )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+        },
+    )
+    def test_message_snapshot_precedes_completion_hook(self) -> None:
+        def mutate_messages(*, inputs, outputs, **kwargs) -> None:
+            inputs[0].parts[0].content = "changed"
+            outputs[0].parts[0].response["result"] = "changed"
+            inputs.clear()
+            outputs.clear()
+
+        hook = unittest.mock.MagicMock(on_completion=mutate_messages)
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+            completion_hook=hook,
+        )
+        for error in (None, Error(message="failed", type="TestError")):
+            with self.subTest(failed=error is not None):
+                self.log_exporter.clear()
+                invocation = handler.inference("test-provider")
+                invocation.input_messages = [_create_input_message("hello")]
+                invocation.output_messages = [
+                    OutputMessage(
+                        role="assistant",
+                        parts=[
+                            ToolCallResponsePart(
+                                response={"result": "original"}, id=None
+                            )
+                        ],
+                    )
+                ]
+                if error is None:
+                    invocation.stop()
+                else:
+                    invocation.fail(error)
+                self.assertEqual(invocation.input_messages, [])
+                self.assertEqual(invocation.output_messages, [])
+                logs = self.log_exporter.get_finished_logs()
+                self.assertEqual(len(logs), 1)
+                attrs = logs[0].log_record.attributes
+                input_part = attrs[GenAI.GEN_AI_INPUT_MESSAGES][0]["parts"][0]
+                output_part = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES][0]["parts"][
+                    0
+                ]
+                self.assertEqual(input_part["content"], "hello")
+                self.assertEqual(output_part["response"]["result"], "original")
 
     @patch.dict(
         os.environ,

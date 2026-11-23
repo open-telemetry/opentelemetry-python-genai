@@ -29,7 +29,6 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     TextPart,
 )
-from opentelemetry.util.genai.utils import object_to_any_value
 
 
 class _WorkflowTestBase(TestCase):
@@ -394,7 +393,6 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
                 with (
                     patch(
                         "opentelemetry.util.genai.utils.object_to_any_value",
-                        wraps=object_to_any_value,
                     ) as convert,
                     patch.object(
                         inv.span,

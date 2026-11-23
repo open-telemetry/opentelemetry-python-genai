@@ -166,6 +166,12 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
             stamped_record.attributes.get("gen_ai.input_messages_ref"),
             "s3://bucket/inputs.json",
         )
+        self.assertEqual(
+            self.log_exporter.get_finished_logs()[0].log_record.attributes[
+                "gen_ai.input_messages_ref"
+            ],
+            "s3://bucket/inputs.json",
+        )
 
     def test_workflow_hook_called_on_stop_with_messages(self):
         hook = MagicMock()

@@ -414,6 +414,79 @@ class TestTelemetryHandler(unittest.TestCase):
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
+    def test_shared_messages_passed_directly_to_spans(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
+        )
+        factories = (
+            ("inference", lambda: handler.inference("test-provider")),
+            ("local_agent", handler.invoke_local_agent),
+            (
+                "remote_agent",
+                lambda: handler.invoke_remote_agent("test-provider"),
+            ),
+            (
+                "fetch_response",
+                lambda: handler.fetch_response(
+                    "test-provider", response_id="response-id"
+                ),
+            ),
+        )
+        for name, factory in factories:
+            for failed in (False, True):
+                with self.subTest(invocation=name, failed=failed):
+                    self.span_exporter.clear()
+                    invocation = factory()
+                    if name != "fetch_response":
+                        invocation.input_messages = [
+                            _create_input_message("hello")
+                        ]
+                    invocation.output_messages = [_create_output_message("hi")]
+                    with (
+                        patch(
+                            "opentelemetry.util.genai._invocation.object_to_any_value",
+                            wraps=object_to_any_value,
+                        ) as convert,
+                        patch.object(
+                            invocation.span,
+                            "set_attributes",
+                            wraps=invocation.span.set_attributes,
+                        ) as record,
+                    ):
+                        if failed:
+                            invocation.fail(ValueError("failed"))
+                        else:
+                            invocation.stop()
+
+                    convert.assert_not_called()
+                    recorded = record.call_args.args[0]
+                    self.assertIs(
+                        recorded[GenAI.GEN_AI_OUTPUT_MESSAGES],
+                        invocation.output_messages,
+                    )
+                    attrs = _get_span_attributes(
+                        _get_single_span(self.span_exporter)
+                    )
+                    _assert_text_message(
+                        attrs[GenAI.GEN_AI_OUTPUT_MESSAGES][0],
+                        "AI",
+                        "hi",
+                        "stop",
+                    )
+                    if name != "fetch_response":
+                        self.assertIs(
+                            recorded[GenAI.GEN_AI_INPUT_MESSAGES],
+                            invocation.input_messages,
+                        )
+                        _assert_text_message(
+                            attrs[GenAI.GEN_AI_INPUT_MESSAGES][0],
+                            "Human",
+                            "hello",
+                        )
+                    else:
+                        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, attrs)
+
     def test_inference_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time."""
         captured_attributes = {}

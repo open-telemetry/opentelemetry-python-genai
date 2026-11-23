@@ -606,15 +606,11 @@ def get_content_attributes(
     optional_attrs = (
         (
             GenAI.GEN_AI_INPUT_MESSAGES,
-            object_to_any_value(list(input_messages))
-            if input_messages
-            else None,
+            input_messages or None,
         ),
         (
             GenAI.GEN_AI_OUTPUT_MESSAGES,
-            object_to_any_value(list(output_messages))
-            if output_messages
-            else None,
+            output_messages or None,
         ),
         (
             GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
