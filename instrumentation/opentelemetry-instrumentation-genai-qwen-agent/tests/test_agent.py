@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from qwen_agent.agent import Agent
 from qwen_agent.agents import Assistant
+from qwen_agent.agents.fncall_agent import FnCallAgent
 from qwen_agent.llm import base as qwen_llm_base
 from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
 from qwen_agent.tools.base import BaseTool, register_tool
@@ -149,7 +150,9 @@ def test_multi_turn_conversation(span_exporter, instrument_with_content):
     " qwen-agent version does not support",
 )
 @pytest.mark.vcr()
-def test_agent_run_with_tool_call(span_exporter, instrument_with_content):
+def test_agent_run_with_tool_call(
+    span_exporter, metric_reader, instrument_with_content
+):
     """A tool-calling agent run nests execute_tool spans."""
 
     @register_tool("get_current_weather_test", allow_overwrite=True)
@@ -226,6 +229,11 @@ def test_agent_run_with_tool_call(span_exporter, instrument_with_content):
     # The tool span is nested (transitively) under the invoke_agent span.
     assert tool_span.context.trace_id == agent_span.context.trace_id
     assert tool_span.parent is not None
+
+    # Two model turns request the tool, the third produces the final answer.
+    counts = _call_counts(metric_reader)
+    assert counts[INFERENCE_CALLS_METRIC]["WeatherAgent"] == 3
+    assert counts[TOOL_CALLS_METRIC]["WeatherAgent"] == 2
 
 
 def test_agent_run_error(span_exporter, instrument_no_content):
@@ -592,3 +600,271 @@ def test_agent_run_with_user_list_messages(
     assert list(output_data[0]["parts"]) == [
         {"content": "Answer from UserList", "type": "text"}
     ]
+
+
+# --- agent call-count metrics --------------------------------------------
+
+INFERENCE_CALLS_METRIC = "gen_ai.invoke_agent.inference_calls"
+TOOL_CALLS_METRIC = "gen_ai.invoke_agent.tool_calls"
+
+
+class _FakeLLM:
+    """Minimal LLM stub yielding pre-canned response messages."""
+
+    model = "qwen-max"
+    model_type = "fake"
+
+    def __init__(self, chunks=None):
+        self.chunks = chunks or []
+        self.chat_calls = 0
+
+    def chat(
+        self,
+        messages=None,
+        functions=None,
+        stream=True,
+        extra_generate_cfg=None,
+    ):
+        self.chat_calls += 1
+        return iter(list(self.chunks))
+
+
+class _StubFnCallAgent(FnCallAgent):
+    """FnCallAgent subclass that skips the heavy Agent.__init__."""
+
+    @classmethod
+    def create(cls, name="FnBot", llm=None, function_map=None):
+        obj = cls.__new__(cls)
+        obj.name = name
+        obj.description = ""
+        obj.system_message = ""
+        obj.llm = llm
+        obj.function_map = dict(function_map or {})
+        obj.extra_generate_cfg = {}
+        return obj
+
+    def _run(self, messages, **kwargs):
+        raise NotImplementedError
+
+
+@register_tool("echo_text_test", allow_overwrite=True)
+class _EchoTool(BaseTool):
+    description = "Echo the given text back."
+    parameters = [
+        {
+            "name": "text",
+            "type": "string",
+            "description": "Text to echo.",
+            "required": True,
+        }
+    ]
+
+    def call(self, params, **kwargs):
+        return "echo"
+
+
+def _metrics_by_name(metric_reader):
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {}
+    for resource in data.resource_metrics:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                metrics[metric.name] = metric
+    return metrics
+
+
+def _call_counts(metric_reader):
+    """Map metric name -> {agent_name: sum} for the invoke_agent counters."""
+    metrics = _metrics_by_name(metric_reader)
+    counts = {}
+    for name in (INFERENCE_CALLS_METRIC, TOOL_CALLS_METRIC):
+        counts[name] = {}
+        for point in metrics[name].data.data_points:
+            assert point.count == 1
+            counts[name][
+                point.attributes[GenAIAttributes.GEN_AI_AGENT_NAME]
+            ] = point.sum
+    return counts
+
+
+def test_agent_run_records_inference_and_tool_counts(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """A run with two LLM calls and one tool call records both counts."""
+    tool = MagicMock(
+        description="Get weather", call=MagicMock(return_value="sunny")
+    )
+    llm = _FakeLLM(
+        [
+            [Message(role="assistant", content="thinking")],
+            [Message(role="assistant", content="final")],
+        ]
+    )
+    agent = _StubAgent.create(name="CountBot", llm=llm)
+    agent.function_map = {"get_weather": tool}
+
+    def fake_run(self, messages, **kwargs):
+        yield from self._call_llm(messages)
+        self._call_tool("get_weather", "{}")
+        yield from self._call_llm(messages)
+
+    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
+        list(agent.run([Message(role="user", content="Go")]))
+
+    counts = _call_counts(metric_reader)
+    assert counts[INFERENCE_CALLS_METRIC] == {"CountBot": 2}
+    assert counts[TOOL_CALLS_METRIC] == {"CountBot": 1}
+
+    (agent_span,) = _spans_named(span_exporter, "invoke_agent CountBot")
+    span_attrs = dict(agent_span.attributes or {})
+    assert INFERENCE_CALLS_METRIC not in span_attrs
+    assert TOOL_CALLS_METRIC not in span_attrs
+
+
+def test_agent_run_records_zero_counts(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """A run that calls neither the model nor a tool records zero counts."""
+    agent = _StubAgent.create(name="IdleBot", llm=_FakeLLM())
+
+    def fake_run(messages, **kwargs):
+        yield [Message(role="assistant", content="no model needed")]
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        list(agent.run([Message(role="user", content="Go")]))
+
+    counts = _call_counts(metric_reader)
+    assert counts[INFERENCE_CALLS_METRIC] == {"IdleBot": 0}
+    assert counts[TOOL_CALLS_METRIC] == {"IdleBot": 0}
+
+
+def test_fncall_agent_counts_unknown_and_known_tool_calls(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """Unknown tools short-circuit in FnCallAgent; they must still be counted."""
+    agent = _StubFnCallAgent.create(
+        name="FnCountBot",
+        llm=_FakeLLM(),
+        function_map={"echo_text_test": _EchoTool()},
+    )
+
+    def fake_run(self, messages, **kwargs):
+        self._call_tool("not_a_registered_tool", "{}")
+        self._call_tool("echo_text_test", '{"text": "hi"}')
+        yield [Message(role="assistant", content="done")]
+
+    with patch.object(
+        _StubFnCallAgent, "_run", autospec=True, side_effect=fake_run
+    ):
+        list(agent.run([Message(role="user", content="Go")]))
+
+    counts = _call_counts(metric_reader)
+    assert counts[TOOL_CALLS_METRIC] == {"FnCountBot": 2}
+    assert counts[INFERENCE_CALLS_METRIC] == {"FnCountBot": 0}
+
+
+def test_agent_run_records_counts_on_early_close(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """Calls made before the caller closes the stream are still recorded."""
+    llm = _FakeLLM([[Message(role="assistant", content="one")]])
+    agent = _StubAgent.create(name="EarlyCountBot", llm=llm)
+
+    def fake_run(self, messages, **kwargs):
+        yield from self._call_llm(messages)
+        yield [Message(role="assistant", content="two")]
+
+    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
+        run_iter = agent.run([Message(role="user", content="Go")])
+        next(run_iter)
+        run_iter.close()
+
+    counts = _call_counts(metric_reader)
+    assert counts[INFERENCE_CALLS_METRIC] == {"EarlyCountBot": 1}
+    assert counts[TOOL_CALLS_METRIC] == {"EarlyCountBot": 0}
+
+
+def test_agent_run_records_counts_on_error(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """Calls made before a failure are recorded on the failed invocation."""
+    tool = MagicMock(
+        description="Get weather", call=MagicMock(return_value="ok")
+    )
+    agent = _StubAgent.create(
+        name="FailingCountBot",
+        llm=_FakeLLM([[Message(role="assistant", content="one")]]),
+    )
+    agent.function_map = {"get_weather": tool}
+
+    def fake_run(self, messages, **kwargs):
+        yield from self._call_llm(messages)
+        self._call_tool("get_weather", "{}")
+        raise ValueError("boom")
+        yield  # pylint: disable=unreachable
+
+    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
+        with pytest.raises(ValueError, match="boom"):
+            list(agent.run([Message(role="user", content="Go")]))
+
+    counts = _call_counts(metric_reader)
+    assert counts[INFERENCE_CALLS_METRIC] == {"FailingCountBot": 1}
+    assert counts[TOOL_CALLS_METRIC] == {"FailingCountBot": 1}
+
+
+def test_nested_agent_runs_keep_counts_separate(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """Sub-agent calls are credited to the sub-agent, not the parent."""
+    parent = _StubAgent.create(name="ParentCountBot", llm=_FakeLLM([]))
+    child = _StubFnCallAgent.create(
+        name="ChildCountBot",
+        llm=_FakeLLM([[Message(role="assistant", content="child")]]),
+        function_map={"echo_text_test": _EchoTool()},
+    )
+
+    def fake_run(self, messages, **kwargs):
+        if self is parent:
+            yield from self._call_llm(messages)
+            yield from child.run([Message(role="user", content="child work")])
+            self._call_tool("echo_text_test", '{"text": "hi"}')
+        else:
+            yield from self._call_llm(messages)
+            self._call_tool("echo_text_test", '{"text": "hi"}')
+
+    with (
+        patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run),
+        patch.object(
+            _StubFnCallAgent, "_run", autospec=True, side_effect=fake_run
+        ),
+    ):
+        list(parent.run([Message(role="user", content="parent work")]))
+
+    counts = _call_counts(metric_reader)
+    assert counts[INFERENCE_CALLS_METRIC] == {
+        "ParentCountBot": 1,
+        "ChildCountBot": 1,
+    }
+    assert counts[TOOL_CALLS_METRIC] == {
+        "ParentCountBot": 1,
+        "ChildCountBot": 1,
+    }
+
+
+def test_call_tool_outside_run_is_not_counted(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """A tool call outside any agent run must not emit agent call counts."""
+    agent = _StubAgent.create(name="OutsideBot", llm=_FakeLLM())
+    agent.function_map = {
+        "get_weather": MagicMock(
+            description="Get weather", call=MagicMock(return_value="ok")
+        )
+    }
+
+    agent._call_tool("get_weather", "{}")
+
+    metrics = _metrics_by_name(metric_reader)
+    assert INFERENCE_CALLS_METRIC not in metrics
+    assert TOOL_CALLS_METRIC not in metrics

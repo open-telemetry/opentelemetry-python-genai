@@ -7,6 +7,7 @@
 from unittest.mock import patch
 
 from qwen_agent.agent import Agent
+from qwen_agent.agents.fncall_agent import FnCallAgent
 from qwen_agent.llm.schema import Message
 
 from opentelemetry.instrumentation.genai.qwen_agent import (
@@ -44,6 +45,33 @@ def test_instrumentation_dependencies():
     instrumentor = QwenAgentInstrumentor()
     dependencies = instrumentor.instrumentation_dependencies()
     assert dependencies == ("qwen-agent >= 0.0.20, < 1",)
+
+
+def test_uninstrument_restores_wrapped_methods(
+    tracer_provider, logger_provider, meter_provider
+):
+    """Every wrapped SDK method is unwrapped again by uninstrument()."""
+    wrapped_methods = (
+        ("run",),
+        ("_call_tool",),
+        ("_call_llm",),
+    )
+    instrumentor = QwenAgentInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    )
+    try:
+        for (name,) in wrapped_methods:
+            assert hasattr(getattr(Agent, name), "__wrapped__")
+        assert hasattr(FnCallAgent._call_tool, "__wrapped__")
+    finally:
+        instrumentor.uninstrument()
+
+    for (name,) in wrapped_methods:
+        assert not hasattr(getattr(Agent, name), "__wrapped__")
+    assert not hasattr(FnCallAgent._call_tool, "__wrapped__")
 
 
 def test_uninstrument_stops_span_creation(
