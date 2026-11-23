@@ -1,0 +1,191 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "gemini-3.8-flash",
+        "input": [
+          {
+            "content": [
+              {
+                "text": "Weather in Paris and London?",
+                "type": "text"
+              }
+            ],
+            "type": "user_input"
+          },
+          {
+            "arguments": {
+              "city": "Paris"
+            },
+            "id": "call-1",
+            "name": "get_weather",
+            "type": "function_call"
+          },
+          {
+            "arguments": {
+              "city": "London"
+            },
+            "id": "call-2",
+            "name": "get_weather",
+            "type": "function_call"
+          },
+          {
+            "call_id": "call-1",
+            "result": {
+              "temp": 22
+            },
+            "name": "get_weather",
+            "type": "function_result"
+          },
+          {
+            "call_id": "call-2",
+            "result": {
+              "temp": 15
+            },
+            "name": "get_weather",
+            "type": "function_result"
+          },
+          {
+            "content": [
+              {
+                "text": "Paris is 22C and London is 15C.",
+                "type": "text"
+              }
+            ],
+            "type": "model_output"
+          },
+          {
+            "content": [
+              {
+                "text": "Which is warmer?",
+                "type": "text"
+              }
+            ],
+            "type": "user_input"
+          },
+          {
+            "content": [
+              {
+                "text": "Paris is warmer.",
+                "type": "text"
+              }
+            ],
+            "type": "model_output"
+          },
+          {
+            "content": [
+              {
+                "text": "Thanks!",
+                "type": "text"
+              }
+            ],
+            "type": "user_input"
+          }
+        ],
+        "store": false,
+        "tools": [
+          {
+            "description": "Get the current weather for a city.",
+            "name": "get_weather",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ]
+            },
+            "type": "function"
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '1003'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/3.0.0 gl-python/3.11.14
+      x-goog-api-client:
+      - google-genai-sdk/3.0.0 gl-python/3.11.14
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: |-
+        {
+          "status": "completed",
+          "usage": {
+            "total_tokens": 168,
+            "total_input_tokens": 138,
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 138
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 14,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 16,
+            "initial_input_tokens": 138
+          },
+          "created": "2026-11-20T18:37:03Z",
+          "updated": "2026-11-20T18:37:03Z",
+          "service_tier": "standard",
+          "steps": [
+            {
+              "signature": "EuUBCuIBAWkUfROmMAhB2jOp9bMSSXQVKHuOIgO8cr3ObLbe7iaCqvsbCVbbBCFRBl7G/7L/uKusCb/Qv4bF4Soie/ufMCZZxcRbUeDn15RvFR3bkvxahUMH7MFuKMas73uovkuCuvjlOiQepVJOnZvGRCcN3nJWXrxFbDPnEQOVVskciM89VEfyQC8h8EQaggEEoA9uwD1DBuwJKhm8XVW6bJBFg2U167gV8UP2WeOXo8NV81Llkb7jGQDVxDlrPzhfuBIO8Hlw5LTNZjMWjjv59XvI1+IyJpYsFnXVTU6iL/GnRn6duw==",
+              "type": "thought"
+            },
+            {
+              "content": [
+                {
+                  "text": "You're welcome! Let me know if you need anything else.",
+                  "type": "text"
+                }
+              ],
+              "type": "model_output"
+            }
+          ],
+          "object": "interaction",
+          "model": "gemini-3.8-flash"
+        }
+    headers:
+      content-length:
+      - '880'
+      content-type:
+      - application/json
+      date:
+      - Fri, 20 Nov 2026 18:37:03 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=1842
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

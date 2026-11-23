@@ -15,7 +15,16 @@ from collections.abc import (
     Sequence,
 )
 from sys import float_info
-from typing import Any, cast
+from types import UnionType
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+)
 
 try:
     # Google GenAI < 2.9.0
@@ -24,6 +33,19 @@ try:
         AsyncInteractionsResource,
         InteractionsResource,
     )
+    from google.genai._interactions.types.audio_content import AudioContent
+    from google.genai._interactions.types.content import Content
+    from google.genai._interactions.types.content_param import ContentParam
+    from google.genai._interactions.types.document_content import (
+        DocumentContent,
+    )
+    from google.genai._interactions.types.function_call_step import (
+        FunctionCallStep,
+    )
+    from google.genai._interactions.types.function_result_step import (
+        FunctionResultStep,
+    )
+    from google.genai._interactions.types.image_content import ImageContent
     from google.genai._interactions.types.interaction import Interaction, Usage
     from google.genai._interactions.types.interaction_create_params import (
         Input,
@@ -31,9 +53,16 @@ try:
     from google.genai._interactions.types.interaction_sse_event import (
         InteractionSSEEvent,
     )
+    from google.genai._interactions.types.model_output_step import (
+        ModelOutputStep,
+    )
     from google.genai._interactions.types.step import Step
+    from google.genai._interactions.types.text_content import TextContent
+    from google.genai._interactions.types.user_input_step import UserInputStep
+    from google.genai._interactions.types.video_content import VideoContent
 
     _HAS_INTERACTIONS = True
+    _MODEL_DUMP_EXCLUDE_UNSET = True
 except ImportError:
     try:
         # Google GenAI >= 2.9.0
@@ -48,51 +77,39 @@ except ImportError:
             Interactions as InteractionsResource,
         )
         from google.genai._gaos.types.interactions import (
+            AudioContent,
+            Content,
+            ContentParam,
+            DocumentContent,
+            FunctionCallStep,
+            FunctionResultStep,
+            ImageContent,
             Interaction,
             InteractionSSEEvent,
+            ModelOutputStep,
             Step,
+            TextContent,
             Usage,
+            UserInputStep,
+            VideoContent,
         )
         from google.genai._gaos.types.interactions import (
             InteractionsInput as Input,
         )
 
         _HAS_INTERACTIONS = True
+        _MODEL_DUMP_EXCLUDE_UNSET = False
     except ImportError:
+        if TYPE_CHECKING:
+            raise
         _HAS_INTERACTIONS = False
-
-        # Placeholders for older versions where interactions are not supported
-        class InteractionsResource:
-            create = None
-            get = None
-
-        class AsyncInteractionsResource:
-            create = None
-            get = None
-
-        class Interaction:
-            model = None
-            usage = None
-
-        class Usage:
-            total_input_tokens = None
-            total_output_tokens = None
-            total_thought_tokens = None
-
-        class Input:
-            pass
-
-        class InteractionSSEEvent:
-            pass
-
-        class Step:
-            pass
-
-        class Stream:
-            pass
-
-        class AsyncStream:
-            pass
+        _MODEL_DUMP_EXCLUDE_UNSET = False
+        # Only names referenced at module/test import time when interactions
+        # are unavailable.
+        InteractionsResource = None
+        AsyncInteractionsResource = None
+        Interaction = None
+        InteractionSSEEvent = object
 
 
 from wrapt import wrap_function_wrapper
@@ -117,6 +134,7 @@ from opentelemetry.util.genai.stream import (
     SyncStreamWrapper,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
     Error,
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -134,8 +152,28 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     UriPart,
 )
+from opentelemetry.util.genai.utils import decode_base64
 
 _logger = logging.getLogger(__name__)
+
+
+def _union_model_types(annotation: object) -> tuple[type[object], ...]:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _union_model_types(get_args(annotation)[0])
+    if origin in (Union, UnionType):
+        models: list[type[object]] = []
+        for arg in get_args(annotation):
+            models.extend(_union_model_types(arg))
+        return tuple(models)
+    if isinstance(annotation, type):
+        return (annotation,)
+    return ()
+
+
+_STEP_MODEL_TYPES: tuple[type[object], ...] = (
+    _union_model_types(Step) if _HAS_INTERACTIONS else ()
+)
 
 # Interaction.status values that differ from the gen_ai.response.status value
 # set. `in_progress`, `completed`, `failed`, `cancelled` and `incomplete` are
@@ -278,9 +316,8 @@ _SERVER_TOOL_RESPONSE_NAMES = {
     "url_context_result": "url_context",
 }
 
-_TOOL_STEP_TYPES = {
+_OUTPUT_TOOL_STEP_TYPES = {
     "function_call",
-    "function_result",
     *_SERVER_TOOL_CALL_NAMES,
     *_SERVER_TOOL_RESPONSE_NAMES,
 }
@@ -297,10 +334,9 @@ def _to_server_tool_part(
     if tool_name is None and response_name is None:
         return None
 
-    if isinstance(item, dict):
-        payload = dict(item)
-    else:
-        payload = item.model_dump(exclude_none=True, mode="json")
+    payload = _as_payload(item)
+    if payload is None:
+        return None
 
     item_id = payload.pop("id", None)
     call_id = payload.pop("call_id", None)
@@ -323,43 +359,143 @@ def _to_server_tool_part(
     )
 
 
-def _interaction_item_to_part(
+def _interaction_output_item_to_part(
     item: Step | dict[str, object],
 ) -> MessagePart | None:
-    if isinstance(item, dict):
-        item_type = item.get("type")
+    if isinstance(item, FunctionCallStep):
+        return ToolCallRequestPart(
+            id=item.id if isinstance(item.id, str) else None,
+            name=item.name if isinstance(item.name, str) else "",
+            arguments=item.arguments,
+        )
+    if isinstance(item, dict) and item.get("type") == "function_call":
         item_id = item.get("id")
         name = item.get("name")
-        arguments = item.get("arguments")
-        call_id = item.get("call_id")
-        result = item.get("result")
-    else:
-        item_type = item.type
-        item_id = item.id if item_type == "function_call" else None
-        name = item.name if item_type == "function_call" else None
-        arguments = item.arguments if item_type == "function_call" else None
-        call_id = item.call_id if item_type == "function_result" else None
-        result = item.result if item_type == "function_result" else None
-
-    if item_type == "function_call":
         return ToolCallRequestPart(
             id=item_id if isinstance(item_id, str) else None,
             name=name if isinstance(name, str) else "",
-            arguments=arguments,
-        )
-    if item_type == "function_result":
-        return ToolCallResponsePart(
-            id=call_id if isinstance(call_id, str) else None,
-            response=result,
+            arguments=item.get("arguments"),
         )
     return _to_server_tool_part(item)
 
 
-# Logic for parsing Input is tricky:
-# https://github.com/open-telemetry/donation-openinference/blob/6cdd644d79fccf50aedcb614187f924ddfcafb7b/python/instrumentation/openinference-instrumentation-google-genai/src/openinference/instrumentation/google_genai/interactions_attributes.py#L103
-# It doesn't make sense for this to be a List[InputMessage] (per semconv),
-# because this API doesn't take conversation history as input (unlike the generate_content API).
-# Conversation history is stored server-side and referenced via a interaction ID parameter.
+def _function_result_to_part(
+    item: Step | dict[str, object],
+) -> ToolCallResponsePart | None:
+    if isinstance(item, FunctionResultStep):
+        return ToolCallResponsePart(
+            id=item.call_id if isinstance(item.call_id, str) else None,
+            response=item.result,
+        )
+    if isinstance(item, dict) and item.get("type") == "function_result":
+        call_id = item.get("call_id")
+        return ToolCallResponsePart(
+            id=call_id if isinstance(call_id, str) else None,
+            response=item.get("result"),
+        )
+    return None
+
+
+_MEDIA_CONTENT_MODALITIES: dict[str, Modality] = {
+    "audio": Modality.AUDIO,
+    "document": Modality.DOCUMENT,
+    "image": Modality.IMAGE,
+    "video": Modality.VIDEO,
+}
+
+
+def _media_to_part(
+    *,
+    modality: Modality,
+    mime_type: str | None,
+    uri: str | None,
+    data: str | None,
+) -> MessagePart | None:
+    if uri:
+        return UriPart(
+            mime_type=mime_type,
+            modality=modality,
+            uri=uri,
+        )
+    if data:
+        decoded = decode_base64(data)
+        if decoded is None:
+            return None
+        return BlobPart(
+            mime_type=mime_type,
+            modality=modality,
+            content=decoded,
+        )
+    return None
+
+
+def _content_item_to_part(
+    item: Content | ContentParam | dict[str, object] | str,
+) -> MessagePart | None:
+    if isinstance(item, str):
+        return TextPart(content=item)
+    if isinstance(item, TextContent):
+        return TextPart(content=item.text)
+    if isinstance(
+        item, (AudioContent, DocumentContent, ImageContent, VideoContent)
+    ):
+        return _media_to_part(
+            modality=_MEDIA_CONTENT_MODALITIES[item.type],
+            mime_type=item.mime_type,
+            uri=item.uri,
+            data=item.data,
+        )
+    if isinstance(item, dict):
+        item_type = item.get("type")
+        if item_type == "text":
+            text = item.get("text")
+            return TextPart(content=text if isinstance(text, str) else "")
+        if isinstance(item_type, str) and (
+            modality := _MEDIA_CONTENT_MODALITIES.get(item_type)
+        ):
+            mime_type = item.get("mime_type")
+            uri = item.get("uri")
+            data = item.get("data")
+            return _media_to_part(
+                modality=modality,
+                mime_type=mime_type if isinstance(mime_type, str) else None,
+                uri=uri if isinstance(uri, str) else None,
+                data=data if isinstance(data, str) else None,
+            )
+    return None
+
+
+def _dict_step_content_to_parts(
+    item_dict: dict[str, object],
+) -> list[MessagePart]:
+    content = item_dict.get("content")
+    if not isinstance(content, Sequence) or isinstance(
+        content, (str, bytes, bytearray)
+    ):
+        return []
+    parts: list[MessagePart] = []
+    for sub_item in content:
+        if isinstance(sub_item, dict):
+            part = _content_item_to_part(cast(dict[str, object], sub_item))
+        elif isinstance(
+            sub_item,
+            (
+                str,
+                TextContent,
+                AudioContent,
+                DocumentContent,
+                ImageContent,
+                VideoContent,
+            ),
+        ):
+            part = _content_item_to_part(sub_item)
+        else:
+            part = None
+        if part is not None:
+            parts.append(part)
+    return parts
+
+
 def _interactions_input_to_messages(
     input_data: Input | None,
 ) -> list[InputMessage]:
@@ -373,36 +509,108 @@ def _interactions_input_to_messages(
             )
         ]
 
-    if not isinstance(input_data, Sequence):
+    if isinstance(input_data, (bytes, bytearray)) or not isinstance(
+        input_data, Sequence
+    ):
         input_data = [input_data]
 
-    parts: list[MessagePart] = []
+    messages: list[InputMessage] = []
+    # Consecutive standalone content items (str / Content) belong to one user
+    # message; consecutive assistant steps (tool calls, server tools, model
+    # output) belong to one assistant turn.
+    last_is_standalone_content = False
+
+    def _append_standalone_content(part: MessagePart) -> None:
+        nonlocal last_is_standalone_content
+        if (
+            last_is_standalone_content
+            and messages
+            and messages[-1].role == Role.USER.value
+        ):
+            messages[-1].parts.append(part)
+        else:
+            messages.append(InputMessage(role=Role.USER.value, parts=[part]))
+            last_is_standalone_content = True
+
+    def _append_step(role: str, step_parts: list[MessagePart]) -> None:
+        nonlocal last_is_standalone_content
+        if not step_parts:
+            return
+        last_is_standalone_content = False
+        if (
+            role == Role.ASSISTANT.value
+            and messages
+            and messages[-1].role == Role.ASSISTANT.value
+        ):
+            messages[-1].parts.extend(step_parts)
+        else:
+            messages.append(InputMessage(role=role, parts=step_parts))
+
     for item in input_data:
         if isinstance(item, str):
-            parts.append(TextPart(content=item))
+            _append_standalone_content(TextPart(content=item))
             continue
 
-        item_type = _get_field(item, "type")
-        message_part = None
         if isinstance(item, dict):
-            message_part = _interaction_item_to_part(item)
-        elif item_type in _TOOL_STEP_TYPES:
-            message_part = _interaction_item_to_part(cast(Step, item))
+            item_dict = cast(dict[str, object], item)
+            if tool_result := _function_result_to_part(item_dict):
+                _append_step(Role.TOOL.value, [tool_result])
+                continue
+            if output_part := _interaction_output_item_to_part(item_dict):
+                _append_step(Role.ASSISTANT.value, [output_part])
+                continue
+            item_type = item_dict.get("type")
+            if item_type == "user_input":
+                _append_step(
+                    Role.USER.value, _dict_step_content_to_parts(item_dict)
+                )
+            elif item_type == "model_output":
+                _append_step(
+                    Role.ASSISTANT.value,
+                    _dict_step_content_to_parts(item_dict),
+                )
+            elif part := _content_item_to_part(item_dict):
+                _append_standalone_content(part)
+            continue
 
-        if message_part is not None:
-            parts.append(message_part)
-        elif item_type == "text":
-            part = TextPart(content=_get_field(item, "text") or "")
-            parts.append(part)
-        elif item_type == "document":
-            part = UriPart(
-                mime_type=_get_field(item, "mime_type"),
-                modality=Modality.DOCUMENT,
-                uri=_get_field(item, "uri") or "",
+        if isinstance(item, (UserInputStep, ModelOutputStep)):
+            role = (
+                Role.USER.value
+                if isinstance(item, UserInputStep)
+                else Role.ASSISTANT.value
             )
-            parts.append(part)
+            _append_step(
+                role,
+                [
+                    part
+                    for sub_item in item.content or ()
+                    if (part := _content_item_to_part(sub_item)) is not None
+                ],
+            )
+            continue
 
-    return [InputMessage(role=Role.USER.value, parts=parts)]
+        if isinstance(
+            item,
+            (
+                TextContent,
+                AudioContent,
+                DocumentContent,
+                ImageContent,
+                VideoContent,
+            ),
+        ):
+            if part := _content_item_to_part(item):
+                _append_standalone_content(part)
+            continue
+
+        if isinstance(item, _STEP_MODEL_TYPES):
+            step = cast(Step, item)
+            if tool_result := _function_result_to_part(step):
+                _append_step(Role.TOOL.value, [tool_result])
+            elif output_part := _interaction_output_item_to_part(step):
+                _append_step(Role.ASSISTANT.value, [output_part])
+
+    return messages
 
 
 def _get_interaction_output_text(interaction: Interaction) -> str:
@@ -434,7 +642,7 @@ def _interactions_response_to_messages(
 ) -> list[OutputMessage]:
     parts: list[MessagePart] = []
     for step in interaction.steps or []:
-        if part := _interaction_item_to_part(step):
+        if part := _interaction_output_item_to_part(step):
             parts.append(part)
             continue
         if step.type != "model_output":
@@ -445,9 +653,10 @@ def _interactions_response_to_messages(
                 parts.append(TextPart(content=text))
 
     if not any(isinstance(part, TextPart) for part in parts):
-        parts.append(
-            TextPart(content=_get_interaction_output_text(interaction))
-        )
+        if output_text := _get_interaction_output_text(interaction):
+            parts.append(TextPart(content=output_text))
+    if not parts:
+        return []
     return [
         OutputMessage(
             role=Role.ASSISTANT.value,
@@ -500,16 +709,7 @@ def _interaction_tool_definitions(
         The tool definitions declared on the interaction, or None when it
         declares none that map to a semconv tool definition.
     """
-    tools = _get_field(interaction, "tools")
-    if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
-        return None
-    dumped: list[Any] = []
-    for tool in tools:
-        if isinstance(tool, dict):
-            dumped.append(tool)
-        elif hasattr(tool, "model_dump"):
-            dumped.append(tool.model_dump(exclude_none=True, mode="json"))
-    return _maybe_get_tool_definitions(dumped)
+    return _maybe_get_tool_definitions(_get_field(interaction, "tools"))
 
 
 def _apply_fetched_interaction_attributes(
@@ -725,7 +925,10 @@ def _as_payload(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return {key: _as_json_value(item) for key, item in value.items()}
     if hasattr(value, "model_dump"):
-        dumped = value.model_dump(exclude_none=True, mode="json")
+        dumped = value.model_dump(
+            exclude_unset=_MODEL_DUMP_EXCLUDE_UNSET,
+            mode="json",
+        )
         return dumped if isinstance(dumped, dict) else None
     return None
 
@@ -780,8 +983,9 @@ class _StreamedContent:
         # A resumed stream picks up mid-interaction, so an index whose
         # step.start went to the dropped connection has no type yet and stays
         # eligible. A thought delta carries an opaque signature rather than
-        # text, so it contributes nothing either way.
-        if entry["type"] == "thought":
+        # text, and user_input / function_result steps are caller inputs rather
+        # than model output, so they contribute nothing either way.
+        if entry["type"] in ("thought", "user_input", "function_result"):
             return
         delta = _get_field(chunk, "delta")
         if delta is None:
@@ -795,7 +999,7 @@ class _StreamedContent:
     def _merge_delta(entry: dict[str, Any], delta: Any) -> None:
         """Fold a delta's structured fields into the step's payload."""
         delta_type = _get_field(delta, "type")
-        if entry["payload"] is None and delta_type in _TOOL_STEP_TYPES:
+        if entry["payload"] is None and delta_type in _OUTPUT_TOOL_STEP_TYPES:
             # The step.start was delivered to a connection that dropped.
             entry["payload"] = {"type": delta_type}
         payload = entry["payload"]
@@ -839,7 +1043,7 @@ class _StreamedContent:
                         **payload,
                         "arguments": _maybe_json("".join(entry["arguments"])),
                     }
-                if part := _interaction_item_to_part(payload):
+                if part := _interaction_output_item_to_part(payload):
                     parts.append(part)
                     continue
             # Only a model output step carries output text. A resumed stream may
@@ -984,8 +1188,11 @@ def _maybe_get_tool_definitions(
     if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
         return None
     definitions: list[ToolDefinition] = []
-    for tool in tools:
-        # Tool must be a list of dictionaries
+    for raw_tool in tools:
+        tool = (
+            raw_tool if isinstance(raw_tool, dict) else _as_payload(raw_tool)
+        )
+        # Tool must be a dictionary or an SDK model that dumps to one
         if not isinstance(tool, dict):
             continue
         # This is currently a required field and the SDK will raise an error if it isn't present or
@@ -1193,12 +1400,12 @@ def _start_interactions_invocation(
             error_type_resolver=resolve_error_type,
             _attach_to_context=False,
         )
-    invocation.tool_definitions = _maybe_get_tool_definitions(
-        _get_field(request, "tools")
-    )
     _apply_interaction_request_attributes(invocation, request)
 
     if telemetry_handler.should_capture_content():
+        invocation.tool_definitions = _maybe_get_tool_definitions(
+            _get_field(request, "tools")
+        )
         invocation.input_messages = _interactions_input_to_messages(
             _get_field(request, "input")
         )
