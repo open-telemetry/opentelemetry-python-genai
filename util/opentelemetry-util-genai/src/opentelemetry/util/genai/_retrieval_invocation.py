@@ -256,6 +256,16 @@ class RetrievalInvocation(GenAIInvocation):
             or not self._should_capture_content_on_span
         ):
             return {}
+        documents: list[AttributeValue] | None = None
+        if self._data.retrieval_documents is not None:
+            documents = []
+            for document in self._data.retrieval_documents:
+                if isinstance(document, RetrievalDocument):
+                    documents.append(document)
+                else:
+                    converted = object_to_any_value(document)
+                    if converted is not None:
+                        documents.append(converted)
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
             (
                 GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT,
@@ -263,9 +273,7 @@ class RetrievalInvocation(GenAIInvocation):
             ),
             (
                 GenAI.GEN_AI_RETRIEVAL_DOCUMENTS,
-                object_to_any_value(list(self._data.retrieval_documents))
-                if self._data.retrieval_documents is not None
-                else None,
+                documents,
             ),
         )
         return {k: v for k, v in optional_attrs if v is not None}
