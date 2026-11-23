@@ -620,9 +620,7 @@ def get_content_attributes(
         ),
         (
             GenAI.GEN_AI_TOOL_DEFINITIONS,
-            object_to_any_value(list(tool_definitions))
-            if tool_definitions
-            else None,
+            tool_definitions or None,
         ),
         (
             _GEN_AI_PROMPT_VARIABLES,

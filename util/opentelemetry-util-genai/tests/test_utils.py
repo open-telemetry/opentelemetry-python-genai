@@ -414,7 +414,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
-    def test_shared_messages_passed_directly_to_spans(self) -> None:
+    def test_shared_content_models_passed_directly_to_spans(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
@@ -443,6 +443,16 @@ class TestTelemetryHandler(unittest.TestCase):
                             _create_input_message("hello")
                         ]
                     invocation.output_messages = [_create_output_message("hi")]
+                    invocation.tool_definitions = [
+                        FunctionToolDefinition(
+                            name="tool",
+                            description=None,
+                            parameters={"type": "object"},
+                        ),
+                        GenericToolDefinition(
+                            name="builtin", type="web_search"
+                        ),
+                    ]
                     with (
                         patch(
                             "opentelemetry.util.genai._invocation.object_to_any_value",
@@ -465,6 +475,10 @@ class TestTelemetryHandler(unittest.TestCase):
                         recorded[GenAI.GEN_AI_OUTPUT_MESSAGES],
                         invocation.output_messages,
                     )
+                    self.assertIs(
+                        recorded[GenAI.GEN_AI_TOOL_DEFINITIONS],
+                        invocation.tool_definitions,
+                    )
                     attrs = _get_span_attributes(
                         _get_single_span(self.span_exporter)
                     )
@@ -473,6 +487,17 @@ class TestTelemetryHandler(unittest.TestCase):
                         "AI",
                         "hi",
                         "stop",
+                    )
+                    self.assertEqual(
+                        attrs[GenAI.GEN_AI_TOOL_DEFINITIONS],
+                        (
+                            {
+                                "name": "tool",
+                                "parameters": {"type": "object"},
+                                "type": "function",
+                            },
+                            {"name": "builtin", "type": "web_search"},
+                        ),
                     )
                     if name != "fetch_response":
                         self.assertIs(
