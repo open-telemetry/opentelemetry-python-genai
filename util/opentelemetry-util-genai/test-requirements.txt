@@ -1,1 +1,2 @@
 fsspec==2026.9.0
+pydantic>=2,<3

@@ -15,6 +15,8 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
+from pydantic import BaseModel
+
 from opentelemetry import trace
 from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.sdk._logs import LoggerProvider
@@ -1945,14 +1947,26 @@ class TestMessageModels(unittest.TestCase):
             count: int
             label: str | None = None
 
+        class PydanticPayload(BaseModel):
+            count: int
+            label: str | None = None
+
         payload_cases = [
             (Payload(count=0), {"count": 0, "label": None}),
+            (PydanticPayload(count=0), {"count": 0, "label": None}),
             ({"count": 0, "invalid": object()}, {"count": 0}),
             (object(), None),
             (None, None),
         ]
         for payload, converted in payload_cases:
             parts = [
+                (
+                    ToolCallRequestPart(
+                        arguments=payload, name="tool", id=None
+                    ),
+                    "arguments",
+                    {"name": "tool", "type": "tool_call"},
+                ),
                 (
                     ServerToolCallPart(
                         name="web_search", server_tool_call=payload
