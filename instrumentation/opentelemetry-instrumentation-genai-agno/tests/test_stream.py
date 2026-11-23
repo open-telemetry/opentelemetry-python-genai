@@ -16,6 +16,7 @@ from agno.team import Team
 from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
+from opentelemetry.instrumentation.genai.agno.utils import _run_metrics_cls
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -1314,7 +1315,7 @@ def test_agent_run_stream_records_usage_from_completed_event(
     """Test that stream usage includes cached prompt tokens (Anthropic)."""
     from dataclasses import dataclass
 
-    from agno.metrics import RunMetrics
+    RunMetrics = _run_metrics_cls()
 
     @dataclass
     class FakeCompletedChunk:
@@ -1357,7 +1358,7 @@ def test_agent_run_stream_does_not_double_count_openai_cached_tokens(
     """OpenAI stream usage already counts the cached part in input_tokens."""
     from dataclasses import dataclass
 
-    from agno.metrics import RunMetrics
+    RunMetrics = _run_metrics_cls()
 
     @dataclass
     class FakeCompletedChunk:

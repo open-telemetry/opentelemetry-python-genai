@@ -23,6 +23,7 @@ from opentelemetry.instrumentation.genai.agno.patch import (
     _fail_tool_invocation,
     _set_tool_invocation_output,
 )
+from opentelemetry.instrumentation.genai.agno.utils import _run_metrics_cls
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -36,6 +37,15 @@ from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai._conversation_context import (
     get_ambient_conversation_id,
 )
+
+
+def _patch_agent_run(return_value):
+    try:
+        import agno.agent._run  # noqa: F401
+
+        return patch("agno.agent._run.run_dispatch", return_value=return_value)
+    except (ImportError, AttributeError):
+        return patch.object(Agent, "_run", return_value=return_value)
 
 
 def test_agent_run_spans(
@@ -2491,7 +2501,8 @@ def test_agent_run_records_token_usage(
 ) -> None:
     """Test that Agent.run records usage from RunOutput.metrics."""
     from agno.agent import RunOutput
-    from agno.metrics import RunMetrics
+
+    RunMetrics = _run_metrics_cls()
 
     agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
     run_output = RunOutput(
@@ -2499,7 +2510,7 @@ def test_agent_run_records_token_usage(
         metrics=RunMetrics(input_tokens=12, output_tokens=3),
     )
 
-    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+    with _patch_agent_run(run_output):
         res = agent.run("hello world")
     assert res is run_output
 
@@ -2521,7 +2532,8 @@ def test_agent_run_input_tokens_include_cached_tokens(
 ) -> None:
     """Anthropic-shaped providers report cached tokens outside input_tokens."""
     from agno.agent import RunOutput
-    from agno.metrics import RunMetrics
+
+    RunMetrics = _run_metrics_cls()
 
     agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
     run_output = RunOutput(
@@ -2536,7 +2548,7 @@ def test_agent_run_input_tokens_include_cached_tokens(
         ),
     )
 
-    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+    with _patch_agent_run(run_output):
         agent.run("hello world")
 
     spans = span_exporter.get_finished_spans()
@@ -2556,7 +2568,8 @@ def test_agent_run_cached_tokens_are_not_double_counted(
 ) -> None:
     """OpenAI-shaped providers already count the cached part in input_tokens."""
     from agno.agent import RunOutput
-    from agno.metrics import RunMetrics
+
+    RunMetrics = _run_metrics_cls()
 
     agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
     run_output = RunOutput(
@@ -2570,7 +2583,7 @@ def test_agent_run_cached_tokens_are_not_double_counted(
         ),
     )
 
-    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+    with _patch_agent_run(run_output):
         agent.run("hello world")
 
     span = span_exporter.get_finished_spans()[0]
@@ -2585,7 +2598,8 @@ def test_agent_run_unknown_provider_does_not_sum_cached_tokens(
 ) -> None:
     """Without a provider to decide on, the raw input_tokens are reported."""
     from agno.agent import RunOutput
-    from agno.metrics import RunMetrics
+
+    RunMetrics = _run_metrics_cls()
 
     agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
     run_output = RunOutput(
@@ -2597,7 +2611,7 @@ def test_agent_run_unknown_provider_does_not_sum_cached_tokens(
         ),
     )
 
-    with patch("agno.agent._run.run_dispatch", return_value=run_output):
+    with _patch_agent_run(run_output):
         agent.run("hello world")
 
     span = span_exporter.get_finished_spans()[0]
@@ -2615,9 +2629,7 @@ def test_agent_run_without_metrics_records_no_usage(
 
     agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
 
-    with patch(
-        "agno.agent._run.run_dispatch", return_value=RunOutput(content="hi")
-    ):
+    with _patch_agent_run(RunOutput(content="hi")):
         agent.run("hello world")
 
     span = span_exporter.get_finished_spans()[0]

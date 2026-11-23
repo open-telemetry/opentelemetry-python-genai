@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterable
+from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -14,6 +15,28 @@ if TYPE_CHECKING:
     from agno.knowledge.embedder.base import Embedder
     from agno.metrics import RunMetrics
     from agno.workflow.types import WorkflowMetrics
+
+    def _run_metrics_cls() -> type[RunMetrics]:
+        """Return the agno class that carries token usage for a run."""
+        ...
+
+else:
+
+    @cache
+    def _run_metrics_cls() -> Any:
+        """Return the agno class that carries token usage for a run.
+
+        agno 3.0 moved ``agno.models.metrics.Metrics`` to
+        ``agno.metrics.RunMetrics``, so read the class from the module the
+        installed release ships. Deferred rather than imported at module scope
+        so this module stays importable before agno is installed.
+        """
+        try:
+            from agno.metrics import RunMetrics
+        except ImportError:  # agno < 3.0
+            from agno.models.metrics import Metrics as RunMetrics
+
+        return RunMetrics
 
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
@@ -104,12 +127,8 @@ def record_token_usage(
     ``WorkflowMetrics`` with no token fields, and workflow invocations carry no
     ``input_tokens``, so both are left alone.
     """
-    # Imported here rather than at module level: this module must stay
-    # importable before agno is installed, the same way the instrumentor does.
-    from agno.metrics import RunMetrics
-
     if not isinstance(invocation, LocalAgentInvocation) or not isinstance(
-        metrics, RunMetrics
+        metrics, _run_metrics_cls()
     ):
         return
     input_tokens = total_input_tokens(
