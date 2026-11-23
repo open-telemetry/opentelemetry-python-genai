@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-import json
+import os
 from typing import Any
 
 from google.genai import Client
@@ -19,6 +19,10 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 
+_INTERACTION_ID = (
+    "v1_ChQ0Qzd5YW9ZSjhZbkswd19GZ2Q5URIUNEM3eWFvWUo4WW5LMHdfRmdkOVE"
+)
+
 
 def _attr(span: dict[str, Any], name: str) -> Any:
     for attr in span["attributes"]:
@@ -27,9 +31,12 @@ def _attr(span: dict[str, Any], name: str) -> Any:
     return None
 
 
-def _part_types(messages_json: str | None) -> list[str]:
-    messages = json.loads(messages_json) if messages_json else []
-    return [part["type"] for message in messages for part in message["parts"]]
+def _part_types(messages: list[dict[str, Any]] | None) -> list[str]:
+    return [
+        part["type"]
+        for message in (messages or [])
+        for part in message["parts"]
+    ]
 
 
 class FetchResponseScenario(Scenario):
@@ -49,7 +56,7 @@ class FetchResponseScenario(Scenario):
         assert len(spans) == 1, "expected exactly one fetch_response span"
         span = spans[0]
 
-        assert _attr(span, "gen_ai.response.id") == "interaction-fetch-1"
+        assert _attr(span, "gen_ai.response.id") == _INTERACTION_ID
         assert _attr(span, "gen_ai.response.status") == "completed"
         assert _part_types(_attr(span, "gen_ai.output.messages")) == ["text"]
         # A fetch performs no inference: the fetched interaction's token counts
@@ -83,6 +90,9 @@ class FetchResponseScenario(Scenario):
                 "interactions_fetch_response_conformance.yaml"
             ):
                 client = Client(
-                    api_key="test_google_genai_api_key", vertexai=False
+                    api_key=os.getenv(
+                        "GOOGLE_API_KEY", "test_google_genai_api_key"
+                    ),
+                    vertexai=False,
                 )
-                client.interactions.get("interaction-fetch-1")
+                client.interactions.get(_INTERACTION_ID)

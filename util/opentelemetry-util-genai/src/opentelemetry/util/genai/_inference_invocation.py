@@ -146,7 +146,6 @@ class InferenceInvocation(GenAIInvocation):
     Use handler.inference(provider) rather than constructing this directly.
     """
 
-    _records_stream_telemetry = True
     _exception_event_name = "gen_ai.client.inference.exception"
 
     # Set once the invocation is handed to a stream wrapper.
@@ -596,6 +595,11 @@ class InferenceInvocation(GenAIInvocation):
 
     @property
     def prompt_variables(self) -> Mapping[str, object] | None:
+        """Variables passed to the prompt template.
+
+        Recorded as the structured ``gen_ai.prompt.variables`` attribute when
+        content capturing is enabled.
+        """
         return self.data.prompt_variable
 
     @prompt_variables.setter
