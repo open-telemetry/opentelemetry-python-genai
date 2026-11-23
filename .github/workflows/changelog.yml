@@ -14,6 +14,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_LOCKED: "true"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -97,4 +100,4 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Preview changelogs
-        run: uvx --with tox-uv tox -e changelog-preview
+        run: uv run --only-group towncrier python ./scripts/preview_changelogs.py
