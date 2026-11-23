@@ -93,6 +93,13 @@ def _sdk_call(
     )
 
 
+def _request_params(call: _SdkCall) -> dict[str, Any]:
+    """The request parameters, with a captured body replaced by its snapshot."""
+    if call.body_capture is None:
+        return call.params
+    return {**call.params, "body": call.body_capture.snapshot()}
+
+
 def _handle_converse(
     wrapped: Callable[..., Any],
     instance: BaseClient,
@@ -236,12 +243,7 @@ def _handle_invoke_model(
                     invocation,
                 )
             finally:
-                _extract_safely(
-                    extract_embedding_request,
-                    call.params,
-                    call.body_capture,
-                    invocation,
-                )
+                extract_embedding_request(_request_params(call), invocation)
         return response
 
     invocation = handler.inference(
@@ -257,10 +259,8 @@ def _handle_invoke_model(
         try:
             response = wrapped(*call.args, **call.kwargs)
         finally:
-            _extract_safely(
-                extract_invoke_model_request,
-                call.params,
-                call.body_capture,
+            extract_invoke_model_request(
+                _request_params(call),
                 invocation,
                 capture_content=capture_content,
             )
@@ -324,12 +324,7 @@ async def _handle_async_invoke_model(
             try:
                 response: Any = await wrapped(*call.args, **call.kwargs)
             finally:
-                _extract_safely(
-                    extract_embedding_request,
-                    call.params,
-                    call.body_capture,
-                    invocation,
-                )
+                extract_embedding_request(_request_params(call), invocation)
         body_stream = response.get("body")
         if body_stream is not None:
             if hasattr(body_stream, "read") and inspect.iscoroutinefunction(
@@ -372,10 +367,8 @@ async def _handle_async_invoke_model(
         try:
             response = await wrapped(*call.args, **call.kwargs)
         finally:
-            _extract_safely(
-                extract_invoke_model_request,
-                call.params,
-                call.body_capture,
+            extract_invoke_model_request(
+                _request_params(call),
                 invocation,
                 capture_content=capture_content,
             )
