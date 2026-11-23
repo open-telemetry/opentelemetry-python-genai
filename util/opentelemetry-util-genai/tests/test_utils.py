@@ -336,12 +336,19 @@ class TestTelemetryHandler(unittest.TestCase):
     )
     def test_system_instruction_generic_part_on_span(self):
         handler = TelemetryHandler(tracer_provider=self.tracer_provider)
-        with handler.inference("test-provider") as invocation:
+        with (
+            patch(
+                "opentelemetry.util.genai.utils.object_to_any_value",
+                wraps=object_to_any_value,
+            ) as convert,
+            handler.inference("test-provider") as invocation,
+        ):
             invocation.system_instruction = [
                 TextPart(content="You are helpful"),
                 GenericPart(type="custom"),
             ]
 
+        convert.assert_called_once_with(invocation.system_instruction[1])
         span = _get_single_span(self.span_exporter)
         span_attrs = _get_span_attributes(span)
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
@@ -443,6 +450,9 @@ class TestTelemetryHandler(unittest.TestCase):
                             _create_input_message("hello")
                         ]
                     invocation.output_messages = [_create_output_message("hi")]
+                    invocation.system_instruction = (
+                        _create_system_instruction()
+                    )
                     invocation.tool_definitions = [
                         FunctionToolDefinition(
                             name="tool",
@@ -479,6 +489,10 @@ class TestTelemetryHandler(unittest.TestCase):
                         recorded[GenAI.GEN_AI_TOOL_DEFINITIONS],
                         invocation.tool_definitions,
                     )
+                    self.assertIs(
+                        recorded[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS],
+                        invocation.system_instruction,
+                    )
                     attrs = _get_span_attributes(
                         _get_single_span(self.span_exporter)
                     )
@@ -497,6 +511,15 @@ class TestTelemetryHandler(unittest.TestCase):
                                 "type": "function",
                             },
                             {"name": "builtin", "type": "web_search"},
+                        ),
+                    )
+                    self.assertEqual(
+                        attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS],
+                        (
+                            {
+                                "content": "You are a helpful assistant.",
+                                "type": "text",
+                            },
                         ),
                     )
                     if name != "fetch_response":

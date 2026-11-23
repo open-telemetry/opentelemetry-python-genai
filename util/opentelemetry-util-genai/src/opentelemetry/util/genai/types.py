@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import Field, dataclass, fields
 from enum import Enum
 from typing import (
@@ -13,6 +13,7 @@ from typing import (
     Literal,
     TypeAlias,
     Union,
+    cast,
 )
 
 from opentelemetry.util.types import AnyValue
@@ -35,6 +36,28 @@ class ContentCapturingMode(Enum):
     EVENT_ONLY = 2
     # Capture content in both spans and events.
     SPAN_AND_EVENT = 3
+
+
+def _convert_generic_parts(
+    parts: Sequence[MessagePart],
+) -> Sequence[AnyValue]:
+    if not any(isinstance(part, GenericPart) for part in parts):
+        return cast(Sequence[AnyValue], parts)
+
+    from opentelemetry.util.genai.utils import (  # pylint: disable=import-outside-toplevel
+        object_to_any_value,
+    )
+
+    # Generic extensions can use Mapping method names as data fields.
+    converted_parts: list[AnyValue] = []
+    for part in parts:
+        if isinstance(part, GenericPart):
+            converted = object_to_any_value(part)
+            if converted is not None:
+                converted_parts.append(converted)
+        else:
+            converted_parts.append(part)
+    return converted_parts
 
 
 class _AnyValueMapping(Mapping[str, AnyValue]):
@@ -60,16 +83,7 @@ class _AnyValueMapping(Mapping[str, AnyValue]):
         if message_parts is None:
             return object_to_any_value(value)
 
-        # Generic extensions can use Mapping method names as data fields.
-        parts: list[AnyValue] = []
-        for part in message_parts:
-            if isinstance(part, GenericPart):
-                converted = object_to_any_value(part)
-                if converted is not None:
-                    parts.append(converted)
-            else:
-                parts.append(part)
-        return parts
+        return _convert_generic_parts(message_parts)
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._present_fields())
