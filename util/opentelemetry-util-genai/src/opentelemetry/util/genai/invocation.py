@@ -38,6 +38,7 @@ from opentelemetry.util.genai._inference_invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     ContextToken,
     Error,
     GenAIInvocation,
@@ -60,6 +61,7 @@ __all__ = [
     "CLIENT_INFERENCE_CONTEXT_KEY",
     "CLIENT_RETRIEVAL_CONTEXT_KEY",
     "AgentInvocation",
+    "ContextData",
     "ContextToken",
     "EmbeddingData",
     "EmbeddingInvocation",

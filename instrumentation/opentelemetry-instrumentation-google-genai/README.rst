@@ -90,6 +90,19 @@ This controls whether the following content is captured on spans and/or events:
 - System Instructions
 - The result of tool calls and the tool call parameters (other tool call details and tool definitions are always captured).
 
+Alternatively, content capture can be configured programmatically by passing a
+``ContentCapturingMode`` as ``content_capturing_mode`` to ``instrument()``.
+The supplied mode takes precedence over the environment variable. Omit it or
+pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import ContentCapturingMode
+
+    GoogleGenAiSdkInstrumentor().instrument(
+        content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
 
 Configuration recording
 ***********************

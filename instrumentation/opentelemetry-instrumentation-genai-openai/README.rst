@@ -114,6 +114,19 @@ are not captured by default. To capture message content, set the environment var
 - ``span_and_event`` - capture content on both *span* and *event* attributes.
 - ``no_content`` - do not capture content (the default).
 
+Alternatively, content capture can be configured programmatically by passing a
+``ContentCapturingMode`` as ``content_capturing_mode`` to ``instrument()``.
+The supplied mode takes precedence over the environment variable. Omit it or
+pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import ContentCapturingMode
+
+    OpenAIInstrumentor().instrument(
+        content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
 Uploading prompts and completions
 *********************************
 

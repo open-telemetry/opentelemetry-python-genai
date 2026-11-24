@@ -3,12 +3,22 @@
 
 """Unit tests configuration module."""
 
+import os
+
 import pytest
 
 pytest_plugins = [
     "opentelemetry.test_util_genai.fixtures",
     "opentelemetry.test_util_genai.vcr",
 ]
+
+
+@pytest.fixture(autouse=True)
+def environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    if not os.getenv("GOOGLE_GENAI_API_VERSION"):
+        # google-genai >= 3.0.0 defaults the Gemini Developer API to v1;
+        # VCR cassettes are recorded against v1beta (the < 3.0.0 default).
+        monkeypatch.setenv("GOOGLE_GENAI_API_VERSION", "beta")
 
 
 @pytest.fixture(scope="module")

@@ -109,6 +109,7 @@ class QwenPawInstrumentor(BaseInstrumentor):
         handler = TelemetryHandler(
             instrumentation_scope_name=__package__,
             instrumentation_scope_version=__version__,
+            content_capturing_mode=kwargs.get("content_capturing_mode"),
             tracer_provider=kwargs.get("tracer_provider"),
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),

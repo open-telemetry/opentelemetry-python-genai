@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import aiobotocore.session
@@ -145,16 +144,12 @@ def test_invoke_agent_sync_with_content(
     )
 
     # Content capture enabled
-    input_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    )
+    input_msgs = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["content"] == "Hi"
 
-    output_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
-    )
+    output_msgs = span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["parts"][0]["content"] == "Hello from agent!"
@@ -471,8 +466,8 @@ def test_invoke_inline_agent_sync_with_content(
     )
 
     # Content capture enabled
-    sys_instruction = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS)
+    sys_instruction = span.attributes.get(
+        GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
     )
     assert len(sys_instruction) == 1
     assert (
@@ -480,23 +475,17 @@ def test_invoke_inline_agent_sync_with_content(
         == "You are a helpful inline assistant for testing OpenTelemetry."
     )
     assert sys_instruction[0]["type"] == "text"
-    input_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    )
+    input_msgs = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["content"] == "Hi"
 
-    output_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
-    )
+    output_msgs = span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["parts"][0]["content"] == "Hello from inline agent!"
 
-    tools = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
-    )
+    tools = span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
     assert len(tools) == 2
     assert tools[0]["name"] == "CodeInterpreter"
     assert tools[0]["type"] == "AMAZON.CodeInterpreter"
@@ -694,7 +683,7 @@ def test_invoke_inline_agent_sync_caller_error_during_stream(
     assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
 
 
-def test_invoke_inline_agent_sync_nested_call_inherits_conversation_id(
+def test_invoke_inline_agent_sync_call_between_reads_is_not_nested(
     agent_client,
     instrument_with_content,
     span_exporter,
@@ -743,9 +732,9 @@ def test_invoke_inline_agent_sync_nested_call_inherits_conversation_id(
     assert nested_span.name == "chat"
     assert (
         nested_span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
-        == "session-inline-nested"
+        == "outer-session"
     )
-    assert nested_span.parent.span_id == agent_span.context.span_id
+    assert nested_span.parent.span_id == workflow_span.context.span_id
 
     assert agent_span.name == "invoke_agent"
     assert (
@@ -845,9 +834,7 @@ def test_retrieve_sync_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_QUERY_TEXT)
         == "What is OpenTelemetry?"
     )
-    docs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
-    )
+    docs = span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert len(docs) == 2
     assert docs[0]["id"] == "s3://my-bucket/doc1.txt"
     assert isinstance(docs[0]["score"], float)
@@ -912,9 +899,7 @@ def test_extract_retrieve_response_document_ids(
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
-    docs = json.loads(
-        spans[0].attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
-    )
+    docs = spans[0].attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert len(docs) == 2
     # documentId wins over the location locator.
     assert docs[0]["id"] == "doc-1"
@@ -1058,14 +1043,10 @@ async def test_async_invoke_agent_with_content(
         == "bedrock-agent-runtime.us-east-1.amazonaws.com"
     )
 
-    input_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    )
+    input_msgs = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
     assert input_msgs[0]["parts"][0]["content"] == "Hello async agent"
 
-    output_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
-    )
+    output_msgs = span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
     assert output_msgs[0]["parts"][0]["content"] == "Async agent response"
 
 
@@ -1386,8 +1367,8 @@ async def test_async_invoke_inline_agent_with_content(
     )
 
     # Content capture enabled
-    sys_instruction = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS)
+    sys_instruction = span.attributes.get(
+        GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
     )
     assert len(sys_instruction) == 1
     assert (
@@ -1395,16 +1376,12 @@ async def test_async_invoke_inline_agent_with_content(
         == "You are a helpful async inline assistant for testing OpenTelemetry."
     )
     assert sys_instruction[0]["type"] == "text"
-    input_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    )
+    input_msgs = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["content"] == "Hi async"
 
-    output_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
-    )
+    output_msgs = span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert (
@@ -1412,9 +1389,7 @@ async def test_async_invoke_inline_agent_with_content(
         == "Async hello from inline agent!"
     )
 
-    tools = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
-    )
+    tools = span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
     assert len(tools) == 2
     assert tools[0]["name"] == "CodeInterpreter"
     assert tools[0]["type"] == "AMAZON.CodeInterpreter"
@@ -1618,7 +1593,7 @@ async def test_async_invoke_inline_agent_caller_error_during_stream(
 
 
 @pytest.mark.asyncio
-async def test_async_invoke_inline_agent_nested_call_inherits_conversation_id(
+async def test_async_invoke_inline_agent_call_between_reads_is_not_nested(
     async_agent_client,
     instrument_with_content,
     span_exporter,
@@ -1669,9 +1644,9 @@ async def test_async_invoke_inline_agent_nested_call_inherits_conversation_id(
     assert nested_span.name == "chat"
     assert (
         nested_span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
-        == "async-session-inline-nested"
+        == "outer-async-session"
     )
-    assert nested_span.parent.span_id == agent_span.context.span_id
+    assert nested_span.parent.span_id == workflow_span.context.span_id
 
     assert agent_span.name == "invoke_agent"
     assert (
@@ -1749,9 +1724,7 @@ async def test_async_retrieve_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_QUERY_TEXT)
         == "Async retrieval query"
     )
-    docs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
-    )
+    docs = span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert len(docs) == 1
     assert docs[0]["id"] == "s3://my-bucket/async.txt"
     assert docs[0]["score"] == 0.98
@@ -1914,9 +1887,7 @@ def test_retrieve_and_generate_sync_with_content(
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
     ) == ("stop",)
 
-    input_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    )
+    input_msgs = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert (
@@ -1924,9 +1895,7 @@ def test_retrieve_and_generate_sync_with_content(
         == "What is the capital of France?"
     )
 
-    output_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
-    )
+    output_msgs = span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["parts"][0]["content"] == "Paris is the capital."
@@ -2248,9 +2217,7 @@ def test_retrieve_and_generate_stream_sync_with_content(
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
     ) == ("stop",)
 
-    output_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
-    )
+    output_msgs = span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["parts"][0]["content"] == "Hello RAG stream!"
@@ -2564,9 +2531,7 @@ async def test_async_retrieve_and_generate_stream_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
         == "async-stream-session-1"
     )
-    output_msgs = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
-    )
+    output_msgs = span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
     assert output_msgs[0]["parts"][0]["content"] == "Async streamed RAG!"
 
 

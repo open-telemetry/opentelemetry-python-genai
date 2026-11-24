@@ -1,0 +1,1 @@
+Omit unset optional fields from the files written by the upload completion hook, instead of writing `null`.

@@ -93,6 +93,19 @@ content, set the environment variable
 
     export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_AND_EVENT
 
+Alternatively, content capture can be configured programmatically by passing a
+``ContentCapturingMode`` as ``content_capturing_mode`` to ``instrument()``.
+The supplied mode takes precedence over the environment variable. Omit it or
+pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import ContentCapturingMode
+
+    QwenPawInstrumentor().instrument(
+        content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
 
 Uploading prompts and completions
 *********************************
