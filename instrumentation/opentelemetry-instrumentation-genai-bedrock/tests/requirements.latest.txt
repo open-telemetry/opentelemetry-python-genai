@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Exercise the latest supported Amazon Bedrock (boto3) release with workspace instrumentation.
-boto3 ~=1.43
+boto3 ~=1.44
 
 # Test-only: provides the async client the async tests drive. Deliberately not in the
 # `instruments` extra (see pyproject.toml) because it pins botocore patch versions.
