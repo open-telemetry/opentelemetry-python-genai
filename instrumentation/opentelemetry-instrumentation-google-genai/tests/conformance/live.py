@@ -27,9 +27,6 @@ from opentelemetry.test_util_genai.conformance import (
     Scenario,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH,
-)
 
 
 class _ConformanceWebSocket:
@@ -115,10 +112,7 @@ class LiveScenario(Scenario):
         "user_speech": 1,
         "realtime_inference": 1,
     }
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
-    )
+    expected_metrics = ()
     expected_violations = (
         ExpectedViolation(
             advice_id="genai_operation_name_unknown",
@@ -223,9 +217,6 @@ class LiveScenario(Scenario):
                 logger_provider=logger_provider,
                 meter_provider=meter_provider,
                 content_capture="SPAN_AND_EVENT",
-                extra_env={
-                    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"
-                },
             ):
                 asyncio.run(_drive())
 
@@ -288,10 +279,7 @@ class LiveMultimodalAndToolsScenario(Scenario):
     expected_spans = {
         "realtime_inference": 3,
     }
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
-    )
+    expected_metrics = ()
     expected_violations = _COMMON_LIVE_VIOLATIONS
 
     def run(
@@ -523,10 +511,7 @@ class LiveNoContentScenario(Scenario):
     expected_spans = {
         "realtime_inference": 1,
     }
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
-    )
+    expected_metrics = ()
     expected_violations = _COMMON_LIVE_VIOLATIONS
 
     def run(

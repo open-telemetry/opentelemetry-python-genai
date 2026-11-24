@@ -20,7 +20,6 @@ from google.genai import types as genai_types
 from google.genai.live import AsyncLive
 
 from opentelemetry._logs import SeverityNumber
-from opentelemetry.context import get_value
 from opentelemetry.instrumentation.google_genai import (
     GoogleGenAiSdkInstrumentor,
 )
@@ -41,13 +40,8 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import SpanKind, StatusCode, get_current_span
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import (
-    CLIENT_INFERENCE_CONTEXT_KEY,
-    InferenceData,
-)
 
 
 class _FakeAsyncSession:
@@ -156,7 +150,6 @@ async def test_live_voice_turn_spans_events_and_metrics(
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
-    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     messages: list[genai_types.LiveServerMessage | BaseException] = [
         *_server_vad_messages(),
         genai_types.LiveServerMessage(
@@ -349,22 +342,15 @@ async def test_live_voice_turn_spans_events_and_metrics(
     assert ended_log.body is None
     assert ended_log.attributes["gen_ai.realtime_session.id"] == "sess-voice-1"
 
-    # Verify metrics (including per-modality token usage)
+    # Realtime semconv defines no client metrics on realtime_inference or user_speech.
     metrics_data = metric_reader.get_metrics_data()
-    metric_names = {}
-    for rm in metrics_data.resource_metrics:
-        for sm in rm.scope_metrics:
-            for m in sm.metrics:
-                metric_names[m.name] = m
-
-    assert "gen_ai.client.operation.duration" in metric_names
-    assert "gen_ai.client.token.usage" in metric_names
-    token_dp = list(metric_names["gen_ai.client.token.usage"].data.data_points)
-    assert len(token_dp) == 2
-    token_totals = {
-        dp.attributes.get(GenAI.GEN_AI_TOKEN_TYPE): dp.sum for dp in token_dp
-    }
-    assert token_totals == {"input": 38, "output": 41}
+    metric_names: set[str] = set()
+    if metrics_data is not None:
+        for rm in metrics_data.resource_metrics:
+            for sm in rm.scope_metrics:
+                for m in sm.metrics:
+                    metric_names.add(m.name)
+    assert metric_names == set()
 
 
 @pytest.mark.asyncio
@@ -666,7 +652,6 @@ async def test_live_user_speech_and_interrupted_and_session_error(
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
-    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     messages: list[genai_types.LiveServerMessage | BaseException] = [
         genai_types.LiveServerMessage(
             server_content=genai_types.LiveServerContent(
@@ -753,7 +738,6 @@ async def test_live_interleaved_events_speech_across_generations_and_error_spans
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
-    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     messages: list[genai_types.LiveServerMessage | BaseException] = [
         genai_types.LiveServerMessage(
             server_content=genai_types.LiveServerContent(
@@ -933,7 +917,6 @@ async def test_live_public_client_transport_replay_zero_settings_and_client_cont
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
-    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     server_frames: list[dict[str, Any] | BaseException] = [
         {"setupComplete": {}},
         {
@@ -1079,7 +1062,6 @@ async def test_live_no_content_capture_skips_payload_buffering_and_session_http_
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "NO_CONTENT"
     )
-    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     messages: list[genai_types.LiveServerMessage | BaseException] = [
         *_server_vad_messages(),
         genai_types.LiveServerMessage(
@@ -1386,15 +1368,12 @@ async def test_live_generation_complete_before_turn_complete_preserves_end_times
             async with live.connect(
                 model="gemini-2.5-flash-native-audio-preview-12-2025",
             ) as session:
-                start_mono = time.monotonic()
                 await session._receive()
                 await session._receive()
                 after_gen_complete_ns = time.time_ns()
-                after_gen_complete_mono = time.monotonic()
                 # Delay between generation_complete and turn_complete must not inflate duration
                 await asyncio.sleep(0.06)
                 before_turn_complete_ns = time.time_ns()
-                before_turn_complete_mono = time.monotonic()
                 await session._receive()
 
     (span,) = span_exporter.get_finished_spans()
@@ -1404,18 +1383,14 @@ async def test_live_generation_complete_before_turn_complete_preserves_end_times
     assert span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 15
     assert span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
 
+    # Realtime semconv defines no client duration metric.
     metrics_data = metric_reader.get_metrics_data()
-    duration_dp = [
-        dp
+    assert metrics_data is None or not any(
+        m.name == "gen_ai.client.operation.duration"
         for rm in metrics_data.resource_metrics
         for sm in rm.scope_metrics
         for m in sm.metrics
-        if m.name == "gen_ai.client.operation.duration"
-        for dp in m.data.data_points
-    ]
-    assert len(duration_dp) == 1
-    assert duration_dp[0].sum <= (after_gen_complete_mono - start_mono) + 0.005
-    assert duration_dp[0].sum < (before_turn_complete_mono - start_mono)
+    )
 
 
 @pytest.mark.asyncio
@@ -1458,16 +1433,12 @@ async def test_live_session_closed_before_generation_completes_fails_span(
     assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("error",)
 
     metrics_data = metric_reader.get_metrics_data()
-    duration_dp = [
-        dp
+    assert metrics_data is None or not any(
+        m.name == "gen_ai.client.operation.duration"
         for rm in metrics_data.resource_metrics
         for sm in rm.scope_metrics
         for m in sm.metrics
-        if m.name == "gen_ai.client.operation.duration"
-        for dp in m.data.data_points
-    ]
-    assert len(duration_dp) == 1
-    assert duration_dp[0].attributes[ErrorAttributes.ERROR_TYPE] == "_OTHER"
+    )
 
 
 @pytest.mark.asyncio
@@ -1953,7 +1924,6 @@ async def test_live_transactional_sends_failed_requests_retries_and_session_send
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
-    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
     fake_ws = _FakeWebSocket(
         [
             {"setupComplete": {}},
@@ -2711,7 +2681,7 @@ async def test_live_camelcase_dict_config_aliases(
 
 
 @pytest.mark.asyncio
-async def test_live_nested_event_only_capture_policy(
+async def test_live_independent_of_outer_inference_context(
     span_exporter,
     log_exporter,
     tracer_provider,
@@ -2724,48 +2694,31 @@ async def test_live_nested_event_only_capture_policy(
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "EVENT_ONLY"
     )
-
-    def lookup_info(topic: str) -> str:
-        """Lookup info."""
-        return topic
-
-    def _make_ws() -> _FakeWebSocket:
-        return _FakeWebSocket(
-            [
-                {"setupComplete": {}},
-                {
-                    "serverContent": {
-                        "modelTurn": {
-                            "role": "model",
-                            "parts": [{"text": "First frame reply"}],
-                        },
-                        "turnComplete": True,
+    fake_ws = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "First frame reply"}],
                     },
-                    "usageMetadata": {
-                        "promptTokenCount": 9,
-                        "responseTokenCount": 4,
-                    },
+                    "turnComplete": True,
                 },
-            ]
-        )
-
-    sockets = [_make_ws(), _make_ws()]
-
-    @contextlib.asynccontextmanager
-    async def _multi_ws_connect(
-        uri: str,  # pylint: disable=unused-argument
-        additional_headers: Any = None,  # pylint: disable=unused-argument
-        **kwargs: Any,  # pylint: disable=unused-argument
-    ) -> AsyncIterator[_FakeWebSocket]:
-        yield sockets.pop(0)
-
+                "usageMetadata": {
+                    "promptTokenCount": 9,
+                    "responseTokenCount": 4,
+                },
+            },
+        ]
+    )
     outer_handler = TelemetryHandler(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
     )
 
-    with patch("google.genai.live.ws_connect", _multi_ws_connect):
+    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)):
         with instrument(
             GoogleGenAiSdkInstrumentor(),
             tracer_provider=tracer_provider,
@@ -2773,23 +2726,12 @@ async def test_live_nested_event_only_capture_policy(
             meter_provider=meter_provider,
         ):
             client = genai.Client(api_key="test-key", vertexai=False)
-            config = genai_types.LiveConnectConfig(
-                response_modalities=[genai_types.Modality.TEXT],
-                system_instruction="Nested system prompt",
-                tools=[lookup_info],
-            )
-
-            # Case 1: outer inference opts into content capture under EVENT_ONLY.
             with outer_handler.inference(
                 GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
                 request_model="outer-model",
             ):
-                ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
-                assert isinstance(ctx_data, InferenceData)
-                ctx_data.capture_content = True
                 async with client.aio.live.connect(
                     model="gemini-2.5-flash-native-audio-preview-12-2025",
-                    config=config,
                 ) as session:
                     await session.send_client_content(
                         turns=genai_types.Content(
@@ -2801,32 +2743,14 @@ async def test_live_nested_event_only_capture_policy(
                     async for _ in session.receive():
                         pass
 
-            # Case 2: outer inference leaves capture_content=False under EVENT_ONLY.
-            with outer_handler.inference(
-                GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                request_model="outer-model-disabled",
-            ):
-                async with client.aio.live.connect(
-                    model="gemini-2.5-flash-native-audio-preview-12-2025",
-                    config=config,
-                ) as session:
-                    await session.send_client_content(
-                        turns=genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part(text="Suppressed prompt")],
-                        ),
-                        turn_complete=True,
-                    )
-                    async for _ in session.receive():
-                        pass
-
-    # Both inner realtime_inference spans are suppressed by outer inference spans.
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 2
-    assert all(
-        s.attributes[GenAI.GEN_AI_OPERATION_NAME] != "realtime_inference"
-        for s in spans
-    )
+    ops = [s.attributes[GenAI.GEN_AI_OPERATION_NAME] for s in spans]
+    assert ops == ["realtime_inference", "chat"]
+    rt_span = spans[0]
+    assert rt_span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 9
+    assert rt_span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 4
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in rt_span.attributes
+    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in rt_span.attributes
 
     detail_events = [
         log.log_record
@@ -2834,34 +2758,7 @@ async def test_live_nested_event_only_capture_policy(
         if log.log_record.event_name
         == "gen_ai.client.inference.operation.details"
     ]
-    assert len(detail_events) == 2
-
-    enabled_attrs = dict(detail_events[0].attributes)
-    assert enabled_attrs[GenAI.GEN_AI_INPUT_MESSAGES] == (
-        {
-            "role": "user",
-            "parts": ({"type": "text", "content": "Nested prompt"},),
-        },
-    )
-    assert enabled_attrs[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
-        {
-            "role": "assistant",
-            "parts": ({"type": "text", "content": "First frame reply"},),
-            "finish_reason": "stop",
-        },
-    )
-    assert enabled_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
-        {"type": "text", "content": "Nested system prompt"},
-    )
-    assert [
-        t["name"] for t in enabled_attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]
-    ] == ["lookup_info"]
-
-    disabled_attrs = dict(detail_events[1].attributes)
-    assert GenAI.GEN_AI_INPUT_MESSAGES not in disabled_attrs
-    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in disabled_attrs
-    assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in disabled_attrs
-    assert GenAI.GEN_AI_TOOL_DEFINITIONS not in disabled_attrs
+    assert len(detail_events) == 1
 
 
 @pytest.mark.asyncio
@@ -3041,7 +2938,6 @@ async def test_live_setup_handshake_failure_and_receive_cancellation(
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
-            extra_env={OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"},
         ):
             client = genai.Client(api_key="test-key", vertexai=False)
             with tracer.start_as_current_span("caller-cancel") as caller_span:
@@ -3183,19 +3079,12 @@ async def test_live_vertex_output_tokens_include_thoughts(
     assert attrs["gen_ai.usage.reasoning.output_tokens"] == 4
 
     metrics_data = metric_reader.get_metrics_data()
-    token_dps = [
-        dp
+    assert metrics_data is None or not any(
+        m.name == "gen_ai.client.token.usage"
         for rm in metrics_data.resource_metrics
         for sm in rm.scope_metrics
         for m in sm.metrics
-        if m.name == "gen_ai.client.token.usage"
-        for dp in m.data.data_points
-    ]
-    by_token_type = {
-        dp.attributes[GenAI.GEN_AI_TOKEN_TYPE]: dp.sum for dp in token_dps
-    }
-    assert by_token_type[GenAI.GenAiTokenTypeValues.INPUT.value] == 10
-    assert by_token_type[GenAI.GenAiTokenTypeValues.OUTPUT.value] == 22
+    )
 
 
 @pytest.mark.asyncio
@@ -3431,7 +3320,7 @@ async def test_live_prewrite_suspended_send_failure_not_committed_on_inbound_fra
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["NO_CONTENT", "EVENT_ONLY"])
-async def test_live_completion_hook_capture_and_nested_upload_disabled(
+async def test_live_completion_hook_capture_and_independent_of_outer_inference(
     mode: str,
     span_exporter,
     log_exporter,
@@ -3606,9 +3495,9 @@ async def test_live_completion_hook_capture_and_nested_upload_disabled(
         ):
             assert content_attr not in log_record.attributes
 
-    # Case 2: Enclosing outer inference with uploads disabled (default
-    # upload_completion=False, capture_content=False) must NOT invoke the hook
-    # or capture content into the outer inference telemetry.
+    # Case 2: Realtime inference is independent of an enclosing outer
+    # TelemetryHandler.inference(), so it still emits its own span and invokes
+    # its completion hook without leaking content onto spans or lifecycle logs.
     span_exporter.clear()
     log_exporter.clear()
     nested_hook = _RecordingHook()
@@ -3630,7 +3519,7 @@ async def test_live_completion_hook_capture_and_nested_upload_disabled(
             client = genai.Client(api_key="test-key", vertexai=False)
             config = genai_types.LiveConnectConfig(
                 response_modalities=[genai_types.Modality.AUDIO],
-                system_instruction="Suppressed hook prompt",
+                system_instruction="Nested hook prompt",
                 tools=[hook_tool],
             )
             with outer_handler.inference(
@@ -3651,20 +3540,24 @@ async def test_live_completion_hook_capture_and_nested_upload_disabled(
                     async for _ in session.receive():
                         pass
 
-    assert nested_hook.calls == []
+    assert len(nested_hook.calls) == 1
+    assert nested_hook.calls[0]["system_instruction"] == [
+        TextPart(content="Nested hook prompt")
+    ]
     nested_spans = span_exporter.get_finished_spans()
-    assert len(nested_spans) == 1
-    assert (
-        nested_spans[0].attributes[GenAI.GEN_AI_OPERATION_NAME]
-        != "realtime_inference"
+    assert len(nested_spans) == 2
+    assert any(
+        s.attributes.get(GenAI.GEN_AI_OPERATION_NAME) == "realtime_inference"
+        for s in nested_spans
     )
-    for content_attr in (
-        GenAI.GEN_AI_INPUT_MESSAGES,
-        GenAI.GEN_AI_OUTPUT_MESSAGES,
-        GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
-        GenAI.GEN_AI_TOOL_DEFINITIONS,
-    ):
-        assert content_attr not in nested_spans[0].attributes
+    for nested_span in nested_spans:
+        for content_attr in (
+            GenAI.GEN_AI_INPUT_MESSAGES,
+            GenAI.GEN_AI_OUTPUT_MESSAGES,
+            GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
+            GenAI.GEN_AI_TOOL_DEFINITIONS,
+        ):
+            assert content_attr not in nested_span.attributes
     for log in log_exporter.get_finished_logs():
         for content_attr in (
             GenAI.GEN_AI_INPUT_MESSAGES,
@@ -3676,50 +3569,32 @@ async def test_live_completion_hook_capture_and_nested_upload_disabled(
 
 
 @pytest.mark.asyncio
-async def test_live_user_speech_disabled_by_default_and_opt_in(
+async def test_live_user_speech_emitted_only_with_explicit_speech_boundaries(
     span_exporter,
     tracer_provider,
     logger_provider,
     meter_provider,
-    monkeypatch,
 ):
     from google import genai
 
-    monkeypatch.delenv(
-        OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, raising=False
+    # Without explicit client activity_start/activity_end or server VAD
+    # signals, only realtime_inference is emitted (no user_speech span).
+    ws_no_vad = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Audio reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
     )
-
-    def _make_vad_ws() -> _FakeWebSocket:
-        return _FakeWebSocket(
-            [
-                {"setupComplete": {}},
-                {
-                    "voiceActivityDetectionSignal": {
-                        "vadSignalType": "VAD_SIGNAL_TYPE_SOS"
-                    }
-                },
-                {
-                    "voiceActivityDetectionSignal": {
-                        "vadSignalType": "VAD_SIGNAL_TYPE_EOS"
-                    }
-                },
-                {
-                    "serverContent": {
-                        "modelTurn": {
-                            "role": "model",
-                            "parts": [{"text": "Speech reply"}],
-                        },
-                        "turnComplete": True,
-                    }
-                },
-            ]
-        )
-
-    # Default configuration: neither client activity_start/activity_end nor
-    # server VAD emits user_speech spans; realtime_inference still records
-    # the flushed audio input.
     with patch(
-        "google.genai.live.ws_connect", _make_fake_ws_connect(_make_vad_ws())
+        "google.genai.live.ws_connect", _make_fake_ws_connect(ws_no_vad)
     ):
         with instrument(
             GoogleGenAiSdkInstrumentor(),
@@ -3733,25 +3608,20 @@ async def test_live_user_speech_disabled_by_default_and_opt_in(
                 model="gemini-2.5-flash-native-audio-preview-12-2025",
             ) as session:
                 await session.send_realtime_input(
-                    activity_start=genai_types.ActivityStart()
-                )
-                await session.send_realtime_input(
                     audio=genai_types.Blob(
                         data=b"\x01\x02\x03\x04",
                         mime_type="audio/pcm;rate=16000",
                     )
                 )
-                await session.send_realtime_input(
-                    activity_end=genai_types.ActivityEnd()
-                )
+                await session.send_realtime_input(audio_stream_end=True)
                 async for _ in session.receive():
                     pass
 
-    default_spans = span_exporter.get_finished_spans()
+    no_vad_spans = span_exporter.get_finished_spans()
     assert [
-        s.attributes[GenAI.GEN_AI_OPERATION_NAME] for s in default_spans
+        s.attributes[GenAI.GEN_AI_OPERATION_NAME] for s in no_vad_spans
     ] == ["realtime_inference"]
-    assert default_spans[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+    assert no_vad_spans[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
         {
             "role": "user",
             "parts": (
@@ -3765,11 +3635,35 @@ async def test_live_user_speech_disabled_by_default_and_opt_in(
         },
     )
 
-    # Opt-in enabled via OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH=true:
-    # user_speech spans are emitted for speech boundaries.
+    # With explicit client activity_start/activity_end or server VAD signals,
+    # user_speech spans are emitted without any opt-in environment variable.
     span_exporter.clear()
+    ws_with_vad = _FakeWebSocket(
+        [
+            {"setupComplete": {}},
+            {
+                "voiceActivityDetectionSignal": {
+                    "vadSignalType": "VAD_SIGNAL_TYPE_SOS"
+                }
+            },
+            {
+                "voiceActivityDetectionSignal": {
+                    "vadSignalType": "VAD_SIGNAL_TYPE_EOS"
+                }
+            },
+            {
+                "serverContent": {
+                    "modelTurn": {
+                        "role": "model",
+                        "parts": [{"text": "Speech reply"}],
+                    },
+                    "turnComplete": True,
+                }
+            },
+        ]
+    )
     with patch(
-        "google.genai.live.ws_connect", _make_fake_ws_connect(_make_vad_ws())
+        "google.genai.live.ws_connect", _make_fake_ws_connect(ws_with_vad)
     ):
         with instrument(
             GoogleGenAiSdkInstrumentor(),
@@ -3777,7 +3671,6 @@ async def test_live_user_speech_disabled_by_default_and_opt_in(
             logger_provider=logger_provider,
             meter_provider=meter_provider,
             content_capture="SPAN_AND_EVENT",
-            extra_env={OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"},
         ):
             client = genai.Client(api_key="test-key", vertexai=False)
             async with client.aio.live.connect(
@@ -3798,12 +3691,12 @@ async def test_live_user_speech_disabled_by_default_and_opt_in(
                 async for _ in session.receive():
                     pass
 
-    optin_ops = [
+    vad_ops = [
         s.attributes[GenAI.GEN_AI_OPERATION_NAME]
         for s in span_exporter.get_finished_spans()
     ]
-    assert "user_speech" in optin_ops
-    assert optin_ops[-1] == "realtime_inference"
+    assert "user_speech" in vad_ops
+    assert vad_ops[-1] == "realtime_inference"
 
 
 @pytest.mark.asyncio
@@ -4558,7 +4451,12 @@ async def test_live_continuous_audio_streaming_preserves_current_turn_transcript
                 await session._receive()
                 await session._receive()
 
-    spans = span_exporter.get_finished_spans()
+    spans = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(GenAI.GEN_AI_OPERATION_NAME)
+        == "realtime_inference"
+    ]
     assert len(spans) == 2
     span1, span2 = spans[0], spans[1]
 
@@ -5067,7 +4965,6 @@ async def test_live_explicit_session_close_finalizes_once_including_close_errors
             logger_provider=logger_provider,
             meter_provider=meter_provider,
             content_capture="SPAN_AND_EVENT",
-            extra_env={OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"},
         ):
             client = genai.Client(api_key="test-key", vertexai=False)
             async with client.aio.live.connect(
@@ -5155,7 +5052,6 @@ async def test_live_explicit_session_close_finalizes_once_including_close_errors
             logger_provider=logger_provider,
             meter_provider=meter_provider,
             content_capture="SPAN_AND_EVENT",
-            extra_env={OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"},
         ):
             client = genai.Client(api_key="test-key", vertexai=False)
             async with client.aio.live.connect(
@@ -5533,8 +5429,20 @@ async def test_live_budget_eviction_preserves_sealed_turn_boundaries_for_buffere
                 async for _ in session.receive():
                     pass
 
-    spans = span_exporter.get_finished_spans()
+    all_spans = span_exporter.get_finished_spans()
+    spans = [
+        span
+        for span in all_spans
+        if span.attributes.get(GenAI.GEN_AI_OPERATION_NAME)
+        == "realtime_inference"
+    ]
+    user_speech_spans = [
+        span
+        for span in all_spans
+        if span.attributes.get(GenAI.GEN_AI_OPERATION_NAME) == "user_speech"
+    ]
     assert len(spans) == 2
+    assert len(user_speech_spans) == (2 if use_manual_vad else 0)
     span1, span2 = spans[0], spans[1]
     assert GenAI.GEN_AI_INPUT_MESSAGES not in span1.attributes
     assert span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
@@ -6513,9 +6421,6 @@ async def test_live_close_during_outstanding_receive_ignores_late_buffered_frame
                 logger_provider=logger_provider,
                 meter_provider=meter_provider,
                 content_capture="SPAN_AND_EVENT",
-                extra_env={
-                    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH: "true"
-                },
             ):
                 client = genai.Client(api_key="test-key", vertexai=False)
                 async with client.aio.live.connect(
@@ -7644,8 +7549,20 @@ async def test_live_two_queued_audio_turns_preserve_distinct_transcripts_in_orde
                 async for _ in session.receive():
                     pass
 
-    spans_b = span_exporter.get_finished_spans()
+    all_spans_b = span_exporter.get_finished_spans()
+    spans_b = [
+        span
+        for span in all_spans_b
+        if span.attributes.get(GenAI.GEN_AI_OPERATION_NAME)
+        == "realtime_inference"
+    ]
+    user_speech_spans_b = [
+        span
+        for span in all_spans_b
+        if span.attributes.get(GenAI.GEN_AI_OPERATION_NAME) == "user_speech"
+    ]
     assert len(spans_b) == 2
+    assert len(user_speech_spans_b) == 2
     assert spans_b[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
         {
             "role": "user",
@@ -7929,312 +7846,6 @@ async def test_live_gemini_2_mixed_tool_batch_send_reconciles_prior_buffered_and
             "parts": ({"type": "text", "content": "After staged merge"},),
         },
     )
-
-
-@pytest.mark.asyncio
-async def test_live_overlapping_turns_preserve_per_context_capture_policy_and_transcription_ownership(
-    log_exporter,
-    tracer_provider,
-    logger_provider,
-    meter_provider,
-):
-    from google import genai
-
-    # Part A: Active Turn 1 disables capture under EVENT_ONLY while overlapping
-    # Turn 2 enables capture in a different context. Turn 2 must keep its
-    # queued audio + barge-in input transcription without clearing active_gen.
-    ws_a = _FakeWebSocket(
-        [
-            {"setupComplete": {}},
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Partial suppressed reply"}],
-                    },
-                    "turnComplete": False,
-                }
-            },
-            {
-                "serverContent": {
-                    "inputTranscription": {"text": "Turn 1 ignored"},
-                }
-            },
-            {
-                "serverContent": {
-                    "inputTranscription": {"text": "Turn 2 captured"},
-                }
-            },
-            {
-                "serverContent": {
-                    "interrupted": True,
-                    "turnComplete": True,
-                }
-            },
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Captured reply 2"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-        ]
-    )
-
-    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_a)):
-        with instrument(
-            GoogleGenAiSdkInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="EVENT_ONLY",
-        ):
-            outer_handler = TelemetryHandler(
-                tracer_provider=tracer_provider,
-                logger_provider=logger_provider,
-                meter_provider=meter_provider,
-            )
-            client = genai.Client(api_key="test-key", vertexai=False)
-            async with client.aio.live.connect(
-                model="gemini-2.5-flash-native-audio-preview-12-2025",
-            ) as session:
-                gen1_active = asyncio.Event()
-                turn2_sent = asyncio.Event()
-                gen1_done = asyncio.Event()
-
-                async def _turn1_disabled() -> None:
-                    with outer_handler.inference(
-                        GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                        request_model="outer-disabled",
-                    ):
-                        await session.send_client_content(
-                            turns=genai_types.Content(
-                                role="user",
-                                parts=[
-                                    genai_types.Part(text="Suppressed turn 1")
-                                ],
-                            ),
-                            turn_complete=True,
-                        )
-                        await session._receive()
-                        await session._receive()
-                        gen1_active.set()
-                        await asyncio.wait_for(turn2_sent.wait(), timeout=5.0)
-                        await session._receive()
-                        await session._receive()
-                    gen1_done.set()
-
-                async def _turn2_enabled() -> None:
-                    await asyncio.wait_for(gen1_active.wait(), timeout=5.0)
-                    with outer_handler.inference(
-                        GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                        request_model="outer-enabled",
-                    ):
-                        ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
-                        assert isinstance(ctx_data, InferenceData)
-                        ctx_data.capture_content = True
-                        await session.send_realtime_input(
-                            audio=genai_types.Blob(
-                                data=b"2222",
-                                mime_type="audio/pcm;rate=16000",
-                            )
-                        )
-                        await session.send_realtime_input(
-                            audio_stream_end=True
-                        )
-                        turn2_sent.set()
-                        await asyncio.wait_for(gen1_done.wait(), timeout=5.0)
-                        async for _ in session.receive():
-                            pass
-
-                await asyncio.gather(_turn1_disabled(), _turn2_enabled())
-
-    detail_events_a = [
-        log.log_record
-        for log in log_exporter.get_finished_logs()
-        if log.log_record.event_name
-        == "gen_ai.client.inference.operation.details"
-    ]
-    assert len(detail_events_a) == 2
-    disabled_attrs_a = dict(detail_events_a[0].attributes)
-    assert GenAI.GEN_AI_INPUT_MESSAGES not in disabled_attrs_a
-    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in disabled_attrs_a
-
-    enabled_attrs_a = dict(detail_events_a[1].attributes)
-    assert enabled_attrs_a[GenAI.GEN_AI_INPUT_MESSAGES] == (
-        {
-            "role": "user",
-            "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"2222",
-                },
-                {"type": "transcription", "content": "Turn 2 captured"},
-            ),
-        },
-    )
-    assert enabled_attrs_a[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
-        {
-            "role": "assistant",
-            "parts": ({"type": "text", "content": "Captured reply 2"},),
-            "finish_reason": "stop",
-        },
-    )
-
-    # Part B: Reverse direction — Active Turn 1 enables capture while
-    # overlapping Turn 2 disables capture. Turn 1 retains its pre-barge-in
-    # transcription, stops accepting after Turn 2's send, and Turn 2 does not
-    # capture its input from Turn 1's policy.
-    log_exporter.clear()
-    ws_b = _FakeWebSocket(
-        [
-            {"setupComplete": {}},
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Captured reply 1"}],
-                    },
-                    "turnComplete": False,
-                }
-            },
-            {
-                "serverContent": {
-                    "inputTranscription": {"text": "Turn 1 late transcript"},
-                }
-            },
-            {
-                "serverContent": {
-                    "inputTranscription": {
-                        "text": "Turn 2 barge-in transcript"
-                    },
-                }
-            },
-            {
-                "serverContent": {
-                    "interrupted": True,
-                    "turnComplete": True,
-                }
-            },
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Reply 2"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-        ]
-    )
-
-    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_b)):
-        with instrument(
-            GoogleGenAiSdkInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="EVENT_ONLY",
-        ):
-            outer_handler = TelemetryHandler(
-                tracer_provider=tracer_provider,
-                logger_provider=logger_provider,
-                meter_provider=meter_provider,
-            )
-            client = genai.Client(api_key="test-key", vertexai=False)
-            async with client.aio.live.connect(
-                model="gemini-2.5-flash-native-audio-preview-12-2025",
-            ) as session:
-                gen1_active = asyncio.Event()
-                turn2_sent = asyncio.Event()
-                gen1_done = asyncio.Event()
-
-                async def _turn1_enabled() -> None:
-                    with outer_handler.inference(
-                        GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                        request_model="outer-enabled",
-                    ):
-                        ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
-                        assert isinstance(ctx_data, InferenceData)
-                        ctx_data.capture_content = True
-                        await session.send_realtime_input(
-                            audio=genai_types.Blob(
-                                data=b"1111",
-                                mime_type="audio/pcm;rate=16000",
-                            )
-                        )
-                        await session.send_realtime_input(
-                            audio_stream_end=True
-                        )
-                        await session._receive()
-                        await session._receive()
-                        gen1_active.set()
-                        await asyncio.wait_for(turn2_sent.wait(), timeout=5.0)
-                        await session._receive()
-                        await session._receive()
-                    gen1_done.set()
-
-                async def _turn2_disabled() -> None:
-                    await asyncio.wait_for(gen1_active.wait(), timeout=5.0)
-                    with outer_handler.inference(
-                        GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                        request_model="outer-disabled",
-                    ):
-                        await session.send_client_content(
-                            turns=genai_types.Content(
-                                role="user",
-                                parts=[
-                                    genai_types.Part(
-                                        text="Suppressed barge-in"
-                                    )
-                                ],
-                            ),
-                            turn_complete=True,
-                        )
-                        turn2_sent.set()
-                        await asyncio.wait_for(gen1_done.wait(), timeout=5.0)
-                        async for _ in session.receive():
-                            pass
-
-                await asyncio.gather(_turn1_enabled(), _turn2_disabled())
-
-    detail_events_b = [
-        log.log_record
-        for log in log_exporter.get_finished_logs()
-        if log.log_record.event_name
-        == "gen_ai.client.inference.operation.details"
-    ]
-    assert len(detail_events_b) == 2
-    enabled_attrs_b = dict(detail_events_b[0].attributes)
-    assert enabled_attrs_b[GenAI.GEN_AI_INPUT_MESSAGES] == (
-        {
-            "role": "user",
-            "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"1111",
-                },
-                {"type": "transcription", "content": "Turn 1 late transcript"},
-            ),
-        },
-    )
-    assert enabled_attrs_b[GenAI.GEN_AI_OUTPUT_MESSAGES] == (
-        {
-            "role": "assistant",
-            "parts": ({"type": "text", "content": "Captured reply 1"},),
-            "finish_reason": "interrupted",
-        },
-    )
-
-    disabled_attrs_b = dict(detail_events_b[1].attributes)
-    assert GenAI.GEN_AI_INPUT_MESSAGES not in disabled_attrs_b
-    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in disabled_attrs_b
 
 
 @pytest.mark.asyncio
@@ -8647,295 +8258,6 @@ async def test_live_gemini_2_reopened_tool_turn_yields_to_queued_user_turn(
         for part in msg["parts"]
     ]
     assert retried_ids == ["call-a1", "call-a2"]
-
-
-@pytest.mark.asyncio
-async def test_live_capture_disabled_context_update_invalidates_cached_config(
-    log_exporter,
-    tracer_provider,
-    logger_provider,
-    meter_provider,
-):
-    from google import genai
-
-    has_context_update = hasattr(
-        genai_types, "LiveClientContextUpdate"
-    ) and hasattr(genai_live.AsyncSession, "send_context_update")
-    if not has_context_update:
-        pytest.skip("google-genai SDK does not expose send_context_update")
-
-    def initial_tool(topic: str) -> str:
-        """Initial setup tool."""
-        return topic
-
-    def secret_tool(topic: str) -> str:
-        """Secret tool sent while capture is disabled."""
-        return topic
-
-    def public_tool(topic: str) -> str:
-        """Public replacement tool."""
-        return topic
-
-    config = genai_types.LiveConnectConfig(
-        response_modalities=[genai_types.Modality.TEXT],
-        system_instruction="Initial setup instruction",
-        tools=[initial_tool],
-    )
-
-    # Part A: Capture-disabled system_instruction update before any
-    # capture-enabled generation runs must invalidate setup system_instruction
-    # without buffering disabled content or clobbering unchanged setup tools.
-    ws_a = _FakeWebSocket(
-        [
-            {"setupComplete": {}},
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Disabled turn reply"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Enabled turn reply"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-        ]
-    )
-
-    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_a)):
-        with instrument(
-            GoogleGenAiSdkInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="EVENT_ONLY",
-        ):
-            outer_handler = TelemetryHandler(
-                tracer_provider=tracer_provider,
-                logger_provider=logger_provider,
-                meter_provider=meter_provider,
-            )
-            client = genai.Client(api_key="test-key", vertexai=False)
-            async with client.aio.live.connect(
-                model="gemini-2.5-flash-native-audio-preview-12-2025",
-                config=config,
-            ) as session:
-                with outer_handler.inference(
-                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                    request_model="outer-disabled",
-                ):
-                    await session.send_context_update(
-                        system_instruction="Secret updated instruction"
-                    )
-                    await session.send_client_content(
-                        turns=genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part(text="Turn 1")],
-                        ),
-                        turn_complete=True,
-                    )
-                    async for _ in session.receive():
-                        pass
-
-                with outer_handler.inference(
-                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                    request_model="outer-enabled",
-                ):
-                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
-                    assert isinstance(ctx_data, InferenceData)
-                    ctx_data.capture_content = True
-                    await session.send_client_content(
-                        turns=genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part(text="Turn 2")],
-                        ),
-                        turn_complete=True,
-                    )
-                    async for _ in session.receive():
-                        pass
-
-    events_a = [
-        log.log_record
-        for log in log_exporter.get_finished_logs()
-        if log.log_record.event_name
-        == "gen_ai.client.inference.operation.details"
-    ]
-    assert len(events_a) == 2
-    attrs_a2 = dict(events_a[1].attributes)
-    assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in attrs_a2
-    assert [t["name"] for t in attrs_a2[GenAI.GEN_AI_TOOL_DEFINITIONS]] == [
-        "initial_tool"
-    ]
-
-    # Part B: After an earlier capture-enabled generation caches setup config,
-    # a capture-disabled tools update invalidates only cached tools, and a
-    # later capture-enabled update restores fresh instructions and tools.
-    log_exporter.clear()
-    ws_b = _FakeWebSocket(
-        [
-            {"setupComplete": {}},
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Turn 1 reply"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Turn 2 reply"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Turn 3 reply"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Turn 4 reply"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-        ]
-    )
-
-    with patch("google.genai.live.ws_connect", _make_fake_ws_connect(ws_b)):
-        with instrument(
-            GoogleGenAiSdkInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="EVENT_ONLY",
-        ):
-            outer_handler = TelemetryHandler(
-                tracer_provider=tracer_provider,
-                logger_provider=logger_provider,
-                meter_provider=meter_provider,
-            )
-            client = genai.Client(api_key="test-key", vertexai=False)
-            async with client.aio.live.connect(
-                model="gemini-2.5-flash-native-audio-preview-12-2025",
-                config=config,
-            ) as session:
-                with outer_handler.inference(
-                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                    request_model="outer-enabled-1",
-                ):
-                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
-                    assert isinstance(ctx_data, InferenceData)
-                    ctx_data.capture_content = True
-                    await session.send_client_content(
-                        turns=genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part(text="Turn 1")],
-                        ),
-                        turn_complete=True,
-                    )
-                    async for _ in session.receive():
-                        pass
-
-                with outer_handler.inference(
-                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                    request_model="outer-disabled-2",
-                ):
-                    await session.send_context_update(tools=[secret_tool])
-                    await session.send_client_content(
-                        turns=genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part(text="Turn 2")],
-                        ),
-                        turn_complete=True,
-                    )
-                    async for _ in session.receive():
-                        pass
-
-                with outer_handler.inference(
-                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                    request_model="outer-enabled-3",
-                ):
-                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
-                    assert isinstance(ctx_data, InferenceData)
-                    ctx_data.capture_content = True
-                    await session.send_client_content(
-                        turns=genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part(text="Turn 3")],
-                        ),
-                        turn_complete=True,
-                    )
-                    async for _ in session.receive():
-                        pass
-
-                with outer_handler.inference(
-                    GenAI.GenAiProviderNameValues.GCP_GEMINI.value,
-                    request_model="outer-enabled-4",
-                ):
-                    ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY)
-                    assert isinstance(ctx_data, InferenceData)
-                    ctx_data.capture_content = True
-                    await session.send_context_update(
-                        system_instruction="Public instruction v4",
-                        tools=[public_tool],
-                    )
-                    await session.send_client_content(
-                        turns=genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part(text="Turn 4")],
-                        ),
-                        turn_complete=True,
-                    )
-                    async for _ in session.receive():
-                        pass
-
-    events_b = [
-        log.log_record
-        for log in log_exporter.get_finished_logs()
-        if log.log_record.event_name
-        == "gen_ai.client.inference.operation.details"
-    ]
-    assert len(events_b) == 4
-    attrs_b1 = dict(events_b[0].attributes)
-    assert attrs_b1[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
-        {"type": "text", "content": "Initial setup instruction"},
-    )
-    assert [t["name"] for t in attrs_b1[GenAI.GEN_AI_TOOL_DEFINITIONS]] == [
-        "initial_tool"
-    ]
-
-    attrs_b3 = dict(events_b[2].attributes)
-    assert attrs_b3[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
-        {"type": "text", "content": "Initial setup instruction"},
-    )
-    assert GenAI.GEN_AI_TOOL_DEFINITIONS not in attrs_b3
-
-    attrs_b4 = dict(events_b[3].attributes)
-    assert attrs_b4[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS] == (
-        {"type": "text", "content": "Public instruction v4"},
-    )
-    assert [t["name"] for t in attrs_b4[GenAI.GEN_AI_TOOL_DEFINITIONS]] == [
-        "public_tool"
-    ]
 
 
 @pytest.mark.asyncio

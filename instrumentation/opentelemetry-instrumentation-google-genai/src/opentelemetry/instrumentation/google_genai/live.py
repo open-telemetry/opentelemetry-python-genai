@@ -2133,10 +2133,7 @@ class _LiveSessionTracker:
         if self._session_finalized:
             return
         self._mark_new_user_utterance()
-        if (
-            self._speech_invocation is not None
-            or not self._telemetry_handler.should_emit_user_speech()
-        ):
+        if self._speech_invocation is not None:
             return
         self._speech_invocation = self._telemetry_handler.user_speech(
             provider=self.provider,
