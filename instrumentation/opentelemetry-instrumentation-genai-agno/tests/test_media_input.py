@@ -789,3 +789,45 @@ def test_background_workflow_agent_captures_media_parts(
             "uri": "https://example.com/wf.png",
         },
     )
+
+
+def test_workflow_message_input_with_attachments(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Workflow.run(input=Message(...), images=[...]) preserves workflow attachments."""
+    from agno.workflow.workflow import Workflow
+
+    def step(step_input: Any) -> str:
+        return "done"
+
+    workflow = Workflow(
+        name="msg-wf-with-images",
+        steps=[step],
+        telemetry=False,
+    )
+    workflow.run(
+        input=Message(role="user", content="Inspect"),
+        images=[Image(url="https://example.com/wf_attach.png")],
+    )
+
+    wf_spans = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == "invoke_workflow"
+    ]
+    assert len(wf_spans) == 1
+    messages = wf_spans[0].attributes.get(
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert messages is not None and len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert messages[0]["parts"] == (
+        {"type": "text", "content": "Inspect"},
+        {
+            "type": "uri",
+            "modality": "image",
+            "uri": "https://example.com/wf_attach.png",
+        },
+    )

@@ -748,7 +748,7 @@ def _build_user_input_messages(
 
 
 def _set_invocation_input(
-    invocation: LocalAgentInvocation | WorkflowInvocation,
+    invocation: LocalAgentInvocation,
     instance: Any,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -769,21 +769,73 @@ def _set_invocation_input(
         invocation.input_messages = messages
 
 
+def _build_workflow_input_messages(
+    input_val: object,
+    *,
+    images: Sequence[Any] | None = None,
+    audio: Sequence[Any] | None = None,
+    videos: Sequence[Any] | None = None,
+    files: Sequence[Any] | None = None,
+) -> list[InputMessage]:
+    text = _extract_input_content(input_val) if input_val is not None else ""
+    parts: list[MessagePart] = [TextPart(content=text)] if text else []
+    parts.extend(
+        extract_media_parts(
+            images=images,
+            audio=audio,
+            videos=videos,
+            files=files,
+        )
+    )
+    if parts:
+        return [InputMessage(role=Role.USER.value, parts=parts)]
+    return []
+
+
+def _set_workflow_invocation_input(
+    invocation: WorkflowInvocation,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    capture_content: bool,
+    wrapped: Callable[..., Any],
+) -> None:
+    if not capture_content:
+        return
+    bound = bind_arguments(wrapped, args, kwargs)
+    messages = _build_workflow_input_messages(
+        bound.get("input"),
+        images=cast("Sequence[Any] | None", bound.get("images")),
+        audio=cast("Sequence[Any] | None", bound.get("audio")),
+        videos=cast("Sequence[Any] | None", bound.get("videos")),
+        files=cast("Sequence[Any] | None", bound.get("files")),
+    )
+    if messages:
+        invocation.input_messages = messages
+
+
 def _set_workflow_execution_input_messages(
     invocation: WorkflowInvocation,
     input_val: object,
     exec_input: object,
 ) -> None:
+    images: Sequence[Any] | None = None
+    audio: Sequence[Any] | None = None
+    videos: Sequence[Any] | None = None
+    files: Sequence[Any] | None = None
+
     if is_workflow_execution_input(exec_input):
-        messages = _build_user_input_messages(
-            input_val,
-            images=exec_input.images,
-            audio=exec_input.audio,
-            videos=exec_input.videos,
-            files=exec_input.files,
-        )
-    else:
-        messages = _build_user_input_messages(input_val)
+        images = exec_input.images
+        audio = exec_input.audio
+        videos = exec_input.videos
+        files = exec_input.files
+
+    messages = _build_workflow_input_messages(
+        input_val,
+        images=images,
+        audio=audio,
+        videos=videos,
+        files=files,
+    )
     if messages:
         invocation.input_messages = messages
 
@@ -1295,8 +1347,8 @@ def _start_workflow_invocation(
             invocation, wrapped, args, kwargs, capture_content
         )
     else:
-        _set_invocation_input(
-            invocation, instance, args, kwargs, capture_content, wrapped
+        _set_workflow_invocation_input(
+            invocation, args, kwargs, capture_content, wrapped
         )
     return invocation
 
