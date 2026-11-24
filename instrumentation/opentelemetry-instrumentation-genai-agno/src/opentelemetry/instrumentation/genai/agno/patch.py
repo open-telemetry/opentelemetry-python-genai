@@ -137,6 +137,7 @@ _GEMINI_CLASS = "Gemini"
 
 _ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
 _PATCHED_MODEL_STREAM_CLASSES: set[type[Any]] = set()
+_CHECKED_MODEL_STREAM_CLASSES: set[type[Any]] = set()
 _MODEL_STREAM_PATCH_LOCK = threading.Lock()
 _KNOWN_EMBEDDERS: tuple[tuple[str, str], ...] = (
     ("agno.knowledge.embedder.base", "Embedder"),
@@ -460,6 +461,7 @@ def unpatch_agent() -> None:
         for cls in list(_PATCHED_MODEL_STREAM_CLASSES):
             _safe_unwrap(cls, "ainvoke_stream")
         _PATCHED_MODEL_STREAM_CLASSES.clear()
+        _CHECKED_MODEL_STREAM_CLASSES.clear()
     _ACTIVE_WORKFLOW_RUN_IDS.clear()
 
     for mod_name, cls_name in _KNOWN_EMBEDDERS:
@@ -2259,8 +2261,10 @@ def _model_delegate_stream_hook(
 
 
 def _ensure_model_ainvoke_stream_wrapped(model_cls: type[Any]) -> None:
+    if model_cls in _CHECKED_MODEL_STREAM_CLASSES:
+        return
     with _MODEL_STREAM_PATCH_LOCK:
-        if not _is_instrumented:
+        if not _is_instrumented or model_cls in _CHECKED_MODEL_STREAM_CLASSES:
             return
         for cls in model_cls.__mro__:
             if cls in _PATCHED_MODEL_STREAM_CLASSES:
@@ -2273,6 +2277,7 @@ def _ensure_model_ainvoke_stream_wrapped(model_cls: type[Any]) -> None:
                     cls, "ainvoke_stream", _model_delegate_stream_hook
                 )
                 _PATCHED_MODEL_STREAM_CLASSES.add(cls)
+        _CHECKED_MODEL_STREAM_CLASSES.add(model_cls)
 
 
 def _model_aprocess_response_stream(

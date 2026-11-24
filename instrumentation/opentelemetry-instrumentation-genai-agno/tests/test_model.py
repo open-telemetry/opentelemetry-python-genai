@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
 import pytest
@@ -3459,7 +3459,7 @@ def test_model_async_stream_delegate_close_error_still_closes_remaining_delegate
     instrument_agno,
     span_exporter,
 ) -> None:
-    """If a delegate generator's aclose() raises, remaining delegates are still closed and the first close error is propagated."""
+    """Delegate/inner close Exceptions are swallowed while remaining delegates still close; only the outer stream's own close error propagates."""
 
     from agno.models.base import Model
 
@@ -3528,7 +3528,7 @@ def test_model_async_stream_delegate_close_error_still_closes_remaining_delegate
         return chunk
 
     async def _run() -> None:
-        # 1. Earlier delegate closer raises: remaining outer delegates still close and first delegate error propagates
+        # 1. Delegate closers raise Exceptions: remaining delegates still close and errors are swallowed
         model = _TopTrackedStreamModel(
             id="top-tracked-close", provider="Custom"
         )
@@ -3537,14 +3537,13 @@ def test_model_async_stream_delegate_close_error_still_closes_remaining_delegate
         )
         first = await _next_content_chunk(stream)
         assert getattr(first, "content", None) == "chunk1"
-        with pytest.raises(RuntimeError, match="inner delegate close failed"):
-            await stream.aclose()
+        await stream.aclose()
         assert events == ["base_closing", "sub_closing", "top_closed"]
 
-        # 2. Wrapped stream close raises first: all delegates still close and wrapped stream error is preserved
+        # 2. Inner wrapped stream close raises Exception: all delegates still close and error is swallowed
         events.clear()
         model2 = _TopTrackedStreamModel(
-            id="wrapped-fail-close", provider="Custom"
+            id="inner-fail-close", provider="Custom"
         )
         stream2 = model2.aresponse_stream(
             messages=[Message(role="user", content="hi")]
@@ -3563,20 +3562,53 @@ def test_model_async_stream_delegate_close_error_still_closes_remaining_delegate
                 return await orig_inner_stream.__anext__()
 
             async def aclose(self) -> None:
-                events.append("wrapped_closing")
+                events.append("inner_wrapped_closing")
                 try:
                     await orig_inner_stream.aclose()
                 finally:
-                    raise ConnectionError("wrapped stream close failed")
+                    raise ConnectionError("inner wrapped stream close failed")
 
         inner_wrapper._self_stream = _FailingWrappedStream()
-
-        with pytest.raises(
-            ConnectionError, match="wrapped stream close failed"
-        ):
-            await stream2.aclose()
+        await stream2.aclose()
         assert events == [
-            "wrapped_closing",
+            "inner_wrapped_closing",
+            "base_closing",
+            "sub_closing",
+            "top_closed",
+        ]
+
+        # 3. Outer stream's own close raises Exception: inner and delegates still close and outer error propagates
+        events.clear()
+        model3 = _TopTrackedStreamModel(
+            id="outer-fail-close", provider="Custom"
+        )
+        stream3 = model3.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        )
+        first3 = await _next_content_chunk(stream3)
+        assert getattr(first3, "content", None) == "chunk1"
+
+        orig_outer_stream = stream3._self_stream
+
+        class _FailingOuterStream:
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> Any:
+                return await orig_outer_stream.__anext__()
+
+            async def aclose(self) -> None:
+                events.append("outer_closing")
+                try:
+                    await orig_outer_stream.aclose()
+                finally:
+                    raise ConnectionError("outer stream close failed")
+
+        stream3._self_stream = _FailingOuterStream()
+        with pytest.raises(ConnectionError, match="outer stream close failed"):
+            await stream3.aclose()
+        assert events == [
+            "outer_closing",
             "base_closing",
             "sub_closing",
             "top_closed",
@@ -3585,23 +3617,23 @@ def test_model_async_stream_delegate_close_error_still_closes_remaining_delegate
     asyncio.run(_run())
 
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 2
-    assert spans[0].status.status_code == StatusCode.ERROR
-    assert spans[0].attributes.get(ERROR_TYPE) == "RuntimeError"
-    assert spans[1].status.status_code == StatusCode.ERROR
-    assert spans[1].attributes.get(ERROR_TYPE) == "ConnectionError"
+    assert len(spans) == 3
+    assert spans[0].status.status_code != StatusCode.ERROR
+    assert spans[1].status.status_code != StatusCode.ERROR
+    assert spans[2].status.status_code == StatusCode.ERROR
+    assert spans[2].attributes.get(ERROR_TYPE) == "ConnectionError"
 
 
-def test_model_async_stream_cancelled_inner_cleanup_preserves_original_error(
+def test_model_async_stream_inner_cleanup_exception_swallowed_and_cancellation_propagates(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """CancelledError raised during inner-stream cleanup after an iteration or athrow error preserves the original error."""
+    """Regular Exceptions from inner-stream cleanup are swallowed on error/exhaustion, while CancelledError propagates."""
     from agno.models.base import Model
 
     events: list[str] = []
 
-    class _BaseCancelledCleanupStreamModel(Model):
+    class _BaseFailingCleanupStreamModel(Model):
         def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
             return ModelResponse(content="unused")
 
@@ -3621,8 +3653,8 @@ def test_model_async_stream_cancelled_inner_cleanup_preserves_original_error(
                 yield ModelResponse(content="chunk2")
             finally:
                 await asyncio.sleep(0)
-                events.append("cleanup_cancelled")
-                raise asyncio.CancelledError("cleanup cancelled")
+                events.append("cleanup_failed")
+                raise RuntimeError("cleanup boom")
 
         def _parse_provider_response(
             self, response: Any, **kwargs: Any
@@ -3634,13 +3666,33 @@ def test_model_async_stream_cancelled_inner_cleanup_preserves_original_error(
         ) -> ModelResponse:
             return response
 
-    class _SubFailingMidStreamModel(_BaseCancelledCleanupStreamModel):
+    class _SubFailingMidStreamModel(_BaseFailingCleanupStreamModel):
         async def ainvoke_stream(
             self, *args: Any, **kwargs: Any
         ) -> AsyncIterator[ModelResponse]:
             async for delta in super().ainvoke_stream(*args, **kwargs):
                 yield delta
                 raise ConnectionError("stream failed mid-iteration")
+
+    class _BaseExhaustingWithFailingCloseModel(_BaseFailingCleanupStreamModel):
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            try:
+                yield ModelResponse(content="chunk1")
+                yield ModelResponse(content="chunk2")
+            finally:
+                await asyncio.sleep(0)
+                events.append("exhaust_cleanup_failed")
+                raise RuntimeError("exhaust cleanup boom")
+
+    class _SubBreakEarlyModel(_BaseExhaustingWithFailingCloseModel):
+        async def ainvoke_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelResponse]:
+            async for delta in super().ainvoke_stream(*args, **kwargs):
+                yield delta
+                return
 
     async def _next_content_chunk(stream: Any) -> Any:
         chunk = await anext(stream)
@@ -3649,10 +3701,10 @@ def test_model_async_stream_cancelled_inner_cleanup_preserves_original_error(
         return chunk
 
     async def _run() -> None:
-        # 1. Mid-iteration provider error while base delegate is still open;
-        #    inner-stream cleanup raises CancelledError, original ConnectionError must survive.
+        # 1. Mid-iteration provider error while base delegate close raises Exception:
+        #    original ConnectionError survives.
         model_mid = _SubFailingMidStreamModel(
-            id="cancel-cleanup-mid", provider="Custom"
+            id="cleanup-exc-mid", provider="Custom"
         )
         stream_mid = model_mid.aresponse_stream(
             messages=[Message(role="user", content="hi")]
@@ -3663,12 +3715,13 @@ def test_model_async_stream_cancelled_inner_cleanup_preserves_original_error(
             ConnectionError, match="stream failed mid-iteration"
         ):
             await anext(stream_mid)
-        assert events == ["cleanup_cancelled"]
+        assert events == ["cleanup_failed"]
 
-        # 2. Caller athrow() failure with CancelledError during inner cleanup
+        # 2. Caller athrow() failure with Exception during inner cleanup:
+        #    original RuntimeError survives.
         events.clear()
-        model_throw = _BaseCancelledCleanupStreamModel(
-            id="cancel-cleanup-throw", provider="Custom"
+        model_throw = _BaseFailingCleanupStreamModel(
+            id="cleanup-exc-throw", provider="Custom"
         )
         stream_throw = model_throw.aresponse_stream(
             messages=[Message(role="user", content="hi")]
@@ -3677,16 +3730,75 @@ def test_model_async_stream_cancelled_inner_cleanup_preserves_original_error(
         assert getattr(first2, "content", None) == "chunk1"
         with pytest.raises(RuntimeError, match="caller abort"):
             await stream_throw.athrow(RuntimeError("caller abort"))
-        assert events == ["cleanup_cancelled"]
+        assert events == ["cleanup_failed"]
+
+        # 3. Normal exhaustion (StopAsyncIteration) when inner delegate close raises Exception:
+        #    cleanup Exception is swallowed and stream completes normally.
+        events.clear()
+        model_exhaust = _SubBreakEarlyModel(
+            id="cleanup-exc-exhaust", provider="Custom"
+        )
+        chunks = [
+            chunk
+            async for chunk in model_exhaust.aresponse_stream(
+                messages=[Message(role="user", content="hi")]
+            )
+        ]
+        assert any(getattr(c, "content", None) == "chunk1" for c in chunks)
+        assert events == ["exhaust_cleanup_failed"]
 
     asyncio.run(_run())
 
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 2
+    assert len(spans) == 3
     assert spans[0].status.status_code == StatusCode.ERROR
     assert spans[0].attributes.get(ERROR_TYPE) == "ConnectionError"
     assert spans[1].status.status_code == StatusCode.ERROR
     assert spans[1].attributes.get(ERROR_TYPE) == "RuntimeError"
+    assert spans[2].status.status_code != StatusCode.ERROR
+
+
+def test_outer_stream_keeps_cancellation_during_inner_close() -> None:
+    """Task cancellation arriving while closing the inner stream propagates instead of being swallowed."""
+    from opentelemetry.instrumentation.genai.agno.stream import (
+        AsyncAgnoOuterStreamWrapper,
+    )
+
+    class _SlowCloseInner:
+        _self_finalized = True
+
+        async def _close_stream(self) -> None:
+            await asyncio.sleep(1)
+
+    async def _failing_stream() -> AsyncIterator[Any]:
+        raise ValueError("boom")
+        yield
+
+    async def _exhausting_stream() -> AsyncIterator[Any]:
+        if False:
+            yield
+
+    async def consume(
+        stream_factory: Callable[[], AsyncIterator[Any]],
+    ) -> None:
+        outer = AsyncAgnoOuterStreamWrapper(stream_factory())
+        outer._bind_inner(_SlowCloseInner())
+        try:
+            async for _ in outer:
+                pass
+        except ValueError:
+            pass
+        await asyncio.sleep(1)
+
+    async def main() -> None:
+        for factory in (_failing_stream, _exhausting_stream):
+            task = asyncio.create_task(consume(factory))
+            await asyncio.sleep(0.01)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(main())
 
 
 def test_openai_responses_preserves_response_id_sync_async_and_streaming(
@@ -4777,16 +4889,18 @@ def test_model_stream_abandoned_after_caller_error_in_bare_iteration(
     assert duration_counts_by_error_type == {ErrorTypeValues.OTHER.value: 4}
 
 
-def test_model_async_stream_context_manager_preserves_body_error_when_delegate_cleanup_cancelled(
+def test_model_async_stream_context_manager_cleanup_error_and_cancellation(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """When async with model.aresponse_stream(...) body raises ValueError and delegate cleanup raises CancelledError, ValueError is preserved and all delegates close."""
+    """In async with model.aresponse_stream(...), regular delegate cleanup Exceptions are swallowed while CancelledError propagates."""
     from agno.models.base import Model
 
     events: list[str] = []
 
-    class _BaseCancellingDelegateModel(Model):
+    class _BaseDelegateCloseModel(Model):
+        close_error: BaseException = RuntimeError("delegate close failed")
+
         def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
             return ModelResponse(content="unused")
 
@@ -4806,8 +4920,8 @@ def test_model_async_stream_context_manager_preserves_body_error_when_delegate_c
                 yield ModelResponse(content="chunk2")
             finally:
                 await asyncio.sleep(0)
-                events.append("base_cancelled")
-                raise asyncio.CancelledError("delegate close cancelled")
+                events.append("base_close_error")
+                raise self.close_error
 
         def _parse_provider_response(
             self, response: Any, **kwargs: Any
@@ -4819,7 +4933,7 @@ def test_model_async_stream_context_manager_preserves_body_error_when_delegate_c
         ) -> ModelResponse:
             return response
 
-    class _OuterDelegateModel(_BaseCancellingDelegateModel):
+    class _OuterDelegateModel(_BaseDelegateCloseModel):
         async def ainvoke_stream(
             self, *args: Any, **kwargs: Any
         ) -> AsyncIterator[ModelResponse]:
@@ -4831,9 +4945,10 @@ def test_model_async_stream_context_manager_preserves_body_error_when_delegate_c
                 events.append("outer_closed")
 
     async def _run() -> None:
-        # 1. Body raises ValueError while inner delegate cleanup raises CancelledError:
-        #    ValueError must survive and every delegate must still close.
-        model = _OuterDelegateModel(id="ctx-cancel-body", provider="Custom")
+        # 1. Body raises ValueError while delegate cleanup raises RuntimeError:
+        #    ValueError survives and every delegate closes.
+        model = _OuterDelegateModel(id="ctx-exc-body", provider="Custom")
+        model.close_error = RuntimeError("delegate close failed")
         with pytest.raises(ValueError, match="caller body failure"):
             async with model.aresponse_stream(
                 messages=[Message(role="user", content="hi")]
@@ -4841,12 +4956,13 @@ def test_model_async_stream_context_manager_preserves_body_error_when_delegate_c
                 async for chunk in stream:
                     if getattr(chunk, "content", None):
                         raise ValueError("caller body failure")
-        assert events == ["base_cancelled", "outer_closed"]
+        assert events == ["base_close_error", "outer_closed"]
 
-        # 2. Normal exit (no body exception) still propagates CancelledError from cleanup
-        #    and closes all delegates.
+        # 2. Body raises ValueError while delegate cleanup raises CancelledError:
+        #    CancelledError propagates instead of being swallowed, while the span records ValueError.
         events.clear()
-        model2 = _OuterDelegateModel(id="ctx-cancel-normal", provider="Custom")
+        model2 = _OuterDelegateModel(id="ctx-cancel-body", provider="Custom")
+        model2.close_error = asyncio.CancelledError("delegate close cancelled")
         with pytest.raises(
             asyncio.CancelledError, match="delegate close cancelled"
         ):
@@ -4855,18 +4971,35 @@ def test_model_async_stream_context_manager_preserves_body_error_when_delegate_c
             ) as stream2:
                 async for chunk in stream2:
                     if getattr(chunk, "content", None):
+                        raise ValueError("caller body failure")
+        assert events == ["base_close_error"]
+
+        # 3. Normal exit (no body exception) propagates CancelledError from cleanup.
+        events.clear()
+        model3 = _OuterDelegateModel(id="ctx-cancel-normal", provider="Custom")
+        model3.close_error = asyncio.CancelledError("delegate close cancelled")
+        with pytest.raises(
+            asyncio.CancelledError, match="delegate close cancelled"
+        ):
+            async with model3.aresponse_stream(
+                messages=[Message(role="user", content="hi")]
+            ) as stream3:
+                async for chunk in stream3:
+                    if getattr(chunk, "content", None):
                         break
-        assert events == ["base_cancelled", "outer_closed"]
+        assert events == ["base_close_error"]
 
     asyncio.run(_run())
 
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 2
+    assert len(spans) == 3
     assert spans[0].status.status_code == StatusCode.ERROR
     assert spans[0].attributes.get(ERROR_TYPE) == "ValueError"
     assert spans[1].status.status_code == StatusCode.ERROR
+    assert spans[1].attributes.get(ERROR_TYPE) == "ValueError"
+    assert spans[2].status.status_code == StatusCode.ERROR
     assert (
-        spans[1].attributes.get(ERROR_TYPE)
+        spans[2].attributes.get(ERROR_TYPE)
         == "asyncio.exceptions.CancelledError"
     )
 
