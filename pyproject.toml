@@ -177,8 +177,20 @@ exclude = [
 
 [dependency-groups]
 dev = [
-    "tox",
-    "tox-uv>=1",
+    { include-group = "tox" },
+    { include-group = "towncrier" },
     "pre-commit",
+]
+build = [
+    "hatchling",
+]
+packaging = [
+    "packaging",
+]
+towncrier = [
     "towncrier",
+]
+tox = [
+    "tox",
+    "tox-uv>=1.30",
 ]
