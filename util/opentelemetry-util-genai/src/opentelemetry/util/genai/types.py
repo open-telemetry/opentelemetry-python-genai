@@ -142,7 +142,7 @@ class ReasoningPart:
 
 @dataclass()
 class TranscriptionPart:
-    """Represents the text transcription of an audio part in the same message.
+    """Represents a text transcript of spoken audio, captured as a standalone part.
 
     This model is specified as part of semconv in `GenAI messages Python models - TranscriptionPart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.

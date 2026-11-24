@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import timeit
 from dataclasses import dataclass, field
 
 from opentelemetry._logs import Logger
@@ -214,8 +215,12 @@ class ToolInvocation(GenAIInvocation):
         self._record_metrics()
 
     def _record_metrics(self) -> None:
+        duration_seconds = max(
+            timeit.default_timer() - self._monotonic_start_s,
+            0.0,
+        )
         self._instruments.execute_tool_duration.record(
-            self._get_duration_seconds(),
+            duration_seconds,
             attributes=self._get_metric_attributes(),
             context=self._span_context,
         )

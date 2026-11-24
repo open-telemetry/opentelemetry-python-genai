@@ -21,9 +21,6 @@ from opentelemetry.util.genai._inference_invocation import (
     SuppressedInferenceInvocation,
 )
 from opentelemetry.util.genai._invocation import GenAIInvocation
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH,
-)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
@@ -52,11 +49,7 @@ def fixture_span_exporter() -> InMemorySpanExporter:
 
 
 @pytest.fixture(name="handler")
-def fixture_handler(
-    span_exporter: InMemorySpanExporter,
-    monkeypatch: pytest.MonkeyPatch,
-) -> TelemetryHandler:
-    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
+def fixture_handler(span_exporter: InMemorySpanExporter) -> TelemetryHandler:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
     return TelemetryHandler(tracer_provider=provider)
