@@ -16,7 +16,7 @@
 
 langchain==1.4.10
 langchain-openai==1.7.4
-langchain-aws==1.9.3
+langchain-aws==1.10.0
 langchain-google-genai==4.4.3
 langchain-anthropic==1.7.12
 boto3==1.43.126
