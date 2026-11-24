@@ -17,10 +17,7 @@ from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test.weaver_live_check import LiveCheckReport
-from opentelemetry.test_util_genai.conformance import (
-    ExpectedViolation,
-    Scenario,
-)
+from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
@@ -105,16 +102,10 @@ class GenerateContentServerToolCallingScenario(Scenario):
 
 
 class InteractionsServerToolCallingScenario(Scenario):
-    expected_spans = {"interactions.create": 1}
+    expected_spans = {"chat": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
-    )
-    expected_violations = (
-        ExpectedViolation(
-            advice_id="genai_operation_name_unknown",
-            message_substring="interactions.create",
-        ),
     )
 
     def validate(self, report: LiveCheckReport) -> None:

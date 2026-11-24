@@ -1,0 +1,1 @@
+BREAKING: Emit `chat` instead of `interactions.create` as `gen_ai.operation.name` (and span name prefix) for model calls to `interactions.create`.

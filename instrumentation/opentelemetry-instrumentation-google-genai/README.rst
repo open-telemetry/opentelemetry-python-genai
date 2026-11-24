@@ -21,6 +21,8 @@ Please treat the telemetry produced by these methods as experimental.
 The ``interactions`` API currently does not support automatic function calling, so no ``execute_tool`` spans
 are generated.
 
+``interactions.create`` emits a ``chat`` span for model calls and an ``invoke_agent`` span for agent calls.
+
 ``interactions.get`` emits a ``fetch_response`` span. A fetch performs no inference, so the token
 counts carried by the fetched interaction describe its original generation and are not recorded.
 
