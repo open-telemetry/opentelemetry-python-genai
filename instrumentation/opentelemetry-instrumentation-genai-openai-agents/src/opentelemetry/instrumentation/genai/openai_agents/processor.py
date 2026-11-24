@@ -40,6 +40,7 @@ from agents.tracing import Span, Trace, TracingProcessor, get_current_span
 from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
+    ResponseSpanData,
 )
 
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
@@ -51,11 +52,13 @@ from opentelemetry.util.genai.invocation import (
     ToolInvocation,
     WorkflowInvocation,
 )
-from opentelemetry.util.genai.types import Error
+from opentelemetry.util.genai.types import Error, ToolDefinition
 from opentelemetry.util.genai.utils import (
     object_to_any_value,
     tool_arguments_to_any_value,
 )
+
+from ._utils import get_tool_definitions
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
@@ -83,6 +86,9 @@ class GenAITracingProcessor(TracingProcessor):
         self._agent_spans: weakref.WeakValueDictionary[str, Span[Any]] = (
             weakref.WeakValueDictionary()
         )
+        self._first_turn_tools: weakref.WeakKeyDictionary[
+            LocalAgentInvocation, list[ToolDefinition]
+        ] = weakref.WeakKeyDictionary()
 
     def on_trace_start(self, trace: Trace) -> None:
         # ``trace.name`` comes from ``RunConfig.workflow_name`` (default
@@ -126,12 +132,14 @@ class GenAITracingProcessor(TracingProcessor):
             )
             self._invocations[span] = invocation
             return
-        # Other span_data types (GenerationSpanData, ResponseSpanData,
-        # HandoffSpanData, GuardrailSpanData, Speech/TranscriptionSpanData)
-        # are intentionally ignored. LLM-level spans come from the openai
+        # Other span_data types (GenerationSpanData, HandoffSpanData,
+        # GuardrailSpanData, Speech/TranscriptionSpanData) are
+        # intentionally ignored. LLM-level spans come from the openai
         # instrumentation; the rest have no semconv yet.
 
     def on_span_end(self, span: Span[Any]) -> None:
+        if isinstance(span.span_data, ResponseSpanData):
+            self._record_tool_definitions(span.span_id, span.span_data)
         self._agent_spans.pop(span.span_id, None)
         invocation = self._invocations.pop(span, None)
         if invocation is None:
@@ -158,11 +166,28 @@ class GenAITracingProcessor(TracingProcessor):
             return
         invocation.stop()
 
-    def _get_current_agent(self) -> LocalAgentInvocation | None:
-        span = get_current_span()
-        agent_span = (
-            self._agent_spans.get(span.span_id) if span is not None else None
-        )
+    def _record_tool_definitions(
+        self, span_id: str, span_data: ResponseSpanData
+    ) -> None:
+        invocation = self._get_agent(span_id)
+        response = span_data.response
+        if (
+            invocation is None
+            or not invocation.should_capture_content
+            or response is None
+        ):
+            return
+        definitions = get_tool_definitions(response.tools)
+        first = self._first_turn_tools.get(invocation)
+        if first is None:
+            self._first_turn_tools[invocation] = definitions
+            if definitions:
+                invocation.tool_definitions = definitions
+        elif definitions != first:
+            invocation.tool_definitions = None
+
+    def _get_agent(self, span_id: str) -> LocalAgentInvocation | None:
+        agent_span = self._agent_spans.get(span_id)
         invocation = (
             self._invocations.get(agent_span)
             if agent_span is not None
@@ -174,6 +199,10 @@ class GenAITracingProcessor(TracingProcessor):
             else None
         )
 
+    def _get_current_agent(self) -> LocalAgentInvocation | None:
+        span = get_current_span()
+        return self._get_agent(span.span_id) if span is not None else None
+
     def shutdown(self) -> None:
         for invocation in list(self._invocations.values()):
             try:
@@ -182,6 +211,7 @@ class GenAITracingProcessor(TracingProcessor):
                 pass
         self._invocations.clear()
         self._agent_spans.clear()
+        self._first_turn_tools.clear()
 
     def force_flush(self) -> None:  # pragma: no cover - nothing to flush
         pass
