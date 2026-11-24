@@ -22,6 +22,7 @@ duplicate LLM spans when both are enabled.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -88,14 +89,19 @@ def _active_invocation(agent: Agent) -> LocalAgentInvocation | None:
     return run_context.invocation if run_context is not None else None
 
 
+_MEMORY_PROXY_LOCK = threading.Lock()
+
+
 class _MemoryToolProxy(_ObjectProxy):
     """Counts direct ``retrieval.call()`` invocations inside ``Memory._run()``."""
 
     _self_memory: Agent
+    _self_active_runs: int
 
     def __init__(self, tool: object, memory: Agent) -> None:
         super().__init__(tool)
         self._self_memory = memory
+        self._self_active_runs = 0
 
     def call(self, *args: Any, **kwargs: Any) -> Any:
         run_context = _active_run_context(self._self_memory)
@@ -107,6 +113,34 @@ class _MemoryToolProxy(_ObjectProxy):
         ):
             run_context.invocation.tool_calls += 1
         return self.__wrapped__.call(*args, **kwargs)
+
+
+def _acquire_memory_proxy(
+    memory: Agent, function_map: dict[str, object]
+) -> _MemoryToolProxy | None:
+    with _MEMORY_PROXY_LOCK:
+        retrieval = function_map.get("retrieval")
+        if retrieval is None:
+            return None
+        if isinstance(retrieval, _MemoryToolProxy):
+            retrieval._self_active_runs += 1
+            return retrieval
+        proxy = _MemoryToolProxy(retrieval, memory)
+        proxy._self_active_runs = 1
+        function_map["retrieval"] = proxy
+        return proxy
+
+
+def _release_memory_proxy(
+    function_map: dict[str, object], proxy: _MemoryToolProxy
+) -> None:
+    with _MEMORY_PROXY_LOCK:
+        proxy._self_active_runs -= 1
+        if (
+            proxy._self_active_runs <= 0
+            and function_map.get("retrieval") is proxy
+        ):
+            function_map["retrieval"] = proxy.__wrapped__
 
 
 class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
@@ -261,18 +295,15 @@ def wrap_memory_run(
     if not isinstance(raw_function_map, dict):
         return result
     function_map = cast("dict[str, object]", raw_function_map)
-    retrieval = function_map.get("retrieval")
-    if retrieval is None or isinstance(retrieval, _MemoryToolProxy):
+    if function_map.get("retrieval") is None:
         return result
 
-    proxy = _MemoryToolProxy(retrieval, instance)
-
     def _iter_memory_run() -> Iterator[Any]:
-        function_map["retrieval"] = proxy
+        proxy = _acquire_memory_proxy(instance, function_map)
         try:
             yield from result
         finally:
-            if function_map.get("retrieval") is proxy:
-                function_map["retrieval"] = retrieval
+            if proxy is not None:
+                _release_memory_proxy(function_map, proxy)
 
     return _iter_memory_run()

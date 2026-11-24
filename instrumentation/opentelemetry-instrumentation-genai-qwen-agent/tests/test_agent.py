@@ -6,7 +6,10 @@
 
 import inspect
 import json
+import threading
 from collections import UserList
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,6 +19,7 @@ from qwen_agent.llm import base as qwen_llm_base
 from qwen_agent.llm import function_calling as qwen_fn_call
 from qwen_agent.llm.base import ModelServiceError
 from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
+from qwen_agent.memory import Memory
 from qwen_agent.tools.base import (
     TOOL_REGISTRY,
     BaseTool,
@@ -871,10 +875,11 @@ def test_assistant_run_counts_on_provider_error(
         name="ProviderErrorBot",
         function_list=["echo_text_test"],
     )
-    with pytest.raises(ModelServiceError, match="Provider unavailable"):
+    with pytest.raises(ModelServiceError) as exc_info:
         list(
             bot.run([{"role": "user", "content": "Do step one then answer."}])
         )
+    assert exc_info.value.message == "Provider unavailable"
 
     (agent_span,) = _spans_named(
         span_exporter, "invoke_agent ProviderErrorBot"
@@ -909,8 +914,9 @@ def test_assistant_run_counts_on_interrupted_stream(
     first_chunk = next(run_iter)
     assert first_chunk[-1]["content"] == "Partial stream "
 
-    with pytest.raises(ModelServiceError, match="Stream connection reset"):
+    with pytest.raises(ModelServiceError) as exc_info:
         list(run_iter)
+    assert exc_info.value.message == "Stream connection reset"
 
     (agent_span,) = _spans_named(
         span_exporter, "invoke_agent InterruptedStreamBot"
@@ -1005,3 +1011,173 @@ def test_call_tool_outside_run_is_not_counted(
     metrics = _metrics_by_name(metric_reader)
     assert INFERENCE_CALLS_METRIC not in metrics
     assert TOOL_CALLS_METRIC not in metrics
+
+
+@pytest.mark.vcr()
+def test_assistant_run_nonstream_counts_tools_once(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """run_nonstream() emits exact multi-turn inference and tool totals once."""
+    bot = Assistant(
+        llm=_prompt_llm_cfg(),
+        name="NonStreamFnBot",
+        function_list=["echo_text_test"],
+    )
+    responses = bot.run_nonstream(
+        [{"role": "user", "content": "Run the tools."}]
+    )
+    assert responses[-1]["content"] == "Completed with known tool."
+
+    (agent_span,) = _spans_named(span_exporter, "invoke_agent NonStreamFnBot")
+    assert agent_span.status.status_code != StatusCode.ERROR
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "NonStreamFnBot": (1, 3),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "NonStreamFnBot": (1, 1),
+        "Memory": (1, 0),
+    }
+
+
+def test_overlapping_memory_runs_count_all_retrievals(
+    tmp_path,
+    monkeypatch,
+    span_exporter,
+    metric_reader,
+    instrument_no_content,
+):
+    """Overlapping runs on the same Memory instance keep retrieval counting active."""
+
+    class _TestRetrievalTool(BaseTool):
+        name = "retrieval"
+        description = "Retrieve snippets from local files."
+        parameters = []
+
+        def call(self, params, **kwargs):
+            return json.dumps(
+                [
+                    {
+                        "url": "guide.txt",
+                        "text": ["Telemetry counts matter."],
+                    }
+                ]
+            )
+
+    monkeypatch.setitem(TOOL_REGISTRY, "retrieval", _TestRetrievalTool)
+    doc_path = tmp_path / "guide.txt"
+    doc_path.write_text("Telemetry counts matter.", encoding="utf-8")
+
+    b_in_keygen = threading.Event()
+    a_finished = threading.Event()
+
+    class _KeygenHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # pylint: disable=invalid-name
+            length = int(self.headers.get("Content-Length", "0"))
+            req_body = self.rfile.read(length).decode("utf-8")
+            if "run-b" in req_body:
+                b_in_keygen.set()
+                assert a_finished.wait(timeout=5.0)
+            else:
+                assert b_in_keygen.wait(timeout=5.0)
+
+            chunk_payload = json.dumps(
+                {
+                    "id": "chatcmpl-keygen",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "qwen-max",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "content": json.dumps(
+                                    {
+                                        "keywords_zh": [],
+                                        "keywords_en": ["telemetry"],
+                                    }
+                                ),
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            stop_payload = json.dumps(
+                {
+                    "id": "chatcmpl-keygen",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "qwen-max",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            )
+            sse_bytes = (
+                f"data: {chunk_payload}\n\n"
+                f"data: {stop_payload}\n\n"
+                "data: [DONE]\n\n"
+            ).encode()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(sse_bytes)))
+            self.end_headers()
+            self.wfile.write(sse_bytes)
+
+        def log_message(self, format, *args) -> None:  # pylint: disable=redefined-builtin
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _KeygenHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+        mem = Memory(
+            llm={
+                "model": "qwen-max",
+                "model_type": "oai",
+                "model_server": f"http://127.0.0.1:{server.server_port}/v1",
+                "api_key": "test-key",
+                "generate_cfg": {"max_retries": 0},
+            },
+            files=[str(doc_path)],
+        )
+
+        def run_a():
+            try:
+                return list(mem.run([{"role": "user", "content": "run-a"}]))
+            finally:
+                a_finished.set()
+
+        def run_b():
+            return list(mem.run([{"role": "user", "content": "run-b"}]))
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_a = pool.submit(run_a)
+            fut_b = pool.submit(run_b)
+            res_a = fut_a.result(timeout=10.0)
+            res_b = fut_b.result(timeout=10.0)
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5.0)
+
+    assert "telemetry counts matter" in res_a[-1][-1]["content"].lower()
+    assert "telemetry counts matter" in res_b[-1][-1]["content"].lower()
+    assert type(mem.function_map["retrieval"]) is _TestRetrievalTool
+
+    memory_spans = _spans_named(span_exporter, "invoke_agent Memory")
+    assert len(memory_spans) == 2
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC]["Memory"] == (2, 0)
+    assert observations[TOOL_CALLS_METRIC]["Memory"] == (2, 2)
