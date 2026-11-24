@@ -13,7 +13,6 @@ OpenTelemetry Python - GenAI Util
 
 .. automodule:: opentelemetry.util.genai.types
     :members:
-    :private-members: _AnyValueMapping
     :undoc-members:
     :show-inheritance:
 
