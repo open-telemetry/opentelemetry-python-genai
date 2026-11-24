@@ -30,7 +30,6 @@ from opentelemetry.util.genai._inference_invocation import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
-from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.stream import (
     AbandonedStreamError,
@@ -228,6 +227,44 @@ def test_sync_stream_wrapper_exit_closes_and_propagates_user_errors():
     assert stream.close_count == 1
     assert wrapper._self_stop_count == 0
     assert wrapper._self_failures == [error]
+
+
+class _FakeSyncContextStream(_FakeSyncStream):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+def test_sync_stream_wrapper_exit_propagates_close_error_like_wrapped_stream():
+    close_error = RuntimeError("close failure")
+    wrapper = _TestSyncStreamWrapper(
+        _FakeSyncContextStream(chunks=["chunk"], close_error=close_error)
+    )
+    user_error = ValueError("user failure")
+
+    with pytest.raises(RuntimeError, match="close failure") as raised:
+        with wrapper:
+            raise user_error
+
+    assert raised.value.__context__ is user_error
+    assert wrapper._self_failures == [user_error]
+
+
+def test_sync_stream_wrapper_exit_keeps_user_error_for_non_context_stream():
+    stream = _FakeSyncStream(
+        chunks=["chunk"], close_error=RuntimeError("close failure")
+    )
+    wrapper = _TestSyncStreamWrapper(stream)
+    user_error = ValueError("user failure")
+
+    with pytest.raises(ValueError, match="user failure"):
+        with wrapper:
+            raise user_error
+
+    assert stream.close_count == 1
+    assert wrapper._self_failures == [user_error]
 
 
 def test_sync_stream_wrapper_getattr_passthrough():
@@ -522,6 +559,50 @@ def test_async_stream_wrapper_exit_closes_and_propagates_user_errors():
         assert stream.close_count == 1
         assert wrapper._self_stop_count == 0
         assert wrapper._self_failures == [error]
+
+    asyncio.run(exercise())
+
+
+class _FakeAsyncContextStream(_FakeAsyncStream):
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+
+def test_async_stream_wrapper_exit_propagates_close_error_like_wrapped_stream():
+    async def exercise():
+        close_error = RuntimeError("close failure")
+        wrapper = _TestAsyncStreamWrapper(
+            _FakeAsyncContextStream(chunks=["chunk"], close_error=close_error)
+        )
+        user_error = ValueError("user failure")
+
+        with pytest.raises(RuntimeError, match="close failure") as raised:
+            async with wrapper:
+                raise user_error
+
+        assert raised.value.__context__ is user_error
+        assert wrapper._self_failures == [user_error]
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_exit_keeps_user_error_for_non_context_stream():
+    async def exercise():
+        stream = _FakeAsyncStream(
+            chunks=["chunk"], close_error=RuntimeError("close failure")
+        )
+        wrapper = _TestAsyncStreamWrapper(stream)
+        user_error = ValueError("user failure")
+
+        with pytest.raises(ValueError, match="user failure"):
+            async with wrapper:
+                raise user_error
+
+        assert stream.close_count == 1
+        assert wrapper._self_failures == [user_error]
 
     asyncio.run(exercise())
 
@@ -1356,6 +1437,21 @@ def test_sync_manager_wrapper_forwards_caller_error_to_stream_wrapper():
     assert stream_wrapper._self_failures == [error]
 
 
+def test_sync_manager_wrapper_does_not_close_stream_after_manager_exit():
+    stream = _FakeSyncContextStream(close_error=RuntimeError("close failure"))
+    wrapper = _TestSyncManagerWrapper(
+        _FakeSyncManager(stream), _FakeInvocation
+    )
+    error = ValueError("caller failure")
+
+    with pytest.raises(ValueError, match="caller failure"):
+        with wrapper as stream_wrapper:
+            raise error
+
+    assert stream.close_count == 0
+    assert stream_wrapper._self_failures == [error]
+
+
 def test_sync_manager_wrapper_stops_stream_when_manager_suppresses():
     manager = _FakeSyncManager(_FakeSyncStream(), suppressed=True)
     wrapper = _TestSyncManagerWrapper(manager, _FakeInvocation)
@@ -1369,7 +1465,8 @@ def test_sync_manager_wrapper_stops_stream_when_manager_suppresses():
 
 def test_sync_manager_wrapper_finalizes_stream_when_exit_raises():
     manager_error = RuntimeError("manager failure")
-    manager = _FakeSyncManager(_FakeSyncStream(), exit_error=manager_error)
+    stream = _FakeSyncStream()
+    manager = _FakeSyncManager(stream, exit_error=manager_error)
     wrapper = _TestSyncManagerWrapper(manager, _FakeInvocation)
 
     stream_wrapper = wrapper.__enter__()
@@ -1377,6 +1474,7 @@ def test_sync_manager_wrapper_finalizes_stream_when_exit_raises():
         wrapper.__exit__(None, None, None)
 
     assert stream_wrapper._self_failures == [manager_error]
+    assert stream.close_count == 0
 
 
 def test_sync_manager_wrapper_finalizes_stream_when_exit_is_cancelled():
@@ -1473,6 +1571,26 @@ def test_async_manager_wrapper_forwards_caller_error_to_stream_wrapper():
     asyncio.run(exercise())
 
 
+def test_async_manager_wrapper_does_not_close_stream_after_manager_exit():
+    async def exercise():
+        stream = _FakeAsyncContextStream(
+            close_error=RuntimeError("close failure")
+        )
+        wrapper = _TestAsyncManagerWrapper(
+            _FakeAsyncManager(stream), _FakeInvocation
+        )
+        error = ValueError("caller failure")
+
+        with pytest.raises(ValueError, match="caller failure"):
+            async with wrapper as stream_wrapper:
+                raise error
+
+        assert stream.close_count == 0
+        assert stream_wrapper._self_failures == [error]
+
+    asyncio.run(exercise())
+
+
 def test_async_manager_wrapper_stops_stream_when_manager_suppresses():
     async def exercise():
         manager = _FakeAsyncManager(_FakeAsyncStream(), suppressed=True)
@@ -1490,9 +1608,8 @@ def test_async_manager_wrapper_stops_stream_when_manager_suppresses():
 def test_async_manager_wrapper_finalizes_stream_when_exit_raises():
     async def exercise():
         manager_error = RuntimeError("manager failure")
-        manager = _FakeAsyncManager(
-            _FakeAsyncStream(), exit_error=manager_error
-        )
+        stream = _FakeAsyncStream()
+        manager = _FakeAsyncManager(stream, exit_error=manager_error)
         wrapper = _TestAsyncManagerWrapper(manager, _FakeInvocation)
 
         stream_wrapper = await wrapper.__aenter__()
@@ -1500,6 +1617,7 @@ def test_async_manager_wrapper_finalizes_stream_when_exit_raises():
             await wrapper.__aexit__(None, None, None)
 
         assert stream_wrapper._self_failures == [manager_error]
+        assert stream.close_count == 0
 
     asyncio.run(exercise())
 
@@ -1811,7 +1929,6 @@ def _started_tool_invocation():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="streaming_tool",
         content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
     )
@@ -2289,7 +2406,6 @@ def _suspended_tool_invocation():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="abandoned_tool",
     )
     invocation.suspend()
@@ -2388,7 +2504,6 @@ def _parent_and_attached_invocation():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="attached_tool",
     )
     assert get_current_span() is invocation.span
@@ -2483,7 +2598,6 @@ def test_tool_stream_wrapper_records_no_chunk_timing_metrics():
             MeterProvider(metric_readers=[reader]).get_meter(__name__)
         ),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="metrics_tool",
     )
     assert list(SyncToolStreamWrapper(iter(["a", "b"]), invocation)) == [
@@ -2508,7 +2622,6 @@ def test_tool_stream_wrapper_activates_unattached_tool_invocation():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="detached_tool",
         _attach_to_context=False,
     )
