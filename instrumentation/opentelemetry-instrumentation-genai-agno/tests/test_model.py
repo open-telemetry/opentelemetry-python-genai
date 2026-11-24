@@ -5545,18 +5545,20 @@ def test_model_endpoint_honors_client_params_base_url_during_lazy_init(
         == "default-port.example.com"
     )
     assert "server.port" not in default_port_span.attributes
-    assert "server.address" not in cleared_span.attributes
+    assert cleared_span.attributes.get("server.address") == "api.openai.com"
     assert "server.port" not in cleared_span.attributes
     assert (
         gem_span.attributes.get("server.address") == "gemini-proxy.example.com"
     )
     assert gem_span.attributes.get("server.port") == 8443
 
-    assert requested_hosts[:4] == [
+    assert requested_hosts == [
         ("override.example.com", 8443),
         ("override.example.com", 8443),
         ("async-override.example.com", 9443),
         ("async-override.example.com", 9443),
+        ("default-port.example.com", None),
+        ("api.openai.com", None),
     ]
 
     metrics_data = metric_reader.get_metrics_data()
@@ -6737,3 +6739,263 @@ def test_litellm_resolves_routed_provider_instead_of_framework_name(
         "mistral_ai",
         "unknown",
     }.issubset(metric_providers)
+
+
+def test_fresh_openai_model_backfills_lazy_client_endpoint_on_first_call(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+) -> None:
+    """Fresh OpenAIChat models without pre-built clients still emit server.address on call 1 and call 2."""
+    import httpx
+    from agno.models.openai import OpenAIChat
+
+    from opentelemetry.instrumentation.genai.agno.patch import (
+        _resolve_model_endpoint,
+    )
+    from opentelemetry.semconv._incubating.attributes import server_attributes
+
+    non_stream_payload = {
+        "id": "chatcmpl-lazy",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+    sse_body = (
+        b'data: {"id":"chatcmpl-lazy-s","object":"chat.completion.chunk","created":1700000000,'
+        b'"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+        b'data: {"id":"chatcmpl-lazy-s","object":"chat.completion.chunk","created":1700000000,'
+        b'"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
+        b'"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode()) if request.content else {}
+        if body.get("stream"):
+            return httpx.Response(
+                200,
+                content=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(200, json=non_stream_payload)
+
+    # Sync non-streaming: fresh model with no client / base_url set upfront
+    sync_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        http_client=httpx.Client(transport=httpx.MockTransport(_handler)),
+    )
+    assert sync_model.client is None
+    assert _resolve_model_endpoint(sync_model, is_async=False) == (None, None)
+    sync_model.response(messages=[Message(role="user", content="call 1")])
+    sync_model.response(messages=[Message(role="user", content="call 2")])
+
+    # Sync streaming on a fresh model
+    sync_stream_model = OpenAIChat(
+        id="gpt-4o",
+        api_key="test-key",
+        http_client=httpx.Client(transport=httpx.MockTransport(_handler)),
+    )
+    assert sync_stream_model.client is None
+    for _ in range(2):
+        list(
+            sync_stream_model.response_stream(
+                messages=[Message(role="user", content="stream")]
+            )
+        )
+
+    # Async non-streaming and async streaming on fresh models
+    async def _run_async() -> None:
+        async_model = OpenAIChat(
+            id="gpt-4o",
+            api_key="test-key",
+            http_client=httpx.AsyncClient(
+                transport=httpx.MockTransport(_handler)
+            ),
+        )
+        assert async_model.async_client is None
+        assert _resolve_model_endpoint(async_model, is_async=True) == (
+            None,
+            None,
+        )
+        await async_model.aresponse(
+            messages=[Message(role="user", content="async 1")]
+        )
+        await async_model.aresponse(
+            messages=[Message(role="user", content="async 2")]
+        )
+
+        async_stream_model = OpenAIChat(
+            id="gpt-4o",
+            api_key="test-key",
+            http_client=httpx.AsyncClient(
+                transport=httpx.MockTransport(_handler)
+            ),
+        )
+        assert async_stream_model.async_client is None
+        for _ in range(2):
+            async for _ in async_stream_model.aresponse_stream(
+                messages=[Message(role="user", content="astream")]
+            ):
+                pass
+
+    asyncio.run(_run_async())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 8
+    for span in spans:
+        assert (
+            span.attributes.get(server_attributes.SERVER_ADDRESS)
+            == "api.openai.com"
+        )
+
+    metrics_data = metric_reader.get_metrics_data()
+    seen_metrics: set[str] = set()
+    for rm in metrics_data.resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                if metric.name in (
+                    "gen_ai.client.operation.duration",
+                    "gen_ai.client.token.usage",
+                    "gen_ai.client.operation.time_to_first_chunk",
+                ):
+                    seen_metrics.add(metric.name)
+                    for dp in metric.data.data_points:
+                        assert (
+                            dp.attributes.get(server_attributes.SERVER_ADDRESS)
+                            == "api.openai.com"
+                        )
+    assert {
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.token.usage",
+    }.issubset(seen_metrics)
+
+
+def test_litellm_openai_routed_usage_does_not_double_count_cache_or_reasoning_tokens(
+    instrument_agno,
+    span_exporter,
+    metric_reader,
+    monkeypatch,
+) -> None:
+    """LiteLLMOpenAI uses OpenAI-schema totals, so routing to Anthropic/Bedrock/Google must not double-count cache or reasoning tokens."""
+    import sys
+
+    import httpx
+    import openai
+
+    if "agno.models.litellm.litellm_openai" not in sys.modules:
+        monkeypatch.delitem(sys.modules, "agno.models.litellm", raising=False)
+    try:
+        from agno.models.litellm.litellm_openai import LiteLLMOpenAI
+    except ImportError:
+        import types
+
+        fake_litellm = types.ModuleType("litellm")
+        monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+        for mod_name in (
+            "agno.models.litellm",
+            "agno.models.litellm.litellm_openai",
+        ):
+            monkeypatch.delitem(sys.modules, mod_name, raising=False)
+        from agno.models.litellm.litellm_openai import LiteLLMOpenAI
+
+    payload = {
+        "id": "chatcmpl-routed-usage",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "routed-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "answer"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "prompt_tokens_details": {
+                "cached_tokens": 40,
+                "cache_write_tokens": 10,
+            },
+            "completion_tokens_details": {
+                "reasoning_tokens": 20,
+            },
+        },
+    }
+
+    def _make_client() -> openai.OpenAI:
+        return openai.OpenAI(
+            api_key="test-key",
+            base_url="http://litellm-proxy.internal:4000",
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _req: httpx.Response(200, json=payload)
+                )
+            ),
+        )
+
+    routed_cases = [
+        ("anthropic/claude-3-5-sonnet-20241022", "anthropic"),
+        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", "aws.bedrock"),
+        ("gemini/gemini-2.5-flash", "gcp.gemini"),
+        ("vertex_ai/gemini-2.5-flash", "gcp.vertex_ai"),
+    ]
+    for model_id, expected_provider in routed_cases:
+        span_exporter.clear()
+        model = LiteLLMOpenAI(
+            id=model_id,
+            api_key="test-key",
+            client=_make_client(),
+        )
+        model.response(messages=[Message(role="user", content="hello")])
+        (span,) = span_exporter.get_finished_spans()
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == expected_provider
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 100
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 50
+        )
+        assert (
+            span.attributes.get(
+                GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            )
+            == 40
+        )
+        assert (
+            span.attributes.get("gen_ai.usage.reasoning.output_tokens") == 20
+        )
+
+    metrics_data = metric_reader.get_metrics_data()
+    for rm in metrics_data.resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                if metric.name == "gen_ai.client.token.usage":
+                    for dp in metric.data.data_points:
+                        token_type = dp.attributes.get(
+                            GenAIAttributes.GEN_AI_TOKEN_TYPE
+                        )
+                        if token_type == "input":
+                            assert dp.sum == 100
+                        elif token_type == "output":
+                            assert dp.sum == 50

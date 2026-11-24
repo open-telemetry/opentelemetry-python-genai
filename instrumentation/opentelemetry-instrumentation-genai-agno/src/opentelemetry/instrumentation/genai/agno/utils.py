@@ -118,6 +118,37 @@ _UNCACHED_INPUT_CLASSES = frozenset(
 
 _CUMULATIVE_STREAM_USAGE_CLASSES = frozenset({"Gemini", "Google"})
 
+_EXCLUDED_REASONING_OUTPUT_CLASSES = frozenset(
+    {"Gemini", "Google", "GeminiInteractions"}
+)
+
+# Adapters whose Agno usage parser reads OpenAI-schema totals (where
+# input_tokens already includes cached tokens and output_tokens already
+# includes reasoning tokens), even when routed to Anthropic/Bedrock/Google.
+_OPENAI_SCHEMA_USAGE_CLASSES = frozenset(
+    {
+        "OpenAIChat",
+        "OpenAIResponses",
+        "OpenResponses",
+        "OpenAILike",
+        "LiteLLM",
+        "LiteLLMOpenAI",
+        "OpenRouter",
+        "AzureAIFoundry",
+        "Groq",
+        "MistralChat",
+        "Perplexity",
+        "RampRouter",
+    }
+)
+
+
+def _has_mro_class(model: Model | None, class_names: frozenset[str]) -> bool:
+    if model is None:
+        return False
+    return any(cls.__name__ in class_names for cls in type(model).__mro__)
+
+
 _TOKEN_USAGE_ATTRS = (
     "input_tokens",
     "output_tokens",
@@ -144,13 +175,11 @@ def _uses_uncached_input_tokens(
     invocation: InferenceInvocation,
     model: Model | None = None,
 ) -> bool:
-    if invocation.provider in _UNCACHED_INPUT_PROVIDERS:
+    if _has_mro_class(model, _UNCACHED_INPUT_CLASSES):
         return True
-    if model is not None:
-        for cls in type(model).__mro__:
-            if cls.__name__ in _UNCACHED_INPUT_CLASSES:
-                return True
-    return False
+    if _has_mro_class(model, _OPENAI_SCHEMA_USAGE_CLASSES):
+        return False
+    return invocation.provider in _UNCACHED_INPUT_PROVIDERS
 
 
 def uses_cumulative_stream_usage(
@@ -158,13 +187,22 @@ def uses_cumulative_stream_usage(
     model: Model | None = None,
 ) -> bool:
     """Return True for providers whose streaming chunks carry cumulative usage totals."""
-    if invocation.provider in _GOOGLE_PROVIDERS:
+    if _has_mro_class(model, _CUMULATIVE_STREAM_USAGE_CLASSES):
         return True
-    if model is not None:
-        for cls in type(model).__mro__:
-            if cls.__name__ in _CUMULATIVE_STREAM_USAGE_CLASSES:
-                return True
-    return False
+    if _has_mro_class(model, _OPENAI_SCHEMA_USAGE_CLASSES):
+        return False
+    return invocation.provider in _GOOGLE_PROVIDERS
+
+
+def _excludes_reasoning_from_output_tokens(
+    invocation: InferenceInvocation,
+    model: Model | None = None,
+) -> bool:
+    if _has_mro_class(model, _EXCLUDED_REASONING_OUTPUT_CLASSES):
+        return True
+    if _has_mro_class(model, _OPENAI_SCHEMA_USAGE_CLASSES):
+        return False
+    return invocation.provider in _GOOGLE_PROVIDERS
 
 
 def record_model_token_usage(
@@ -209,7 +247,7 @@ def record_model_token_usage(
     reasoning_tokens = safe_int(getattr(metrics, "reasoning_tokens", None))
     if reasoning_tokens is not None and reasoning_tokens > 0:
         invocation.thinking_tokens = reasoning_tokens
-        if invocation.provider in _GOOGLE_PROVIDERS:
+        if _excludes_reasoning_from_output_tokens(invocation, model):
             output_tokens = (output_tokens or 0) + reasoning_tokens
     if output_tokens is not None:
         invocation.output_tokens = output_tokens

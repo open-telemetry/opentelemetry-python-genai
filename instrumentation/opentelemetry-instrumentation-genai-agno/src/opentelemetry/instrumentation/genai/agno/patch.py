@@ -87,6 +87,7 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     safe_int,
 )
 from opentelemetry.instrumentation.utils import unwrap
+from opentelemetry.semconv._incubating.attributes import server_attributes
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
     ErrorTypeValues,
 )
@@ -2010,6 +2011,28 @@ def _resolve_model_endpoint(
     return None, None
 
 
+def _refresh_model_endpoint(
+    invocation: InferenceInvocation,
+    instance: Model,
+    *,
+    is_async: bool = False,
+) -> None:
+    """Backfill server.address / server.port after lazy SDK client initialization."""
+    if (
+        invocation.server_address is not None
+        or server_attributes.SERVER_ADDRESS in invocation.attributes
+    ):
+        return
+    addr, port = _resolve_model_endpoint(instance, is_async=is_async)
+    if addr is None:
+        return
+    invocation.attributes[server_attributes.SERVER_ADDRESS] = addr
+    invocation.metric_attributes[server_attributes.SERVER_ADDRESS] = addr
+    if port is not None:
+        invocation.attributes[server_attributes.SERVER_PORT] = port
+        invocation.metric_attributes[server_attributes.SERVER_PORT] = port
+
+
 def _start_model_inference(
     handler: TelemetryHandler,
     instance: Model,
@@ -2155,6 +2178,7 @@ def _model_process_response(
                 result = wrapped(*args, **kwargs)
             finally:
                 _CURRENT_MODEL_INVOCATION.reset(token)
+                _refresh_model_endpoint(invocation, instance, is_async=False)
             _populate_model_response_telemetry(
                 invocation,
                 assistant_message=assistant_message,
@@ -2183,6 +2207,7 @@ def _model_aprocess_response(
                 result = await wrapped(*args, **kwargs)
             finally:
                 _CURRENT_MODEL_INVOCATION.reset(token)
+                _refresh_model_endpoint(invocation, instance, is_async=True)
             _populate_model_response_telemetry(
                 invocation,
                 assistant_message=assistant_message,
@@ -2217,16 +2242,21 @@ def _model_process_response_stream(
             )
             return invocation
 
+        def _refresh(invocation: InferenceInvocation) -> None:
+            _refresh_model_endpoint(invocation, instance, is_async=False)
+
         try:
             stream = wrapped(*args, **kwargs)
         except BaseException as error:
             invocation = _start()
+            _refresh(invocation)
             invocation.fail(error)
             raise
 
         return AgnoModelStreamWrapper(
             stream,
             start_invocation=_start,
+            refresh_endpoint=_refresh,
             assistant_message=assistant_message,
             stream_data=stream_data,
             model=instance,
@@ -2305,16 +2335,21 @@ def _model_aprocess_response_stream(
             )
             return invocation
 
+        def _refresh(invocation: InferenceInvocation) -> None:
+            _refresh_model_endpoint(invocation, instance, is_async=True)
+
         try:
             stream = wrapped(*args, **kwargs)
         except BaseException as error:
             invocation = _start()
+            _refresh(invocation)
             invocation.fail(error)
             raise
 
         return AsyncAgnoModelStreamWrapper(
             stream,
             start_invocation=_start,
+            refresh_endpoint=_refresh,
             assistant_message=assistant_message,
             stream_data=stream_data,
             model=instance,

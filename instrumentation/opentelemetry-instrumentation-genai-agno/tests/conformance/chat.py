@@ -799,6 +799,17 @@ class ChatMultimodalScenario(Scenario):
         super().validate(report)
         spans = _chat_spans(report)
         assert len(spans) == 2, f"expected 2 chat spans, saw {len(spans)}"
+        provider_models = {
+            (
+                _attr(span, "gen_ai.provider.name"),
+                _attr(span, "gen_ai.request.model"),
+            )
+            for span in spans
+        }
+        assert provider_models == {
+            ("openrouter", "gpt-4o"),
+            ("moonshot", "kimi-k2.5"),
+        }, f"unexpected provider/model pairs: {provider_models}"
         input_parts: set[tuple[str, str | None]] = set()
         output_parts: set[tuple[str, str | None]] = set()
         for span in spans:

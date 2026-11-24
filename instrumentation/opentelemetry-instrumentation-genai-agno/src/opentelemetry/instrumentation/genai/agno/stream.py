@@ -347,6 +347,7 @@ class AsyncAgnoWorkflowStreamWrapper(
 class _ModelStreamMixin:
     _self_invocation: InferenceInvocation | None
     _self_start_invocation: Callable[[], InferenceInvocation] | None
+    _self_refresh_endpoint: Callable[[InferenceInvocation], None] | None
     _self_assistant_message: Message | None
     _self_stream_data: MessageData | None
     _self_model: Model | None
@@ -362,12 +363,19 @@ class _ModelStreamMixin:
             self._self_invocation = invocation
         return self._self_invocation
 
+    def _refresh_invocation_endpoint(
+        self, invocation: InferenceInvocation
+    ) -> None:
+        if self._self_refresh_endpoint is not None:
+            self._self_refresh_endpoint(invocation)
+
     def _record_chunk_usage(self, usage: Any) -> None:
         if has_model_token_usage(usage):
             self._self_last_chunk_usage = usage
 
     def _process_chunk(self, chunk: ModelResponse) -> None:
         invocation = self._ensure_invocation()
+        self._refresh_invocation_endpoint(invocation)
         populate_provider_data(invocation, chunk.provider_data)
         chunk_usage = getattr(chunk, "response_usage", None)
         if chunk_usage is not None:
@@ -380,6 +388,7 @@ class _ModelStreamMixin:
 
     def _finalize_telemetry(self, error: BaseException | None = None) -> None:
         invocation = self._ensure_invocation()
+        self._refresh_invocation_endpoint(invocation)
         if self._self_assistant_message is not None:
             populate_provider_data(
                 invocation,
@@ -460,9 +469,11 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         model: Model | None = None,
         *,
         start_invocation: Callable[[], InferenceInvocation] | None = None,
+        refresh_endpoint: Callable[[InferenceInvocation], None] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_start_invocation = start_invocation
+        self._self_refresh_endpoint = refresh_endpoint
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
         self._self_model = model
@@ -526,9 +537,11 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         model: Model | None = None,
         *,
         start_invocation: Callable[[], InferenceInvocation] | None = None,
+        refresh_endpoint: Callable[[InferenceInvocation], None] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_start_invocation = start_invocation
+        self._self_refresh_endpoint = refresh_endpoint
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
         self._self_model = model
