@@ -1485,10 +1485,10 @@ def test_chat_completion_streaming_close_exception_chains_user_exception(
 
         def close_raises():
             original_close()
-            raise RuntimeError("close failure")
+            raise OSError("close failure")
 
         monkeypatch.setattr(response.__wrapped__, "close", close_raises)
-        with pytest.raises(RuntimeError, match="close failure") as raised:
+        with pytest.raises(OSError, match="close failure") as raised:
             with response:
                 raise RuntimeError("user failure")
 
