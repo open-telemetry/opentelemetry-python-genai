@@ -6999,3 +6999,90 @@ def test_litellm_openai_routed_usage_does_not_double_count_cache_or_reasoning_to
                             assert dp.sum == 100
                         elif token_type == "output":
                             assert dp.sum == 50
+
+
+def test_recorded_openai_chat_streaming_tool_calls_sync_and_async(
+    instrument_agno_content_capture,
+    span_exporter,
+    vcr,
+) -> None:
+    """Replay a recorded OpenAI Chat Completions streaming tool-call cassette through OpenAIChat sync and async streams."""
+    import openai
+    from agno.models.openai import OpenAIChat
+    from agno.tools.function import Function
+
+    def get_current_weather(location: str) -> str:
+        """Get the current weather in a given location."""
+        return f"Sunny in {location}"
+
+    weather_fn = Function.from_callable(get_current_weather)
+    weather_fn.external_execution = True
+    tools = [weather_fn]
+    messages = [
+        Message(role="system", content="You're a helpful assistant."),
+        Message(
+            role="user",
+            content="What's the weather in Seattle and San Francisco today?",
+        ),
+    ]
+
+    with vcr.use_cassette("openai_chat_streaming_tool_calling.yaml"):
+        sync_model = OpenAIChat(
+            id="gpt-4o-mini",
+            client=openai.OpenAI(api_key="test_openai_api_key"),
+        )
+        list(
+            sync_model.response_stream(
+                messages=messages,
+                tools=tools,
+            )
+        )
+
+    async def _run_async() -> None:
+        async_model = OpenAIChat(
+            id="gpt-4o-mini",
+            async_client=openai.AsyncOpenAI(api_key="test_openai_api_key"),
+        )
+        async for _ in async_model.aresponse_stream(
+            messages=messages,
+            tools=tools,
+        ):
+            pass
+
+    with vcr.use_cassette("openai_chat_streaming_tool_calling.yaml"):
+        asyncio.run(_run_async())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    for span in spans:
+        attrs = span.attributes
+        assert attrs.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "chat"
+        assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "openai"
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == "gpt-4o-mini"
+        assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 75
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 51
+        assert attrs.get("server.address") == "api.openai.com"
+        output_messages = attrs.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        assert output_messages is not None
+        assert len(output_messages) == 1
+        assert output_messages[0]["role"] == "assistant"
+        tool_call_parts = [
+            part
+            for part in output_messages[0]["parts"]
+            if part.get("type") == "tool_call"
+        ]
+        assert tool_call_parts == [
+            {
+                "type": "tool_call",
+                "id": "call_fHCjJqt9Pysde6vcJcvbXGBx",
+                "name": "get_current_weather",
+                "arguments": {"location": "Seattle, WA"},
+            },
+            {
+                "type": "tool_call",
+                "id": "call_3J9foSw3CUb48lrqIXoTky6U",
+                "name": "get_current_weather",
+                "arguments": {"location": "San Francisco, CA"},
+            },
+        ]
