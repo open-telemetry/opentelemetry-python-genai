@@ -2413,9 +2413,15 @@ def _suspended_tool_invocation():
 
 
 @pytest.mark.parametrize(
-    "wrapper_cls", [_TestSyncStreamWrapper, SyncToolStreamWrapper]
+    "wrapper_cls, expected_error_type",
+    [
+        (_TestSyncStreamWrapper, "_OTHER"),
+        (SyncToolStreamWrapper, "GeneratorExit"),
+    ],
 )
-def test_abandoned_sync_stream_finalizes_inside_execution_context(wrapper_cls):
+def test_abandoned_sync_stream_finalizes_without_leaking_context(
+    wrapper_cls, expected_error_type
+):
     invocation = _suspended_tool_invocation()
     spans_at_finalize = []
 
@@ -2432,15 +2438,24 @@ def test_abandoned_sync_stream_finalizes_inside_execution_context(wrapper_cls):
     del wrapper
     gc.collect()
 
-    assert spans_at_finalize == [invocation.span]
+    assert len(spans_at_finalize) == 1
+    assert spans_at_finalize[0] is not invocation.span
     assert get_current_span() is not invocation.span
+    span = invocation.span
+    assert span.end_time is not None
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == expected_error_type
 
 
 @pytest.mark.parametrize(
-    "wrapper_cls", [_TestAsyncStreamWrapper, AsyncToolStreamWrapper]
+    "wrapper_cls, expected_error_type",
+    [
+        (_TestAsyncStreamWrapper, "_OTHER"),
+        (AsyncToolStreamWrapper, "GeneratorExit"),
+    ],
 )
-def test_abandoned_async_stream_finalizes_inside_execution_context(
-    wrapper_cls,
+def test_abandoned_async_stream_finalizes_without_leaking_context(
+    wrapper_cls, expected_error_type
 ):
     invocation = _suspended_tool_invocation()
     spans_at_finalize = []
@@ -2463,8 +2478,13 @@ def test_abandoned_async_stream_finalizes_inside_execution_context(
     asyncio.run(exercise())
     gc.collect()
 
-    assert spans_at_finalize == [invocation.span]
+    assert len(spans_at_finalize) == 1
+    assert spans_at_finalize[0] is not invocation.span
     assert get_current_span() is not invocation.span
+    span = invocation.span
+    assert span.end_time is not None
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == expected_error_type
 
 
 def test_default_execution_context_leaves_suppressed_inference_invocation_alone():
