@@ -350,14 +350,16 @@ def extract_converse_request(
             if text_format_str in ("json", "text"):
                 invocation.output_type = text_format_str
 
-    # Prompt variables (opt-in under content capture)
     prompt_variables = kwargs.get("promptVariables")
-    if capture_content and _is_dict(prompt_variables):
-        for var_name, var_val in prompt_variables.items():
-            if _is_dict(var_val) and "text" in var_val:
-                invocation.attributes[f"gen_ai.prompt.variable.{var_name}"] = (
-                    str(var_val["text"])
-                )
+    if capture_content and _is_dict(prompt_variables) and prompt_variables:
+        invocation.prompt_variables = {
+            var_name: (
+                str(var_val["text"])
+                if _is_dict(var_val) and "text" in var_val
+                else var_val
+            )
+            for var_name, var_val in prompt_variables.items()
+        }
 
     # system instruction
     raw_system = kwargs.get("system")
@@ -510,6 +512,7 @@ def extract_invoke_model_request(
             body.get("p"),
             text_gen_config.get("topP") if text_gen_config else None,
             inf_config.get("top_p") if inf_config else None,
+            inf_config.get("topP") if inf_config else None,
         )
     )
 
@@ -520,6 +523,7 @@ def extract_invoke_model_request(
             body.get("topK"),
             body.get("k"),
             inf_config.get("top_k") if inf_config else None,
+            inf_config.get("topK") if inf_config else None,
         )
     )
 
@@ -532,6 +536,7 @@ def extract_invoke_model_request(
             body.get("maxTokens"),
             text_gen_config.get("maxTokenCount") if text_gen_config else None,
             inf_config.get("max_new_tokens") if inf_config else None,
+            inf_config.get("maxTokens") if inf_config else None,
         )
     )
 
@@ -539,8 +544,12 @@ def extract_invoke_model_request(
     stop_seqs = _first_not_none(
         body.get("stop_sequences"),
         body.get("stopSequences"),
+        body.get("stop"),
         text_gen_config.get("stopSequences") if text_gen_config else None,
+        inf_config.get("stopSequences") if inf_config else None,
     )
+    if isinstance(stop_seqs, str):
+        stop_seqs = [stop_seqs]
     if _is_list(stop_seqs):
         invocation.stop_sequences = [str(s) for s in stop_seqs]
 

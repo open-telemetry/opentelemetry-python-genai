@@ -34,6 +34,7 @@ def _wrap_tool_function(
             with telemetry_handler.tool(
                 tool_function.__name__,
                 tool_type="function",
+                _attach_to_context=False,
             ) as tool_invocation:
                 tool_invocation.tool_description = tool_function.__doc__
                 # Snapshot before the call: the tool may mutate its inputs.
@@ -54,6 +55,7 @@ def _wrap_tool_function(
             with telemetry_handler.tool(
                 tool_function.__name__,
                 tool_type="function",
+                _attach_to_context=False,
             ) as tool_invocation:
                 tool_invocation.tool_description = tool_function.__doc__
                 # Snapshot before the call: the tool may mutate its inputs.

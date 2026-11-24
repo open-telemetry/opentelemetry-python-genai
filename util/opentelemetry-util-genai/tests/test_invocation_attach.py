@@ -296,6 +296,33 @@ def test_activate_fails_on_escaping_error_and_never_stops(
     assert span.attributes["error.type"] == "ValueError"
 
 
+def test_activate_fails_on_generator_exit(
+    handler: TelemetryHandler,
+    caller_span: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    invocation = handler.inference("prov", _attach_to_context=False)
+
+    class _Suspend:
+        def __await__(self) -> Iterator[None]:
+            yield
+
+    async def call() -> None:
+        with invocation.activate():
+            await _Suspend()
+
+    coroutine = call()
+    coroutine.send(None)
+    assert get_current_span() is invocation.span
+    coroutine.close()
+
+    assert invocation._finished
+    assert get_current_span() is caller_span
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "GeneratorExit"
+
+
 @pytest.mark.parametrize("finish", ["stop", "fail"])
 def test_completion_hook_runs_with_span_current(
     span_exporter: InMemorySpanExporter, caller_span: Any, finish: str

@@ -45,7 +45,7 @@ class _EmptyAsyncStream(AsyncStream):
 
 def _start(tracer_provider):
     return TelemetryHandler(tracer_provider=tracer_provider).inference(
-        "openai", request_model="m"
+        "openai", request_model="m", _attach_to_context=False
     )
 
 

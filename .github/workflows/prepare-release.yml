@@ -31,7 +31,7 @@ permissions:
   contents: read
 
 env:
-  UV_FROZEN: "true"
+  UV_LOCKED: "true"
 
 run-name: "Prepare release${{ inputs.package && format(': {0}', inputs.package) || ' (all)' }}"
 

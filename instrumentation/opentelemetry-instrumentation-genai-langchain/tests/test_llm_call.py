@@ -125,9 +125,11 @@ def test_chat_openai_prompt_template(
         chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
         == "weather_prompt"
     )
-    assert (
-        chat_span.attributes["gen_ai.prompt.variable.question"]
-        == "What's the weather like in Seattle?"
+    assert chat_span.attributes["gen_ai.prompt.variables"] == {
+        "question": "What's the weather like in Seattle?",
+    }
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in chat_span.attributes
     )
 
 
@@ -170,12 +172,14 @@ async def test_async_prompt_template_propagates_prompt_context(
         == "weather_prompt"
     )
     if capture_content == "SPAN_ONLY":
-        assert (
-            chat_span.attributes["gen_ai.prompt.variable.question"]
-            == "What's the weather like in Seattle?"
-        )
+        assert chat_span.attributes["gen_ai.prompt.variables"] == {
+            "question": "What's the weather like in Seattle?",
+        }
     else:
-        assert "gen_ai.prompt.variable.question" not in chat_span.attributes
+        assert "gen_ai.prompt.variables" not in chat_span.attributes
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in chat_span.attributes
+    )
 
 
 def test_prompt_template_accepts_scalar_input(
@@ -203,7 +207,64 @@ def test_prompt_template_accepts_scalar_input(
         if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
         == "chat"
     )
-    assert chat_span.attributes["gen_ai.prompt.variable.name"] == "Ada"
+    assert chat_span.attributes["gen_ai.prompt.variables"] == {"name": "Ada"}
+
+
+def test_prompt_template_preserves_structured_variables(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+):
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Done.")])
+    prompt = PromptTemplate.from_template(
+        "Count={count}, enabled={enabled}, tags={tags}, meta={meta}"
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_AND_EVENT",
+    ):
+        response = (prompt | model).invoke(
+            {
+                "count": 3,
+                "enabled": True,
+                "tags": ["a", "b"],
+                "meta": {"lang": "en"},
+            },
+            config={"metadata": {"ls_model_name": "test-chat-model"}},
+        )
+
+    assert response.content == "Done."
+    expected = {
+        "count": 3,
+        "enabled": True,
+        "tags": ("a", "b"),
+        "meta": {"lang": "en"},
+    }
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert chat_span.attributes["gen_ai.prompt.variables"] == expected
+    assert (
+        type(chat_span.attributes["gen_ai.prompt.variables"]["count"]) is int
+    )
+    assert chat_span.attributes["gen_ai.prompt.variables"]["enabled"] is True
+
+    event = next(
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    )
+    assert event.attributes["gen_ai.prompt.variables"] == expected
 
 
 def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
@@ -240,7 +301,10 @@ def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
         == "chat"
     )
     assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES in chat_span.attributes
-    assert "gen_ai.prompt.variable.value" not in chat_span.attributes
+    assert "gen_ai.prompt.variables" not in chat_span.attributes
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in chat_span.attributes
+    )
     assert (
         gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
         in chat_span.attributes
@@ -300,11 +364,13 @@ def test_chat_openai_chat_prompt_template(
         chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
         == "weather_chat_prompt"
     )
-    assert (
-        chat_span.attributes["gen_ai.prompt.variable.question"]
-        == "What's the weather like in Seattle?"
+    assert chat_span.attributes["gen_ai.prompt.variables"] == {
+        "question": "What's the weather like in Seattle?",
+        "style": "concise",
+    }
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in chat_span.attributes
     )
-    assert chat_span.attributes["gen_ai.prompt.variable.style"] == "concise"
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py

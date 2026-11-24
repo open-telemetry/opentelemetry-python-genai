@@ -20,28 +20,20 @@
 
 set -ev
 
-# Exclude packages uploaded within the last 3 days across all uv invocations,
-# ensuring build backend dependencies (e.g. hatchling) also inherit the cutoff.
-export UV_EXCLUDE_NEWER=3d
-
-if [ $PACKAGE_NAME ]; then
-  pkg_name=${PACKAGE_NAME}
-  pkg_version=${VERSION}
-elif [ $GITHUB_REF ]; then
-  pkg_name_and_version=${GITHUB_REF#refs/tags/*}
-  pkg_name=${pkg_name_and_version%==*}
-  pkg_version=${pkg_name_and_version#opentelemetry-*==}
+if [ -n "${PACKAGE_NAME:-}" ]; then
+  pkg_name="${PACKAGE_NAME}"
+  pkg_version="${VERSION}"
+elif [ -n "${GITHUB_REF:-}" ]; then
+  pkg_name_and_version="${GITHUB_REF#refs/tags/*}"
+  pkg_name="${pkg_name_and_version%==*}"
+  pkg_version="${pkg_name_and_version#opentelemetry-*==}"
 else
   echo 'Failed to run script, missing workflow env variable GITHUB_REF or PACKAGE_NAME and VERSION.'
   exit 1
 fi
 
-
-# Validate version against PEP 440 conventions: https://packaging.pypa.io/en/latest/version.html
-uv run --no-project --with packaging python -c "from packaging.version import Version; Version('${pkg_version}')"
-
 basedir=$(git rev-parse --show-toplevel)
-cd $basedir
+cd "$basedir"
 
 # Ensure no untracked or modified files exist in the checkout before building
 if [ -n "$(git status --porcelain)" ]; then
@@ -50,39 +42,43 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-distdir=${basedir}/dist
-mkdir -p $distdir
-rm -rf ${distdir:?}/*
+# Validate version against PEP 440 conventions: https://packaging.pypa.io/en/latest/version.html
+uv run --locked --only-group packaging --project "$basedir" \
+  python -c "import sys; from packaging.version import Version; Version(sys.argv[1])" "$pkg_version"
 
-pyproject_toml_file_path=$(ls **/$pkg_name/pyproject.toml)
+distdir="${basedir}/dist"
+mkdir -p "$distdir"
+rm -rf "${distdir:?}/"*
 
-if [ -z $pyproject_toml_file_path ]; then
+directory_with_package=$(./scripts/eachdist.py find-package --package "$pkg_name")
+
+if [ ! -f "$directory_with_package/pyproject.toml" ]; then
   echo "Error! pyproject.toml not found for $pkg_name, can't build."
   exit 1
 fi
 
-directory_with_package=$(dirname $pyproject_toml_file_path)
+cd "$directory_with_package"
 
-cd $directory_with_package
+uv run --locked --only-group build --project "$basedir" \
+  uv build --sdist --no-build-isolation --offline --out-dir "$distdir"
 
-uv build --out-dir ${distdir}
+cd "$distdir"
 
-cd $distdir
-
-pkg_tar_gz_file=`echo $pkg_name | sed 's/-/_/g'`-${pkg_version}.tar.gz
+pkg_tar_gz_file="$(printf '%s' "$pkg_name" | sed 's/-/_/g')-${pkg_version}.tar.gz"
 
 echo "Checking if $pkg_tar_gz_file exists in dist/ directory."
 
 # print the list of files in current directory
-echo "$(ls)"
+ls
 
-if ! [ -f $pkg_tar_gz_file ]; then
+if [ ! -f "$pkg_tar_gz_file" ]; then
   echo 'Error! Tag version does not match version built using latest package files.'
   exit 1
 fi
 
 # Build a wheel for the source distribution
-uv build --wheel --out-dir ${distdir} $pkg_tar_gz_file
+uv run --locked --only-group build --project "$basedir" \
+  uv build --wheel --no-build-isolation --offline --out-dir "$distdir" "$pkg_tar_gz_file"
 
 # Audit built wheel contents against startup-hook (.pth / sitecustomize.py)
 # and *.data/ injection attacks (e.g., LiteLLM v1.107.0 supply-chain vector).
