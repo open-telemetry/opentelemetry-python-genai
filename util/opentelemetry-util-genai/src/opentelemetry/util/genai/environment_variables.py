@@ -14,16 +14,6 @@ OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT = "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT"
     whenever the logger is enabled; use logger configuration to disable them.
 """
 
-OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH = (
-    "OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH"
-)
-"""
-.. envvar:: OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH
-
-Set to ``true`` (case-insensitive) to enable opt-in ``user_speech`` spans for
-realtime sessions. Defaults to ``false`` (disabled).
-"""
-
 OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK = (
     "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK"
 )

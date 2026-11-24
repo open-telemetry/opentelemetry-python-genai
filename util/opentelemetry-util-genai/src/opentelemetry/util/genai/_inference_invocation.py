@@ -6,7 +6,7 @@ from __future__ import annotations
 import timeit
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import ClassVar, Final
+from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import Context, get_value
@@ -20,10 +20,17 @@ from opentelemetry.trace import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    _CACHE_READ_MODALITY_FIELDS,
+    _GEN_AI_REQUEST_REASONING_LEVEL,
+    _INPUT_MODALITY_FIELDS,
+    _OUTPUT_MODALITY_FIELDS,
     ContextData,
     Error,
     GenAIInvocation,
+    _get_token_usage_attributes,
+    _resolve_finish_reasons,
     _resolve_suppressed_content_and_hook,
+    _set_modality_tokens,
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
@@ -32,7 +39,6 @@ from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
-    Modality,
     ModalityTokens,
     OutputMessage,
     SystemInstructionPart,
@@ -40,40 +46,6 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.types import AttributeValue
 
-_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
-    "gen_ai.usage.cache_write.input_tokens"
-)
-_GEN_AI_USAGE_TEXT_INPUT_TOKENS: Final = "gen_ai.usage.text.input_tokens"
-_GEN_AI_USAGE_IMAGE_INPUT_TOKENS: Final = "gen_ai.usage.image.input_tokens"
-_GEN_AI_USAGE_AUDIO_INPUT_TOKENS: Final = "gen_ai.usage.audio.input_tokens"
-_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS: Final = "gen_ai.usage.text.output_tokens"
-_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.image.output_tokens"
-_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS: Final = "gen_ai.usage.audio.output_tokens"
-_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.text.cache_read.input_tokens"
-)
-_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.image.cache_read.input_tokens"
-)
-_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.audio.cache_read.input_tokens"
-)
-_INPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    Modality.TEXT: "usage_text_input_tokens",
-    Modality.IMAGE: "usage_image_input_tokens",
-    Modality.AUDIO: "usage_audio_input_tokens",
-}
-_OUTPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    Modality.TEXT: "usage_text_output_tokens",
-    Modality.IMAGE: "usage_image_output_tokens",
-    Modality.AUDIO: "usage_audio_output_tokens",
-}
-_CACHE_READ_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    Modality.TEXT: "usage_text_cache_read_input_tokens",
-    Modality.IMAGE: "usage_image_cache_read_input_tokens",
-    Modality.AUDIO: "usage_audio_cache_read_input_tokens",
-}
-_GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
 _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
     "gen_ai.request.previous_response.id"
 )
@@ -147,7 +119,6 @@ class InferenceInvocation(GenAIInvocation):
     """
 
     _exception_event_name = "gen_ai.client.inference.exception"
-    _data_cls: ClassVar[type[InferenceData]] = InferenceData
 
     # Set once the invocation is handed to a stream wrapper.
     _request_stream: bool | None = None
@@ -186,7 +157,7 @@ class InferenceInvocation(GenAIInvocation):
             )
             if v is not None
         }
-        self.data: InferenceData = self._data_cls(
+        self.data: InferenceData = InferenceData(
             provider_name=provider,
             request_model=request_model,
             server_address=server_address,
@@ -217,7 +188,7 @@ class InferenceInvocation(GenAIInvocation):
             attributes=self.data.attributes,
             metric_attributes=self.data.metric_attributes,
             context_key=CLIENT_INFERENCE_CONTEXT_KEY,
-            dataclass_class_object=self._data_cls,
+            dataclass_class_object=InferenceData,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model
@@ -596,6 +567,11 @@ class InferenceInvocation(GenAIInvocation):
 
     @property
     def prompt_variables(self) -> Mapping[str, object] | None:
+        """Variables passed to the prompt template.
+
+        Recorded as the structured ``gen_ai.prompt.variables`` attribute when
+        content capturing is enabled.
+        """
         return self.data.prompt_variable
 
     @prompt_variables.setter
@@ -646,24 +622,7 @@ class InferenceInvocation(GenAIInvocation):
     def _set_modality_tokens(
         self, fields: Mapping[str, str], entries: ModalityTokens | None
     ) -> None:
-        if entries is None:
-            return
-        for field_name in fields.values():
-            setattr(self.data, field_name, None)
-        for modality, token_count in entries:
-            if (
-                not isinstance(token_count, int)
-                or isinstance(token_count, bool)
-                or token_count < 0
-            ):
-                continue
-            # modality may be an enum, whose str() is "MediaModality.AUDIO"
-            # rather than the bare name.
-            field_name = fields.get(
-                str(getattr(modality, "value", modality)).lower()
-            )
-            if field_name is not None:
-                setattr(self.data, field_name, token_count)
+        _set_modality_tokens(self.data, fields, entries)
 
     def _get_message_attributes(
         self, *, for_span: bool
@@ -679,16 +638,10 @@ class InferenceInvocation(GenAIInvocation):
         )
 
     def _get_finish_reasons(self) -> list[str] | None:
-        if self.data.response_finish_reasons is not None:
-            return list(self.data.response_finish_reasons) or None
-        if self.data.output_messages:
-            reasons = [
-                msg.finish_reason
-                for msg in self.data.output_messages
-                if msg.finish_reason
-            ]
-            return reasons or None
-        return None
+        return _resolve_finish_reasons(
+            self.data.response_finish_reasons,
+            self.data.output_messages,
+        )
 
     def record_stream_chunk(self) -> None:
         """Mark the request as streamed and record one output chunk arriving."""
@@ -769,61 +722,11 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_RESPONSE_FINISH_REASONS, self._get_finish_reasons()),
             (GenAI.GEN_AI_RESPONSE_MODEL, self.data.response_model),
             (GenAI.GEN_AI_RESPONSE_ID, self.data.response_id),
-            (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.data.usage_input_tokens),
-            (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.data.usage_output_tokens),
             (
                 GenAI.GEN_AI_REQUEST_CHOICE_COUNT,
                 self.data.request_choice_count,
             ),
             (GenAI.GEN_AI_OUTPUT_TYPE, self.data.output_type),
-            (
-                _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-                self.data.usage_cache_write_input_tokens or None,
-            ),
-            (
-                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-                self.data.usage_cache_read_input_tokens or None,
-            ),
-            (
-                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-                self.data.usage_reasoning_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_INPUT_TOKENS,
-                self.data.usage_text_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
-                self.data.usage_image_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
-                self.data.usage_audio_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
-                self.data.usage_text_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
-                self.data.usage_image_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
-                self.data.usage_audio_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
-                self.data.usage_text_cache_read_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
-                self.data.usage_image_cache_read_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
-                self.data.usage_audio_cache_read_input_tokens or None,
-            ),
             (
                 _GEN_AI_REQUEST_REASONING_LEVEL,
                 self.data.request_reasoning_level,
@@ -850,6 +753,24 @@ class InferenceInvocation(GenAIInvocation):
             ),
         )
         attrs.update({k: v for k, v in optional_attrs if v is not None})
+        attrs.update(
+            _get_token_usage_attributes(
+                input_tokens=self.data.usage_input_tokens,
+                output_tokens=self.data.usage_output_tokens,
+                cache_write_input_tokens=self.data.usage_cache_write_input_tokens,
+                cache_read_input_tokens=self.data.usage_cache_read_input_tokens,
+                reasoning_output_tokens=self.data.usage_reasoning_output_tokens,
+                text_input_tokens=self.data.usage_text_input_tokens,
+                image_input_tokens=self.data.usage_image_input_tokens,
+                audio_input_tokens=self.data.usage_audio_input_tokens,
+                text_output_tokens=self.data.usage_text_output_tokens,
+                image_output_tokens=self.data.usage_image_output_tokens,
+                audio_output_tokens=self.data.usage_audio_output_tokens,
+                text_cache_read_input_tokens=self.data.usage_text_cache_read_input_tokens,
+                image_cache_read_input_tokens=self.data.usage_image_cache_read_input_tokens,
+                audio_cache_read_input_tokens=self.data.usage_audio_cache_read_input_tokens,
+            )
+        )
         return attrs
 
     def _enrich_from_context(self, data: InferenceData) -> None:

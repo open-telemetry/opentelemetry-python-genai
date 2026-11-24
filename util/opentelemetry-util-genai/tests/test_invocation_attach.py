@@ -21,9 +21,6 @@ from opentelemetry.util.genai._inference_invocation import (
     SuppressedInferenceInvocation,
 )
 from opentelemetry.util.genai._invocation import GenAIInvocation
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH,
-)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
@@ -52,11 +49,7 @@ def fixture_span_exporter() -> InMemorySpanExporter:
 
 
 @pytest.fixture(name="handler")
-def fixture_handler(
-    span_exporter: InMemorySpanExporter,
-    monkeypatch: pytest.MonkeyPatch,
-) -> TelemetryHandler:
-    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH, "true")
+def fixture_handler(span_exporter: InMemorySpanExporter) -> TelemetryHandler:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
     return TelemetryHandler(tracer_provider=provider)
@@ -294,6 +287,33 @@ def test_activate_fails_on_escaping_error_and_never_stops(
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes is not None
     assert span.attributes["error.type"] == "ValueError"
+
+
+def test_activate_fails_on_generator_exit(
+    handler: TelemetryHandler,
+    caller_span: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    invocation = handler.inference("prov", _attach_to_context=False)
+
+    class _Suspend:
+        def __await__(self) -> Iterator[None]:
+            yield
+
+    async def call() -> None:
+        with invocation.activate():
+            await _Suspend()
+
+    coroutine = call()
+    coroutine.send(None)
+    assert get_current_span() is invocation.span
+    coroutine.close()
+
+    assert invocation._finished
+    assert get_current_span() is caller_span
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "GeneratorExit"
 
 
 @pytest.mark.parametrize("finish", ["stop", "fail"])

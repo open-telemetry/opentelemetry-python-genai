@@ -454,6 +454,7 @@ def _start_embedding(
     invocation = handler.embedding(
         provider=provider,
         request_model=request_model,
+        _attach_to_context=False,
     )
     if encoding_format := getattr(instance, "encoding_format", None):
         invocation.encoding_formats = [str(encoding_format)]
@@ -897,6 +898,7 @@ def _start_agent_invocation(
         agent_name=str(agent_name) if agent_name else None,
         request_model=str(request_model) if request_model else None,
         conversation_id=conversation_id,
+        _attach_to_context=False,
     )
     description = getattr(instance, "description", None)
     if description:
@@ -928,6 +930,7 @@ def _start_tool_invocation(
     invocation = handler.tool(
         name=str(tool_name),
         tool_type="function",
+        _attach_to_context=False,
     )
     if tool_call_id:
         invocation.tool_call_id = str(tool_call_id)
@@ -959,7 +962,7 @@ def _agent_run(
             wrapped=wrapped,
             is_continue=is_continue,
         )
-        try:
+        with invocation.activate():
             result = wrapped(*args, **kwargs)
             if isinstance(result, Iterator):
                 return AgnoAgentStreamWrapper(
@@ -969,11 +972,8 @@ def _agent_run(
                 )
 
             _set_invocation_output(invocation, result, capture_content)
-            invocation.stop()
-            return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+        invocation.stop()
+        return result
 
     return traced_method
 
@@ -1035,7 +1035,7 @@ def _agent_arun(
                     wrapped=wrapped,
                     is_continue=is_continue,
                 )
-                try:
+                with invocation.activate():
                     awaitable = cast(Awaitable[object], result)
                     response: object = await awaitable
                     if isinstance(response, AsyncIterator):
@@ -1047,11 +1047,8 @@ def _agent_arun(
                     _set_invocation_output(
                         invocation, response, capture_content
                     )
-                    invocation.stop()
-                    return response
-                except BaseException as error:
-                    invocation.fail(error)
-                    raise
+                invocation.stop()
+                return response
 
             return _await_result()
 
@@ -1109,11 +1106,8 @@ def _tool_call_execute(
         kwargs: dict[str, Any],
     ) -> FunctionExecutionResult:
         invocation = _start_tool_invocation(handler, instance)
-        try:
+        with invocation.activate():
             result = wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
         return _handle_tool_result(invocation, instance, result)
 
     return traced_method
@@ -1129,11 +1123,8 @@ def _tool_call_aexecute(
         kwargs: dict[str, Any],
     ) -> FunctionExecutionResult:
         invocation = _start_tool_invocation(handler, instance)
-        try:
+        with invocation.activate():
             result = await wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
         return _handle_tool_result(invocation, instance, result)
 
     return traced_method
@@ -1154,7 +1145,9 @@ def _start_workflow_invocation(
         instance, args, kwargs, wrapped=wrapped, is_continue=is_continue
     )
     invocation = handler.workflow(
-        name=workflow_name, conversation_id=conversation_id
+        name=workflow_name,
+        conversation_id=conversation_id,
+        _attach_to_context=False,
     )
     if is_continue:
         _set_continue_invocation_input(
@@ -1189,7 +1182,7 @@ def _workflow_run(
             wrapped=wrapped,
             is_continue=is_continue,
         )
-        try:
+        with invocation.activate():
             result = wrapped(*args, **kwargs)
             if isinstance(result, Iterator):
                 return AgnoWorkflowStreamWrapper(
@@ -1199,11 +1192,8 @@ def _workflow_run(
                 )
 
             _set_invocation_output(invocation, result, capture_content)
-            invocation.stop()
-            return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
+        invocation.stop()
+        return result
 
     return traced_method
 
@@ -1317,26 +1307,24 @@ def _workflow_arun(
                 )
                 discard_on_exit = True
                 try:
-                    awaitable = cast(Awaitable[object], result)
-                    response: object = await awaitable
-                    if isinstance(response, AsyncIterator):
-                        discard_on_exit = False
-                        return AsyncAgnoWorkflowStreamWrapper(
-                            response,
-                            invocation,
-                            capture_content,
-                            on_close=functools.partial(
-                                _release_run_id, run_id
-                            ),
+                    with invocation.activate():
+                        awaitable = cast(Awaitable[object], result)
+                        response: object = await awaitable
+                        if isinstance(response, AsyncIterator):
+                            discard_on_exit = False
+                            return AsyncAgnoWorkflowStreamWrapper(
+                                response,
+                                invocation,
+                                capture_content,
+                                on_close=functools.partial(
+                                    _release_run_id, run_id
+                                ),
+                            )
+                        _set_invocation_output(
+                            invocation, response, capture_content
                         )
-                    _set_invocation_output(
-                        invocation, response, capture_content
-                    )
                     invocation.stop()
                     return response
-                except BaseException as error:
-                    invocation.fail(error)
-                    raise
                 finally:
                     if discard_on_exit:
                         _release_run_id(run_id)
@@ -1392,6 +1380,7 @@ def _start_background_workflow_invocation(
     invocation = handler.workflow(
         name=workflow_name,
         conversation_id=session_id,
+        _attach_to_context=False,
     )
 
     if capture_content and input_val is not None:
@@ -1428,13 +1417,10 @@ def _workflow_aexecute(
             handler, instance, wrapped, args, kwargs, capture_content
         )
         try:
-            result = await wrapped(*args, **kwargs)
-            _set_invocation_output(invocation, result, capture_content)
-            invocation.stop()
+            with invocation:
+                result = await wrapped(*args, **kwargs)
+                _set_invocation_output(invocation, result, capture_content)
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
         finally:
             _release_run_id(run_id)
 
@@ -1462,21 +1448,21 @@ def _workflow_aexecute_stream(
             handler, instance, wrapped, args, kwargs, capture_content
         )
         try:
-            result = wrapped(*args, **kwargs)
-            if isinstance(result, AsyncIterator):
-                return AsyncAgnoWorkflowStreamWrapper(
-                    result,
-                    invocation,
-                    capture_content,
-                    on_close=functools.partial(_release_run_id, run_id),
-                )
-            _release_run_id(run_id)
-            _set_invocation_output(invocation, result, capture_content)
+            with invocation.activate():
+                result = wrapped(*args, **kwargs)
+                if isinstance(result, AsyncIterator):
+                    return AsyncAgnoWorkflowStreamWrapper(
+                        result,
+                        invocation,
+                        capture_content,
+                        on_close=functools.partial(_release_run_id, run_id),
+                    )
+                _release_run_id(run_id)
+                _set_invocation_output(invocation, result, capture_content)
             invocation.stop()
             return result
-        except BaseException as error:
+        except BaseException:
             _release_run_id(run_id)
-            invocation.fail(error)
             raise
 
     return traced_method
@@ -1510,6 +1496,7 @@ def _workflow_aexecute_workflow_agent(
         invocation = handler.workflow(
             name=workflow_name,
             conversation_id=session_id,
+            _attach_to_context=False,
         )
 
         if capture_content and user_input is not None:
@@ -1526,10 +1513,10 @@ def _workflow_aexecute_workflow_agent(
             _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
 
         try:
-            result = wrapped(*args, **kwargs)
-        except BaseException as error:
+            with invocation.activate():
+                result = wrapped(*args, **kwargs)
+        except BaseException:
             _release_run_id(run_id)
-            invocation.fail(error)
             raise
 
         if isinstance(result, AsyncIterator):
@@ -1546,26 +1533,24 @@ def _workflow_aexecute_workflow_agent(
             async def _await_result() -> object:
                 discard_on_exit = True
                 try:
-                    awaitable = cast(Awaitable[object], result)
-                    response: object = await awaitable
-                    if isinstance(response, AsyncIterator):
-                        discard_on_exit = False
-                        return AsyncAgnoWorkflowStreamWrapper(
-                            response,
-                            invocation,
-                            capture_content,
-                            on_close=functools.partial(
-                                _release_run_id, run_id
-                            ),
+                    with invocation.activate():
+                        awaitable = cast(Awaitable[object], result)
+                        response: object = await awaitable
+                        if isinstance(response, AsyncIterator):
+                            discard_on_exit = False
+                            return AsyncAgnoWorkflowStreamWrapper(
+                                response,
+                                invocation,
+                                capture_content,
+                                on_close=functools.partial(
+                                    _release_run_id, run_id
+                                ),
+                            )
+                        _set_invocation_output(
+                            invocation, response, capture_content
                         )
-                    _set_invocation_output(
-                        invocation, response, capture_content
-                    )
                     invocation.stop()
                     return response
-                except BaseException as error:
-                    invocation.fail(error)
-                    raise
                 finally:
                     if discard_on_exit:
                         _release_run_id(run_id)
@@ -1633,6 +1618,7 @@ def _start_retrieval_invocation(
         request_model=str(request_model)
         if request_model is not None
         else None,
+        _attach_to_context=False,
     )
 
     if invocation.should_capture_content:
@@ -1662,20 +1648,14 @@ def _knowledge_search(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation = _start_retrieval_invocation(
+        with _start_retrieval_invocation(
             handler, instance, args, kwargs, wrapped=wrapped
-        )
-        try:
+        ) as invocation:
             result = wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
-
-        if invocation.should_capture_content and result is not None:
-            invocation.documents = [
-                format_retrieval_document(doc) for doc in result
-            ]
-        invocation.stop()
+            if invocation.should_capture_content and result is not None:
+                invocation.documents = [
+                    format_retrieval_document(doc) for doc in result
+                ]
         return result
 
     return traced_method
@@ -1690,20 +1670,14 @@ def _knowledge_asearch(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation = _start_retrieval_invocation(
+        with _start_retrieval_invocation(
             handler, instance, args, kwargs, wrapped=wrapped
-        )
-        try:
+        ) as invocation:
             result = await wrapped(*args, **kwargs)
-        except BaseException as error:
-            invocation.fail(error)
-            raise
-
-        if invocation.should_capture_content and result is not None:
-            invocation.documents = [
-                format_retrieval_document(doc) for doc in result
-            ]
-        invocation.stop()
+            if invocation.should_capture_content and result is not None:
+                invocation.documents = [
+                    format_retrieval_document(doc) for doc in result
+                ]
         return result
 
     return traced_method

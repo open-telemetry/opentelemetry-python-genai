@@ -11,8 +11,12 @@ the test with ``--vcr-record=once``.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.ollama import OllamaInstrumentor
 from opentelemetry.test_util_genai.instrumentor import instrument
 
@@ -57,3 +61,22 @@ def instrument_with_content(tracer_provider, logger_provider, meter_provider):
         content_capture="SPAN_ONLY",
     ) as instrumentor:
         yield instrumentor
+
+
+@pytest.fixture
+def request_span_capture() -> tuple[
+    list[int],
+    Callable[[Any], None],
+    Callable[[Any], Awaitable[None]],
+]:
+    """Span ids current when each HTTP request is sent, plus sync and async
+    ``event_hooks`` that record them."""
+    seen: list[int] = []
+
+    def hook(_request: Any) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    async def async_hook(_request: Any) -> None:
+        hook(_request)
+
+    return seen, hook, async_hook

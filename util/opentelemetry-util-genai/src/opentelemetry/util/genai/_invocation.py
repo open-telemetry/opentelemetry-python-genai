@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import time
 import timeit
 from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -11,7 +10,7 @@ from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
 from dataclasses import dataclass, field, fields
 from types import TracebackType
-from typing import Any, ClassVar, Self, TypeAlias, cast
+from typing import Any, ClassVar, Final, Self, TypeAlias, cast
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import (
@@ -48,29 +47,71 @@ from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
+    Modality,
+    ModalityTokens,
     OutputMessage,
     SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    gen_ai_json_dumps,
     get_content_capturing_mode,
     object_to_any_value,
 )
 from opentelemetry.util.types import AttributeValue
 
-_GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
+_GEN_AI_PROMPT_VARIABLES: Final = "gen_ai.prompt.variables"
+_GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
+_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
+    "gen_ai.usage.cache_write.input_tokens"
+)
+_GEN_AI_USAGE_TEXT_INPUT_TOKENS: Final = "gen_ai.usage.text.input_tokens"
+_GEN_AI_USAGE_IMAGE_INPUT_TOKENS: Final = "gen_ai.usage.image.input_tokens"
+_GEN_AI_USAGE_AUDIO_INPUT_TOKENS: Final = "gen_ai.usage.audio.input_tokens"
+_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS: Final = "gen_ai.usage.text.output_tokens"
+_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.image.output_tokens"
+_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS: Final = "gen_ai.usage.audio.output_tokens"
+_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.text.cache_read.input_tokens"
+)
+_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.image.cache_read.input_tokens"
+)
+_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.audio.cache_read.input_tokens"
+)
+_INPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    Modality.TEXT: "usage_text_input_tokens",
+    Modality.IMAGE: "usage_image_input_tokens",
+    Modality.AUDIO: "usage_audio_input_tokens",
+}
+_OUTPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    Modality.TEXT: "usage_text_output_tokens",
+    Modality.IMAGE: "usage_image_output_tokens",
+    Modality.AUDIO: "usage_audio_output_tokens",
+}
+_CACHE_READ_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    Modality.TEXT: "usage_text_cache_read_input_tokens",
+    Modality.IMAGE: "usage_image_cache_read_input_tokens",
+    Modality.AUDIO: "usage_audio_cache_read_input_tokens",
+}
 
 
 ContextToken: TypeAlias = Token[Context]
 
 __all__ = [
+    "_CACHE_READ_MODALITY_FIELDS",
+    "_GEN_AI_REQUEST_REASONING_LEVEL",
+    "_INPUT_MODALITY_FIELDS",
+    "_OUTPUT_MODALITY_FIELDS",
     "ContextData",
     "ContextToken",
     "GenAIInvocation",
+    "_get_token_usage_attributes",
     "_is_active_completion_hook",
+    "_resolve_finish_reasons",
     "_resolve_suppressed_content_and_hook",
+    "_set_modality_tokens",
     "get_content_attributes",
 ]
 
@@ -106,7 +147,7 @@ class ContextData:
                 "upload_completion",
             ):
                 continue
-            val = getattr(other, f.name, None)
+            val = getattr(other, f.name)
             if val is not None and (
                 overwrite or getattr(self, f.name) is None
             ):
@@ -288,21 +329,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         # scopes, where detaching it would restore contexts out of order.
         self._with_token: ContextToken | None = None
         self._monotonic_start_s: float = timeit.default_timer()
-        self._monotonic_end_s: float | None = None
-        self._end_time_ns: int | None = None
         self._finished: bool = False
-
-    def mark_end(self) -> None:
-        """Record the operation end timestamp before finalization.
-
-        Used when a completion or interruption signal arrives before final
-        metadata (such as trailing usage), so span and metric durations
-        reflect the observed operation end rather than finalization time.
-        """
-        if self._finished or self._monotonic_end_s is not None:
-            return
-        self._monotonic_end_s = timeit.default_timer()
-        self._end_time_ns = time.time_ns()
 
     @property
     def should_capture_content(self) -> bool:
@@ -359,9 +386,12 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Make this invocation's span the current span inside the block.
 
         Restores the previous context on exit. An exception escaping the block
-        fails the invocation; leaving the block normally does not stop it. Does
-        not change the context once the invocation has finished, while it is
-        attached on creation, or when it does not own a span.
+        fails the invocation, except ``StopIteration`` and
+        ``StopAsyncIteration``: they pass through untouched, so code that raises
+        them inside the block must stop or fail the invocation itself. Leaving
+        the block normally does not stop it. Does not change the context once
+        the invocation has finished, while it is attached on creation, or when
+        it does not own a span.
         """
         token = (
             attach(self.context)
@@ -370,9 +400,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         )
         try:
             yield
-        # Stream wrappers read inside this block: end of iteration and
-        # generator close are not failures.
-        except (StopIteration, StopAsyncIteration, GeneratorExit):
+        # Stream wrappers read inside this block: end of iteration is not a
+        # failure, and the wrapper finishes the invocation itself.
+        except (StopIteration, StopAsyncIteration):
             raise
         except BaseException as error:
             self.fail(error)
@@ -423,19 +453,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             timing for inference only.
         """
 
-    def _get_duration_seconds(self) -> float:
-        """Return operation duration in seconds, using the marked end time if set."""
-        end_s = (
-            self._monotonic_end_s
-            if self._monotonic_end_s is not None
-            else timeit.default_timer()
-        )
-        return max(end_s - self._monotonic_start_s, 0.0)
-
     def _record_client_metrics(self) -> None:
         """Record gen_ai.client.operation.duration and gen_ai.client.token.usage."""
         attributes = self._get_metric_attributes()
-        duration_seconds = self._get_duration_seconds()
+        duration_seconds = max(
+            timeit.default_timer() - self._monotonic_start_s,
+            0.0,
+        )
         self._instruments.operation_duration.record(
             duration_seconds,
             attributes=attributes,
@@ -507,7 +531,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 self._emit_exception_event(error)
         finally:
             self._detach()
-            self.span.end(end_time=self._end_time_ns)
+            self.span.end()
             if self._context_key is not None:
                 self._span_context = set_value(
                     self._context_key, None, context=self._span_context
@@ -578,20 +602,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 detach(token)
 
 
-def _json_dumps_unless_str(value: object) -> str | None:
-    if value is None or isinstance(value, str):
-        return value
-    try:
-        return gen_ai_json_dumps(value, allow_nan=False)
-    except (TypeError, ValueError, RecursionError):
-        pass
-    # Callers may set objects (e.g. models) that weren't converted to AnyValue.
-    converted = object_to_any_value(value)
-    if converted is None or isinstance(converted, str):
-        return converted
-    return gen_ai_json_dumps(converted)
-
-
 def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
@@ -602,15 +612,16 @@ def get_content_attributes(
     for_span: bool,
     content_capturing_mode: ContentCapturingMode | None = None,
 ) -> dict[str, AttributeValue]:
-    """Serialize messages, system instructions, and tool definitions into attributes.
+    """Build structured content attributes for spans or events.
 
     Args:
-        input_messages: Input messages to serialize.
-        output_messages: Output messages to serialize.
-        system_instruction: System instructions to serialize. Passing ``MessagePart``
+        input_messages: Input messages to convert.
+        output_messages: Output messages to convert.
+        system_instruction: System instructions to convert. Passing ``MessagePart``
             is deprecated; use ``SystemInstructionPart``.
-        tool_definitions: Tool definitions to serialize (may be None).
-        prompt_variables: Prompt template variables to serialize (may be None).
+        tool_definitions: Tool definitions to convert (may be None).
+        prompt_variables: Prompt template variables to record as
+            ``gen_ai.prompt.variables`` (may be None).
         for_span: If True, check span content capturing modes;
                   if False, check event content capturing modes.
         content_capturing_mode: Configured content capturing mode; if None,
@@ -661,13 +672,107 @@ def get_content_attributes(
             if tool_definitions
             else None,
         ),
+        (
+            _GEN_AI_PROMPT_VARIABLES,
+            (object_to_any_value(prompt_variables) or None)
+            if prompt_variables
+            else None,
+        ),
     )
-    result: dict[str, AttributeValue] = {
-        key: value for key, value in optional_attrs if value is not None
-    }
-    if prompt_variables:
-        for k, v in prompt_variables.items():
-            serialized = _json_dumps_unless_str(v)
-            if serialized is not None:
-                result[f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}"] = serialized
-    return result
+    return {key: value for key, value in optional_attrs if value is not None}
+
+
+def _set_modality_tokens(
+    target: object,
+    fields_map: Mapping[str, str],
+    entries: ModalityTokens | None,
+) -> None:
+    """Apply per-modality token counts onto ``target`` using ``fields_map``."""
+    if entries is None:
+        return
+    for field_name in fields_map.values():
+        setattr(target, field_name, None)
+    for modality, token_count in entries:
+        if (
+            not isinstance(token_count, int)
+            or isinstance(token_count, bool)
+            or token_count < 0
+        ):
+            continue
+        # modality may be an enum, whose str() is "MediaModality.AUDIO"
+        # rather than the bare name.
+        field_name = fields_map.get(
+            str(getattr(modality, "value", modality)).lower()
+        )
+        if field_name is not None:
+            setattr(target, field_name, token_count)
+
+
+def _resolve_finish_reasons(
+    response_finish_reasons: Sequence[str] | None,
+    output_messages: Sequence[OutputMessage] | None,
+) -> list[str] | None:
+    """Return explicit finish reasons, falling back to deprecated message-level values."""
+    if response_finish_reasons is not None:
+        return list(response_finish_reasons) or None
+    if output_messages:
+        reasons = [
+            msg.finish_reason for msg in output_messages if msg.finish_reason
+        ]
+        return reasons or None
+    return None
+
+
+def _get_token_usage_attributes(
+    *,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_write_input_tokens: int | None,
+    cache_read_input_tokens: int | None,
+    reasoning_output_tokens: int | None,
+    text_input_tokens: int | None,
+    image_input_tokens: int | None,
+    audio_input_tokens: int | None,
+    text_output_tokens: int | None,
+    image_output_tokens: int | None,
+    audio_output_tokens: int | None,
+    text_cache_read_input_tokens: int | None,
+    image_cache_read_input_tokens: int | None,
+    audio_cache_read_input_tokens: int | None,
+) -> dict[str, AttributeValue]:
+    """Return non-empty GenAI token usage attributes for span/event recording."""
+    optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
+        (GenAI.GEN_AI_USAGE_INPUT_TOKENS, input_tokens),
+        (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens),
+        (
+            _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+            cache_write_input_tokens or None,
+        ),
+        (
+            GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+            cache_read_input_tokens or None,
+        ),
+        (
+            GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+            reasoning_output_tokens or None,
+        ),
+        (_GEN_AI_USAGE_TEXT_INPUT_TOKENS, text_input_tokens or None),
+        (_GEN_AI_USAGE_IMAGE_INPUT_TOKENS, image_input_tokens or None),
+        (_GEN_AI_USAGE_AUDIO_INPUT_TOKENS, audio_input_tokens or None),
+        (_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS, text_output_tokens or None),
+        (_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS, image_output_tokens or None),
+        (_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS, audio_output_tokens or None),
+        (
+            _GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
+            text_cache_read_input_tokens or None,
+        ),
+        (
+            _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
+            image_cache_read_input_tokens or None,
+        ),
+        (
+            _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
+            audio_cache_read_input_tokens or None,
+        ),
+    )
+    return {k: v for k, v in optional_attrs if v is not None}

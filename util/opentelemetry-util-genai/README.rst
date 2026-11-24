@@ -185,7 +185,7 @@ unchanged.
 Environment Variables
 ---------------------
 
-This package relies on environment variables to configure capturing of message content.
+Message content capture can be configured through the environment or programmatically.
 By default, message content will not be captured.
 Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of:
 
@@ -194,10 +194,22 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 - ``EVENT_ONLY``: Capture message content in events only.
 - ``SPAN_AND_EVENT``: Capture message content in both spans and events.
 
-Realtime opt-in signals:
+Alternatively, content capture can be configured programmatically by passing a
+``ContentCapturingMode`` as ``content_capturing_mode`` to ``TelemetryHandler``.
+The supplied mode takes precedence over the environment variable. Omit it or
+pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
 
-- ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH``: Set to ``true`` (case-insensitive) to enable
-  opt-in ``user_speech`` spans for realtime sessions. Defaults to ``false`` (disabled).
+.. code-block:: python
+
+    from opentelemetry.util.genai.handler import TelemetryHandler
+    from opentelemetry.util.genai.types import ContentCapturingMode
+
+    handler = TelemetryHandler(
+        content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
+Instrumentations also accept this option via
+``instrument(content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT)``.
 
 When a ``LoggerProvider`` is configured, the package emits ``gen_ai.client.inference.operation.details``
 events (with ``DEBUG`` severity) regardless of the content capturing mode. Message content is
@@ -216,6 +228,12 @@ When content capture is enabled, ``BlobPart.content`` carries raw ``bytes`` insi
 ``bytearray`` attribute values requires `open-telemetry/opentelemetry-python#5855
 <https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased
 version of ``opentelemetry-api``).
+
+For realtime APIs, ``TelemetryHandler.realtime_inference()`` tracks one model generation turn
+and ``TelemetryHandler.user_speech()`` tracks one user utterance.
+``emit_realtime_session_started()`` and ``emit_realtime_session_ended()`` emit events when a
+session opens and closes. Pass the same ``realtime_session_id`` to all of them to tie one
+session together. Use ``TranscriptionPart`` for text transcripts of spoken audio.
 
 When an inference, embeddings, retrieval, fetch response, agent invocation, or tool execution
 operation fails with an exception, the package also emits the operation's exception event (for
@@ -272,6 +290,7 @@ This package sets the following span attributes on LLM invocations:
 - ``gen_ai.input.messages``: Slice([Map({"role": "user", "parts": [{"content": "hello world", "type": "text"}]})])
 - ``gen_ai.output.messages``: Slice([Map({"role": "assistant", "parts": [{"content": "hello back", "type": "text"}], "finish_reason": "stop"})])
 - ``gen_ai.system_instructions``: Slice([Map({"content": "You are a helpful assistant.", "type": "text"})])
+- ``gen_ai.prompt.variables``: Map({"user_name": "Alice", "language": "French"})
 
 **Error attributes:**
 

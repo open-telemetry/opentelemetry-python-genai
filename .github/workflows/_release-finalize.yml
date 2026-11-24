@@ -28,6 +28,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_LOCKED: "true"
+
 jobs:
   finalize:
     permissions:
@@ -50,7 +53,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -125,7 +128,7 @@ jobs:
 
       - name: Bump package version on main after release
         if: inputs.sync_main && inputs.bump_after_release && steps.target.outputs.on_main == 'true'
-        run: uv run --no-project --exclude-newer 3d --with packaging ./scripts/version_utils.py bump --dev
+        run: uv run --only-group packaging ./scripts/version_utils.py bump --dev
 
       - name: Regenerate instrumentations README
         if: inputs.sync_main

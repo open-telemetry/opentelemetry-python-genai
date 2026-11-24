@@ -37,7 +37,7 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
-agno~=3.2.0
+agno~=3.2.1
 wrapt>=2.5.2
 fastapi
 openai

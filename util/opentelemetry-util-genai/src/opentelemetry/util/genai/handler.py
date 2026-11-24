@@ -70,7 +70,6 @@ from opentelemetry.util.genai._inference_invocation import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._realtime_invocation import (
-    SuppressedRealtimeInferenceInvocation,
     emit_realtime_session_ended_event,
     emit_realtime_session_started_event,
     should_capture_realtime_content,
@@ -108,10 +107,7 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
 )
-from opentelemetry.util.genai.utils import (
-    get_content_capturing_mode,
-    get_emit_user_speech,
-)
+from opentelemetry.util.genai.utils import get_content_capturing_mode
 from opentelemetry.util.genai.version import __version__
 
 
@@ -129,6 +125,7 @@ class TelemetryHandler:
         completion_hook: CompletionHook | None = None,
         instrumentation_scope_name: str | None = None,
         instrumentation_scope_version: str | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ):
         """Creates a new telemetry handler.
 
@@ -140,6 +137,9 @@ class TelemetryHandler:
                 backwards compatibility.
             instrumentation_scope_version: the version of the instrumentation
                 library, reported as the instrumentation scope version.
+            content_capturing_mode: overrides the environment-configured
+                content-capturing mode. When None, the value is read from
+                OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
         """
         schema_url = Schemas.V1_37_0.value
         # The scope name and version must describe the same library, so a
@@ -168,8 +168,11 @@ class TelemetryHandler:
             logger_provider,
             schema_url=schema_url,
         )
-        self._content_capturing_mode = get_content_capturing_mode()
-        self._emit_user_speech = get_emit_user_speech()
+        self._content_capturing_mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
         if completion_hook is None or isinstance(
             completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
         ):
@@ -205,33 +208,17 @@ class TelemetryHandler:
         """
         return self._capture_content
 
-    def should_capture_realtime_content(
-        self, *, context: Context | None = None
-    ) -> bool:
+    def should_capture_realtime_content(self) -> bool:
         """Returns True when content should be captured for a realtime inference turn.
 
         Unlike :meth:`should_capture_content`, this accounts for realtime
-        inference's span-only event behavior (``EVENT_ONLY`` without an active
-        completion hook or an opting-in outer inference context does not
-        capture content) and enclosing suppressed inference contexts.
-
-        Args:
-            context: An optional OpenTelemetry Context to inspect for an
-                enclosing inference context. Defaults to the current context.
+        inference's span-only content capture behavior (``EVENT_ONLY`` without
+        an active completion hook does not capture content).
         """
         return should_capture_realtime_content(
             self._content_capturing_mode,
             self._completion_hook,
-            context=context,
         )
-
-    def should_emit_user_speech(self) -> bool:
-        """Returns True when opt-in ``user_speech`` spans are enabled.
-
-        Controlled by the ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH``
-        environment variable (defaults to ``False``).
-        """
-        return self._emit_user_speech
 
     def retrieval(
         self,
@@ -344,15 +331,7 @@ class TelemetryHandler:
         conversation_id: str | None = None,
     ) -> RealtimeInferenceInvocation:
         """Returns a ``realtime_inference`` invocation. Starts span when called."""
-        invocation_cls: type[RealtimeInferenceInvocation] = (
-            SuppressedRealtimeInferenceInvocation
-            if isinstance(
-                get_value(CLIENT_INFERENCE_CONTEXT_KEY, context=context),
-                InferenceData,
-            )
-            else RealtimeInferenceInvocation
-        )
-        return invocation_cls(
+        return RealtimeInferenceInvocation(
             self._tracer,
             self._instruments,
             self._logger,
@@ -378,23 +357,15 @@ class TelemetryHandler:
         context: Context | None = None,
         _attach_to_context: bool = True,
     ) -> UserSpeechInvocation:
-        """Returns a ``user_speech`` invocation (INTERNAL span kind).
-
-        ``user_speech`` is an opt-in semantic convention signal disabled by
-        default. When ``OTEL_INSTRUMENTATION_GENAI_EMIT_USER_SPEECH`` is not
-        enabled, the returned invocation is a no-op that does not start or end
-        a span.
-        """
+        """Returns a ``user_speech`` invocation (INTERNAL span kind). Starts span when called."""
         return UserSpeechInvocation(
             self._tracer,
             self._instruments,
             self._logger,
-            self._completion_hook,
             provider=provider,
             realtime_session_id=realtime_session_id,
             error_type_resolver=error_type_resolver,
             content_capturing_mode=self._content_capturing_mode,
-            start_span=self._emit_user_speech,
             context=context,
             _attach_to_context=_attach_to_context,
         )
