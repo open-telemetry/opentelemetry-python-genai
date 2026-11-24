@@ -34,8 +34,6 @@ try:
         InteractionsResource,
     )
     from google.genai._interactions.types.audio_content import AudioContent
-    from google.genai._interactions.types.content import Content
-    from google.genai._interactions.types.content_param import ContentParam
     from google.genai._interactions.types.document_content import (
         DocumentContent,
     )
@@ -75,8 +73,6 @@ except ImportError:
         )
         from google.genai._gaos.types.interactions import (
             AudioContent,
-            Content,
-            ContentParam,
             DocumentContent,
             FunctionCallStep,
             FunctionResultStep,
@@ -426,7 +422,7 @@ def _media_to_part(
 
 
 def _content_item_to_part(
-    item: Content | ContentParam | dict[str, object] | str,
+    item: object,
 ) -> MessagePart | None:
     if isinstance(item, str):
         return TextPart(content=item)
@@ -442,16 +438,17 @@ def _content_item_to_part(
             data=item.data,
         )
     if isinstance(item, dict):
-        item_type = item.get("type")
+        item_dict = cast(dict[str, object], item)
+        item_type = item_dict.get("type")
         if item_type == "text":
-            text = item.get("text")
+            text = item_dict.get("text")
             return TextPart(content=text if isinstance(text, str) else "")
         if isinstance(item_type, str) and (
             modality := _MEDIA_CONTENT_MODALITIES.get(item_type)
         ):
-            mime_type = item.get("mime_type")
-            uri = item.get("uri")
-            data = item.get("data")
+            mime_type = item_dict.get("mime_type")
+            uri = item_dict.get("uri")
+            data = item_dict.get("data")
             return _media_to_part(
                 modality=modality,
                 mime_type=mime_type if isinstance(mime_type, str) else None,
@@ -486,69 +483,41 @@ def _interactions_input_to_messages(
 
     parts: list[MessagePart] = []
     for item in input_data:
-        if isinstance(item, str):
-            parts.append(TextPart(content=item))
+        if isinstance(item, UserInputStep):
+            user_input_content: Sequence[object] | None = item.content or ()
+        elif isinstance(item, dict) and item.get("type") == "user_input":
+            content = cast(dict[str, object], item).get("content")
+            user_input_content = (
+                content
+                if isinstance(content, Sequence)
+                and not isinstance(content, (str, bytes, bytearray))
+                else ()
+            )
+        else:
+            user_input_content = None
+
+        if user_input_content is not None:
+            for sub_item in user_input_content:
+                if (part := _content_item_to_part(sub_item)) is not None:
+                    parts.append(part)
             continue
 
         if isinstance(item, dict):
             item_dict = cast(dict[str, object], item)
-            message_part = _interaction_item_to_part(item_dict)
-            if message_part is not None:
-                parts.append(message_part)
-                continue
-            item_type = item_dict.get("type")
-            if item_type == "user_input":
-                content = item_dict.get("content")
-                if isinstance(content, Sequence) and not isinstance(
-                    content, (str, bytes, bytearray)
-                ):
-                    for sub_item in content:
-                        if isinstance(sub_item, dict):
-                            part = _content_item_to_part(
-                                cast(dict[str, object], sub_item)
-                            )
-                        elif isinstance(
-                            sub_item,
-                            (
-                                str,
-                                TextContent,
-                                AudioContent,
-                                DocumentContent,
-                                ImageContent,
-                                VideoContent,
-                            ),
-                        ):
-                            part = _content_item_to_part(sub_item)
-                        else:
-                            part = None
-                        if part is not None:
-                            parts.append(part)
-            elif part := _content_item_to_part(item_dict):
+            if (part := _interaction_item_to_part(item_dict)) is not None or (
+                part := _content_item_to_part(item_dict)
+            ) is not None:
                 parts.append(part)
             continue
 
-        if isinstance(item, UserInputStep):
-            for sub_item in item.content or ():
-                if part := _content_item_to_part(sub_item):
-                    parts.append(part)
-            continue
-
-        if isinstance(
-            item,
-            (
-                TextContent,
-                AudioContent,
-                DocumentContent,
-                ImageContent,
-                VideoContent,
-            ),
-        ):
-            if part := _content_item_to_part(item):
-                parts.append(part)
+        if (part := _content_item_to_part(item)) is not None:
+            parts.append(part)
             continue
 
         if isinstance(item, _STEP_MODEL_TYPES):
-            if part := _interaction_item_to_part(cast(Step, item)):
+            if (
+                part := _interaction_item_to_part(cast(Step, item))
+            ) is not None:
                 parts.append(part)
 
     if not parts:
