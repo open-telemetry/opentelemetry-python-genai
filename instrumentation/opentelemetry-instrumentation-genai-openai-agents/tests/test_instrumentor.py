@@ -29,6 +29,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.types import ContentCapturingMode
 
 
 def _registered_processors() -> tuple:
@@ -275,7 +276,65 @@ async def test_runner_records_tool_call_arguments(
         tool_span.attributes["gen_ai.tool.call.result"]
         == "The forecast for Barcelona is sunny."
     )
+    agent_span = spans["invoke_agent test_agent"]
+    assert agent_span.attributes is not None
+    assert agent_span.attributes["gen_ai.tool.definitions"] == (
+        {
+            "name": "_get_weather",
+            "description": "Return a canned forecast for the requested city.",
+            "parameters": {
+                "properties": {"city": {"title": "City", "type": "string"}},
+                "required": ("city",),
+                "title": "_get_weather_args",
+                "type": "object",
+                "additionalProperties": False,
+            },
+            "type": "function",
+        },
+    )
     _assert_agent_call_metrics(metric_reader, span_exporter)
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_runner_records_tool_call_arguments")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_sensitive_data", [True, False])
+async def test_runner_tool_definitions_follow_capture_settings(
+    content_capture: ContentCapturingMode,
+    include_sensitive_data: bool,
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture=content_capture.name,
+    ):
+        agent = agents.Agent(
+            name="test_agent",
+            model="gpt-4o-mini",
+            tools=[_get_weather],
+        )
+        await agents.Runner.run(
+            agent,
+            "what is the weather in Barcelona?",
+            run_config=agents.RunConfig(
+                trace_include_sensitive_data=include_sensitive_data
+            ),
+        )
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    attributes = spans["invoke_agent test_agent"].attributes
+    assert attributes is not None
+    recorded = "gen_ai.tool.definitions" in attributes
+    assert recorded is (
+        content_capture is ContentCapturingMode.SPAN_ONLY
+        and include_sensitive_data
+    )
 
 
 @pytest.mark.vcr

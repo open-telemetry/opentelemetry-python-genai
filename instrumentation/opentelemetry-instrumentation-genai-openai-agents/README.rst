@@ -14,7 +14,9 @@ into spans that mirror the structure of your agent run:
 * **Workflow spans** for an agent run — one per ``Runner.run`` / ``run_sync``
   invocation, named after the run's ``RunConfig.workflow_name``.
 * **Agent spans** for each agent invoked within the workflow, including the
-  agent name.
+  agent name and, with the Responses API model, its tool definitions. They
+  are omitted if the tools change between model calls, and require the Agents
+  SDK's ``trace_include_sensitive_data``.
 * **Tool spans** for function tool calls, capturing the tool arguments and
   result.
 

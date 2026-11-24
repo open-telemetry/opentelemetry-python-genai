@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import gc
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
+import openai.types.responses
 import pytest
 from agents import RunHooks
 from agents.tracing.span_data import (
@@ -16,6 +17,7 @@ from agents.tracing.span_data import (
     HandoffSpanData,
     ResponseSpanData,
 )
+from openai.types.responses import FunctionTool, Response, WebSearchTool
 
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAIRunHooks,
@@ -26,6 +28,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -34,6 +37,9 @@ from opentelemetry.util.genai.invocation import (
     LocalAgentInvocation,
     ToolInvocation,
 )
+
+if TYPE_CHECKING:
+    from openai.types.responses import Tool
 
 
 class _Span:
@@ -563,3 +569,272 @@ def test_state_uses_weakref_so_dropped_spans_are_collected() -> None:
 
     assert len(processor._invocations) == 0
     assert not processor._agent_spans
+
+
+_WEATHER_PARAMETERS = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+    "additionalProperties": False,
+}
+
+
+def _response(*tools: Tool) -> Response:
+    return Response.model_construct(tools=list(tools))
+
+
+def _parsed_response(tools: list[dict[str, object]]) -> Response:
+    return Response.model_validate(
+        {
+            "id": "resp_0",
+            "object": "response",
+            "created_at": 0,
+            "model": "test-model",
+            "output": [],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": tools,
+        }
+    )
+
+
+def _weather_tool() -> FunctionTool:
+    return FunctionTool(
+        type="function",
+        name="get_weather",
+        description="Return the forecast for a city.",
+        parameters=_WEATHER_PARAMETERS,
+        strict=True,
+    )
+
+
+def _lookup_tool() -> FunctionTool:
+    return FunctionTool(
+        type="function", name="lookup", parameters={"type": "object"}
+    )
+
+
+def _run_agent_with_responses(
+    processor: GenAITracingProcessor, *responses: Response | None
+) -> None:
+    agent_span = _Span(AgentSpanData(name="weather_agent"))
+    processor.on_span_start(agent_span)
+    for response in responses:
+        response_span = _Span(
+            ResponseSpanData(response=response), parent_id=agent_span.span_id
+        )
+        processor.on_span_start(response_span)
+        processor.on_span_end(response_span)
+    processor.on_span_end(agent_span)
+
+
+def _agent_span_attributes(
+    span_exporter: InMemorySpanExporter,
+) -> dict[str, Any]:
+    (agent_span,) = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.name.startswith("invoke_agent")
+    ]
+    assert agent_span.attributes is not None
+    return dict(agent_span.attributes)
+
+
+def test_response_tools_recorded_as_agent_tool_definitions(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+
+    _run_agent_with_responses(
+        processor,
+        _response(_weather_tool(), WebSearchTool(type="web_search")),
+    )
+
+    attributes = _agent_span_attributes(span_exporter)
+    assert attributes["gen_ai.tool.definitions"] == (
+        {
+            "name": "get_weather",
+            "description": "Return the forecast for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ("city",),
+                "additionalProperties": False,
+            },
+            "type": "function",
+        },
+        {"name": "web_search", "type": "web_search"},
+    )
+
+
+def test_tool_definitions_recorded_when_every_turn_matches(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+
+    _run_agent_with_responses(
+        processor,
+        _response(_weather_tool(), _lookup_tool()),
+        _response(_weather_tool(), _lookup_tool()),
+    )
+
+    attributes = _agent_span_attributes(span_exporter)
+    assert [
+        definition["name"]
+        for definition in attributes["gen_ai.tool.definitions"]
+    ] == ["get_weather", "lookup"]
+
+
+@pytest.mark.parametrize(
+    "turns",
+    [
+        pytest.param(
+            ((_weather_tool(), _lookup_tool()), (_weather_tool(),)),
+            id="tool-removed",
+        ),
+        pytest.param(
+            ((_weather_tool(),), (_weather_tool(), _lookup_tool())),
+            id="tool-added",
+        ),
+        pytest.param(((), (_weather_tool(),)), id="first-turn-empty"),
+        pytest.param(
+            ((_weather_tool(),), (_lookup_tool(),), (_weather_tool(),)),
+            id="changes-back",
+        ),
+    ],
+)
+def test_tool_definitions_omitted_when_turns_differ(
+    turns: tuple[tuple[Tool, ...], ...],
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    hook = MagicMock(spec=CompletionHook)
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider, completion_hook=hook
+    )
+    processor = GenAITracingProcessor(handler, provider="openai")
+
+    _run_agent_with_responses(
+        processor, *(_response(*tools) for tools in turns)
+    )
+
+    assert "gen_ai.tool.definitions" not in _agent_span_attributes(
+        span_exporter
+    )
+    (call,) = hook.on_completion.call_args_list
+    assert call.kwargs["tool_definitions"] is None
+
+
+@pytest.mark.parametrize(
+    "responses",
+    [
+        pytest.param((None,), id="no-response"),
+        pytest.param((_response(),), id="no-tools"),
+        pytest.param((), id="no-response-span"),
+    ],
+)
+def test_tool_definitions_omitted_without_response_tools(
+    responses: tuple[Response | None, ...],
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    hook = MagicMock(spec=CompletionHook)
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider, completion_hook=hook
+    )
+    processor = GenAITracingProcessor(handler, provider="openai")
+
+    _run_agent_with_responses(processor, *responses)
+
+    assert "gen_ai.tool.definitions" not in _agent_span_attributes(
+        span_exporter
+    )
+    (call,) = hook.on_completion.call_args_list
+    assert call.kwargs["tool_definitions"] is None
+
+
+def test_mcp_tools_named_by_server_label(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    servers = _parsed_response(
+        [
+            {"type": "mcp", "server_label": "github"},
+            {"type": "mcp", "server_label": "jira"},
+        ]
+    )
+
+    _run_agent_with_responses(processor, servers, servers)
+
+    attributes = _agent_span_attributes(span_exporter)
+    assert attributes["gen_ai.tool.definitions"] == (
+        {"name": "github", "type": "mcp"},
+        {"name": "jira", "type": "mcp"},
+    )
+
+
+@pytest.mark.skipif(
+    not hasattr(openai.types.responses, "NamespaceTool"),
+    reason="tool namespaces need a newer openai",
+)
+def test_namespace_tool_named_by_namespace(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+
+    _run_agent_with_responses(
+        processor,
+        _parsed_response(
+            [
+                {
+                    "type": "namespace",
+                    "name": "billing",
+                    "description": "Billing tools.",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "refund",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                }
+            ]
+        ),
+    )
+
+    attributes = _agent_span_attributes(span_exporter)
+    assert attributes["gen_ai.tool.definitions"] == (
+        {"name": "billing", "type": "namespace"},
+    )
