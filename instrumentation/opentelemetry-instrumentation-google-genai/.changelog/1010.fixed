@@ -1,0 +1,1 @@
+report finish reasons with semantic-convention values (`stop`, `length`, `content_filter`, `error`) and report `error` for a candidate without one
