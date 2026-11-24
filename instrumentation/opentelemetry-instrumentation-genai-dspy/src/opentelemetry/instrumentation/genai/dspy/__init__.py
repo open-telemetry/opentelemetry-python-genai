@@ -39,6 +39,7 @@ class DSPyInstrumentor(BaseInstrumentor):
             completion_hook=completion_hook,
             instrumentation_scope_name=__package__,
             instrumentation_scope_version=__version__,
+            content_capturing_mode=kwargs.get("content_capturing_mode"),
         )
         patch_dspy(handler)
 

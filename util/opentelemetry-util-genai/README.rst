@@ -125,11 +125,11 @@ cleanup operation with ``_execution_context()``. Context is restored before
 returning a chunk to the consumer. Generator ``send``/``throw`` and
 ``asend``/``athrow`` also use this scope when the underlying stream supports them.
 
-For invocation-backed streams, pass the invocation to the base constructor
-(``super().__init__(stream, invocation)``) and call ``invocation.suspend()``
-before returning the stream. The base wrapper then makes the suspended invocation
-current during reads, cleanup and finalization of an abandoned stream, so no
-``_execution_context()`` override is needed.
+For invocation-backed streams, create the invocation with
+``_attach_to_context=False`` and pass it to the base constructor
+(``super().__init__(stream, invocation)``). The base wrapper then makes the
+invocation current during reads, cleanup and finalization of an abandoned
+stream, so no ``_execution_context()`` override is needed.
 Keep finalization in the existing ``_on_stream_end`` and ``_on_stream_error`` hooks.
 
 
@@ -175,16 +175,17 @@ Set ``RetrievalInvocation.documents`` using
         invocation.documents = [RetrievalDocument(id="doc-1", score=0.9)]
 
 The model contains only the optional ``id`` and ``score`` fields; unset
-fields serialize as JSON ``null``. Documents are recorded in
-``gen_ai.retrieval.documents`` only in ``SPAN_ONLY`` or ``SPAN_AND_EVENT``
-content-capture mode. Passing dictionaries is deprecated, but existing
-dictionary payloads continue to serialize unchanged.
+fields are omitted when recorded. Documents are recorded as structured
+values in ``gen_ai.retrieval.documents`` only in ``SPAN_ONLY`` or
+``SPAN_AND_EVENT`` content-capture mode. Passing dictionaries is
+deprecated, but existing dictionary payloads continue to be recorded
+unchanged.
 
 
 Environment Variables
 ---------------------
 
-This package relies on environment variables to configure capturing of message content.
+Message content capture can be configured through the environment or programmatically.
 By default, message content will not be captured.
 Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of:
 
@@ -193,9 +194,26 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 - ``EVENT_ONLY``: Capture message content in events only.
 - ``SPAN_AND_EVENT``: Capture message content in both spans and events.
 
+Alternatively, content capture can be configured programmatically by passing a
+``ContentCapturingMode`` as ``content_capturing_mode`` to ``TelemetryHandler``.
+The supplied mode takes precedence over the environment variable. Omit it or
+pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.handler import TelemetryHandler
+    from opentelemetry.util.genai.types import ContentCapturingMode
+
+    handler = TelemetryHandler(
+        content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
+Instrumentations also accept this option via
+``instrument(content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT)``.
+
 When a ``LoggerProvider`` is configured, the package emits ``gen_ai.client.inference.operation.details``
 events (with ``DEBUG`` severity) regardless of the content capturing mode. Message content is
-included (as dictionaries instead of JSON strings) only in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
+included as structured dictionaries in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
 To suppress these events while keeping a ``LoggerProvider`` active, configure your logger or
 ``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
 <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
@@ -252,9 +270,10 @@ This package sets the following span attributes on LLM invocations:
 
 **Content attributes (sensitive, requires content capturing enabled):**
 
-- ``gen_ai.input.messages``: Str('[{"role": "user", "parts": [{"content": "hello world", "type": "text"}]}]')
-- ``gen_ai.output.messages``: Str('[{"role": "assistant", "parts": [{"content": "hello back", "type": "text"}], "finish_reason": "stop"}]')
-- ``gen_ai.system_instructions``: Str('[{"content": "You are a helpful assistant.", "type": "text"}]')
+- ``gen_ai.input.messages``: Slice([Map({"role": "user", "parts": [{"content": "hello world", "type": "text"}]})])
+- ``gen_ai.output.messages``: Slice([Map({"role": "assistant", "parts": [{"content": "hello back", "type": "text"}], "finish_reason": "stop"})])
+- ``gen_ai.system_instructions``: Slice([Map({"content": "You are a helpful assistant.", "type": "text"})])
+- ``gen_ai.prompt.variables``: Map({"user_name": "Alice", "language": "French"})
 
 **Error attributes:**
 

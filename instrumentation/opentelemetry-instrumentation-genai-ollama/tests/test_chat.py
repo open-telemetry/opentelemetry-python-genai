@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import gc
 import inspect
-import json
 from typing import Any
 
 import ollama
@@ -22,6 +21,7 @@ from opentelemetry.semconv.attributes import (
     error_attributes,
     server_attributes,
 )
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.trace import StatusCode
 
 from .conftest import CHAT_MODEL, HOST, REASONING_MODEL
@@ -52,7 +52,7 @@ def get_weather(city: str) -> str:
 
 
 def _messages(span: Any, key: str) -> list[dict[str, Any]]:
-    return json.loads(span.attributes[key])
+    return get_content_attribute(span.attributes, key)
 
 
 def test_chat_records_a_chat_span(instrument_with_content, span_exporter, vcr):
@@ -79,7 +79,6 @@ def test_chat_records_a_chat_span(instrument_with_content, span_exporter, vcr):
         {
             "role": "user",
             "parts": [{"type": "text", "content": MESSAGES[0]["content"]}],
-            "name": None,
         }
     ]
     (output,) = _messages(span, GenAI.GEN_AI_OUTPUT_MESSAGES)
@@ -193,6 +192,37 @@ def test_chat_stream_span_is_not_current_between_reads(
     assert len(span_exporter.get_finished_spans()) == 1
 
 
+def test_chat_span_is_current_only_during_the_request(
+    instrument_no_content, span_exporter, vcr, request_span_capture
+):
+    seen, hook, _ = request_span_capture
+    with vcr.use_cassette("test_chat_records_a_chat_span.yaml"):
+        ollama.Client(host=HOST, event_hooks={"request": [hook]}).chat(
+            model=CHAT_MODEL, messages=MESSAGES
+        )
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+def test_chat_stream_request_runs_under_the_chat_span(
+    instrument_no_content, span_exporter, vcr, request_span_capture
+):
+    seen, hook, _ = request_span_capture
+    with vcr.use_cassette(
+        "test_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = ollama.Client(
+            host=HOST, event_hooks={"request": [hook]}
+        ).chat(model=CHAT_MODEL, messages=MESSAGES, stream=True)
+        for _ in stream:
+            assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
 def test_chat_stream_closed_after_caller_error_ends_span(
     instrument_no_content, span_exporter, vcr
 ):
@@ -245,7 +275,6 @@ def test_chat_stream_records_tool_calls(
     assert output["parts"] == [
         {
             "type": "tool_call",
-            "id": None,
             "name": "get_weather",
             "arguments": {"city": "Paris"},
         }
@@ -309,13 +338,14 @@ def test_chat_records_tool_calls(
     assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_call",
     )
-    (definition,) = json.loads(span.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])
+    (definition,) = get_content_attribute(
+        span.attributes, GenAI.GEN_AI_TOOL_DEFINITIONS
+    )
     assert definition["name"] == "get_weather"
     (output,) = _messages(span, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert output["parts"] == [
         {
             "type": "tool_call",
-            "id": None,
             "name": "get_weather",
             "arguments": {"city": "Paris"},
         }
@@ -353,17 +383,13 @@ def test_chat_records_tool_results_in_input_messages(
     assert inputs[1]["parts"] == [
         {
             "type": "tool_call",
-            "id": None,
             "name": "get_weather",
             "arguments": {"city": "Paris"},
         }
     ]
     assert inputs[2] == {
         "role": "tool",
-        "parts": [
-            {"type": "tool_call_response", "id": None, "response": "sunny"}
-        ],
-        "name": None,
+        "parts": [{"type": "tool_call_response", "response": "sunny"}],
     }
 
 
@@ -547,7 +573,14 @@ def test_chat_with_a_tool_generator_sends_every_tool(
 
     assert response.message.tool_calls
     (span,) = span_exporter.get_finished_spans()
-    assert len(json.loads(span.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])) == 1
+    assert (
+        len(
+            get_content_attribute(
+                span.attributes, GenAI.GEN_AI_TOOL_DEFINITIONS
+            )
+        )
+        == 1
+    )
 
 
 def test_chat_stream_error_is_recorded(
@@ -584,3 +617,4 @@ def test_abandoned_stream_still_ends_its_span(
 
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "_OTHER"

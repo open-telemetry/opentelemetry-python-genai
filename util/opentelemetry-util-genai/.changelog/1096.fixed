@@ -1,0 +1,1 @@
+`activate()` now fails the invocation when `GeneratorExit` escapes the block, such as an async call whose coroutine is closed mid-await, instead of leaving its span open.

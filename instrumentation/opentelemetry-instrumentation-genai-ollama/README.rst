@@ -66,6 +66,19 @@ Message content capture is controlled by
 ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``. Supported values are
 ``no_content``, ``span_only``, ``event_only``, and ``span_and_event``.
 
+Alternatively, content capture can be configured programmatically by passing a
+``ContentCapturingMode`` as ``content_capturing_mode`` to ``instrument()``.
+The supplied mode takes precedence over the environment variable. Omit it or
+pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import ContentCapturingMode
+
+    OllamaInstrumentor().instrument(
+        content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
 Instead of recording message content inline, prompts and completions can be
 uploaded to external storage via a completion hook. To enable the built-in
 upload hook, set:
