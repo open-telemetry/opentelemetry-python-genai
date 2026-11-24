@@ -1,0 +1,1 @@
+Emit agent lifecycle events (paused, checkpointed, resumed) for LangGraph durable executions.
