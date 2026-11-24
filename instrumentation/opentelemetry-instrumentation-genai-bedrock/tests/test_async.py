@@ -1758,17 +1758,41 @@ class _RecordingAsyncEventStream(_MockAsyncEventStream):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_id", "span_prefix", "capture_enabled"),
+    [
+        (MODEL_ID, "chat", True),
+        (MODEL_ID, "chat", False),
+        (EMBEDDING_MODEL_ID, "embeddings", False),
+    ],
+)
 async def test_async_invoke_model_aenter_activates_invocation_span(
+    model_id: str,
+    span_prefix: str,
+    capture_enabled: bool,
     async_bedrock_client,
-    instrument_with_content,
     span_exporter,
     tracer_provider,
+    request: pytest.FixtureRequest,
 ) -> None:
-    """Transport entry and exit run under the chat span, restoring caller."""
-    body_content = _anthropic_body("Async invoke context")
+    """Transport entry runs under the invocation span and restores caller."""
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_enabled
+        else "instrument_no_content"
+    )
+    if span_prefix == "embeddings":
+        request_body = '{"inputText":"Embed entry"}'
+        body_content = b'{"embedding":[0.1,0.2,0.3],"inputTextTokenCount":3}'
+    else:
+        request_body = (
+            '{"anthropic_version":"bedrock-2023-05-31",'
+            '"messages":[{"role":"user","content":"Hi"}]}'
+        )
+        body_content = _anthropic_body("Async invoke context")
+
     observed_enter: list[Any] = []
-    observed_close: list[Any] = []
-    raw_response = _FakeHTTPResponse(body_content, observed_close)
+    raw_response = _FakeHTTPResponse(body_content)
 
     with _stub(
         async_bedrock_client,
@@ -1781,11 +1805,11 @@ async def test_async_invoke_model_aenter_activates_invocation_span(
                 observed_enter=observed_enter,
             ),
         },
-        modelId=MODEL_ID,
-        body="{}",
+        modelId=model_id,
+        body=request_body,
     ):
         response = await async_bedrock_client.invoke_model(
-            modelId=MODEL_ID, body="{}"
+            modelId=model_id, body=request_body
         )
 
         tracer = tracer_provider.get_tracer(__name__)
@@ -1794,32 +1818,49 @@ async def test_async_invoke_model_aenter_activates_invocation_span(
             async with response["body"] as body:
                 assert body is response["body"]
                 assert trace.get_current_span() is caller_span
-                first_chunk = await body.read(16)
-                assert first_chunk == body_content[:16]
+                assert await body.read() == body_content
                 assert trace.get_current_span() is caller_span
             assert trace.get_current_span() is caller_span
 
-    chat_span = next(
-        s
-        for s in span_exporter.get_finished_spans()
-        if s.name == f"chat {MODEL_ID}"
-    )
-    chat_span_id = chat_span.get_span_context().span_id
+    inv_spans = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert len(inv_spans) == 1
+    inv_span = inv_spans[0]
+    assert inv_span.name == f"{span_prefix} {model_id}"
+    inv_span_id = inv_span.get_span_context().span_id
     caller_span_id = caller_span.get_span_context().span_id
-    assert chat_span_id != caller_span_id
+    assert inv_span_id != caller_span_id
     assert observed_enter
     assert all(
-        span.get_span_context().span_id == chat_span_id
+        span.get_span_context().span_id == inv_span_id
         for span in observed_enter
     )
-    assert observed_close
-    assert all(
-        span.get_span_context().span_id == chat_span_id
-        for span in observed_close
-    )
+    if capture_enabled:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES in inv_span.attributes
+    else:
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in inv_span.attributes
+        assert (
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in inv_span.attributes
+        )
+    if span_prefix == "embeddings":
+        assert (
+            inv_span.attributes[
+                GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
+            ]
+            == 3
+        )
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_id", "span_prefix", "capture_enabled"),
+    [
+        (MODEL_ID, "chat", True),
+        (MODEL_ID, "chat", False),
+        (EMBEDDING_MODEL_ID, "embeddings", False),
+    ],
+)
 @pytest.mark.parametrize(
     ("error_cls", "error_msg", "expected_error_type"),
     [
@@ -1832,20 +1873,37 @@ async def test_async_invoke_model_aenter_activates_invocation_span(
     ],
 )
 async def test_async_invoke_model_aenter_failure_and_cancellation(
+    model_id: str,
+    span_prefix: str,
+    capture_enabled: bool,
     error_cls: type[BaseException],
     error_msg: str,
     expected_error_type: str,
     async_bedrock_client,
-    instrument_with_content,
     span_exporter,
     tracer_provider,
+    request: pytest.FixtureRequest,
 ) -> None:
     """Entry failure or cancellation re-raises unchanged, restores caller, and fails one span."""
     import gc
 
     from opentelemetry.trace import StatusCode
 
-    body_content = _anthropic_body("Async invoke entry failure")
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_enabled
+        else "instrument_no_content"
+    )
+    if span_prefix == "embeddings":
+        request_body = '{"inputText":"Embed entry failure"}'
+        body_content = b'{"embedding":[0.1,0.2],"inputTextTokenCount":3}'
+    else:
+        request_body = (
+            '{"anthropic_version":"bedrock-2023-05-31",'
+            '"messages":[{"role":"user","content":"Hi"}]}'
+        )
+        body_content = _anthropic_body("Async invoke entry failure")
+
     enter_error = error_cls(error_msg)
     observed_enter: list[Any] = []
     raw_response = _FakeHTTPResponse(body_content)
@@ -1862,11 +1920,11 @@ async def test_async_invoke_model_aenter_failure_and_cancellation(
                 enter_error=enter_error,
             ),
         },
-        modelId=MODEL_ID,
-        body="{}",
+        modelId=model_id,
+        body=request_body,
     ):
         response = await async_bedrock_client.invoke_model(
-            modelId=MODEL_ID, body="{}"
+            modelId=model_id, body=request_body
         )
 
         tracer = tracer_provider.get_tracer(__name__)
@@ -1890,19 +1948,24 @@ async def test_async_invoke_model_aenter_failure_and_cancellation(
         del response
         gc.collect()
 
-    chat_spans = [
+    inv_spans = [
         s for s in span_exporter.get_finished_spans() if s.name != "caller"
     ]
-    assert len(chat_spans) == 1
-    chat_span = chat_spans[0]
-    assert chat_span.name == f"chat {MODEL_ID}"
-    assert chat_span.status.status_code == StatusCode.ERROR
+    assert len(inv_spans) == 1
+    inv_span = inv_spans[0]
+    assert inv_span.name == f"{span_prefix} {model_id}"
+    assert inv_span.status.status_code == StatusCode.ERROR
     assert (
-        chat_span.attributes[ErrorAttributes.ERROR_TYPE] == expected_error_type
+        inv_span.attributes[ErrorAttributes.ERROR_TYPE] == expected_error_type
     )
+    if not capture_enabled:
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in inv_span.attributes
+        assert (
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in inv_span.attributes
+        )
     assert observed_enter
     assert all(
-        span.get_span_context().span_id == chat_span.get_span_context().span_id
+        span.get_span_context().span_id == inv_span.get_span_context().span_id
         for span in observed_enter
     )
 
