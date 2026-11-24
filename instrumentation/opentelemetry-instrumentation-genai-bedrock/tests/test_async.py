@@ -117,6 +117,29 @@ class _FakeHTTPResponse:
         self.close()
 
 
+class _ProbingStreamingBody(AioStreamingBody):
+    """Real AioStreamingBody probing span context and errors in __aenter__."""
+
+    def __init__(
+        self,
+        raw_stream: _FakeHTTPResponse,
+        content_length: int,
+        *,
+        observed_enter: list[Any] | None = None,
+        enter_error: BaseException | None = None,
+    ) -> None:
+        super().__init__(raw_stream, content_length)
+        self._self_observed_enter = observed_enter
+        self._self_enter_error = enter_error
+
+    async def __aenter__(self) -> Any:
+        if self._self_observed_enter is not None:
+            self._self_observed_enter.append(trace.get_current_span())
+        if self._self_enter_error is not None:
+            raise self._self_enter_error
+        return await super().__aenter__()
+
+
 def _streaming_body(data: bytes | None = None) -> AioStreamingBody:
     payload = _anthropic_body() if data is None else data
     return AioStreamingBody(_FakeHTTPResponse(payload), len(payload))
@@ -1723,10 +1746,211 @@ class _RecordingAsyncEventStream(_MockAsyncEventStream):
     def __init__(self, events: list[dict[str, Any]]) -> None:
         super().__init__(events)
         self.seen: list[int] = []
+        self.close_seen: list[int] = []
+
+    def close(self) -> None:
+        self.close_seen.append(_current_span_id())
+        super().close()
 
     async def __anext__(self) -> dict[str, Any]:
         self.seen.append(_current_span_id())
         return await super().__anext__()
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_aenter_activates_invocation_span(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+    tracer_provider,
+) -> None:
+    """Transport entry and exit run under the chat span, restoring caller."""
+    body_content = _anthropic_body("Async invoke context")
+    observed_enter: list[Any] = []
+    observed_close: list[Any] = []
+    raw_response = _FakeHTTPResponse(body_content, observed_close)
+
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": _ProbingStreamingBody(
+                raw_response,
+                len(body_content),
+                observed_enter=observed_enter,
+            ),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+            assert trace.get_current_span() is caller_span
+            async with response["body"] as body:
+                assert body is response["body"]
+                assert trace.get_current_span() is caller_span
+                first_chunk = await body.read(16)
+                assert first_chunk == body_content[:16]
+                assert trace.get_current_span() is caller_span
+            assert trace.get_current_span() is caller_span
+
+    chat_span = next(
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name == f"chat {MODEL_ID}"
+    )
+    chat_span_id = chat_span.get_span_context().span_id
+    caller_span_id = caller_span.get_span_context().span_id
+    assert chat_span_id != caller_span_id
+    assert observed_enter
+    assert all(
+        span.get_span_context().span_id == chat_span_id
+        for span in observed_enter
+    )
+    assert observed_close
+    assert all(
+        span.get_span_context().span_id == chat_span_id
+        for span in observed_close
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_cls", "error_msg", "expected_error_type"),
+    [
+        (RuntimeError, "transport entry failed", "RuntimeError"),
+        (
+            asyncio.CancelledError,
+            "entry cancelled",
+            "asyncio.exceptions.CancelledError",
+        ),
+    ],
+)
+async def test_async_invoke_model_aenter_failure_and_cancellation(
+    error_cls: type[BaseException],
+    error_msg: str,
+    expected_error_type: str,
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+    tracer_provider,
+) -> None:
+    """Entry failure or cancellation re-raises unchanged, restores caller, and fails one span."""
+    import gc
+
+    from opentelemetry.trace import StatusCode
+
+    body_content = _anthropic_body("Async invoke entry failure")
+    enter_error = error_cls(error_msg)
+    observed_enter: list[Any] = []
+    raw_response = _FakeHTTPResponse(body_content)
+
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": _ProbingStreamingBody(
+                raw_response,
+                len(body_content),
+                observed_enter=observed_enter,
+                enter_error=enter_error,
+            ),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+            with pytest.raises(error_cls) as exc_info:
+                async with response["body"]:
+                    pytest.fail("__aenter__ should have raised")
+            assert exc_info.value is enter_error
+            assert trace.get_current_span() is caller_span
+            assert (
+                len(
+                    [
+                        s
+                        for s in span_exporter.get_finished_spans()
+                        if s.name != "caller"
+                    ]
+                )
+                == 1
+            )
+
+        del response
+        gc.collect()
+
+    chat_spans = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert len(chat_spans) == 1
+    chat_span = chat_spans[0]
+    assert chat_span.name == f"chat {MODEL_ID}"
+    assert chat_span.status.status_code == StatusCode.ERROR
+    assert (
+        chat_span.attributes[ErrorAttributes.ERROR_TYPE] == expected_error_type
+    )
+    assert observed_enter
+    assert all(
+        span.get_span_context().span_id == chat_span.get_span_context().span_id
+        for span in observed_enter
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_converse_stream_in_task_activates_reads_and_close(
+    async_bedrock_client,
+    instrument_no_content,
+    span_exporter,
+    tracer_provider,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Event-stream reads and cleanup in another task activate chat span and restore task context."""
+    stream = _RecordingAsyncEventStream(CONVERSE_STREAM_EVENTS)
+    with _stub(
+        async_bedrock_client,
+        "converse_stream",
+        {"stream": stream},
+        modelId=NOVA_MODEL_ID,
+        messages=[],
+    ):
+        response = await async_bedrock_client.converse_stream(
+            modelId=NOVA_MODEL_ID, messages=[]
+        )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+
+            async def consume_first_and_exit() -> None:
+                assert trace.get_current_span() is caller_span
+                async with response["stream"] as event_stream:
+                    assert trace.get_current_span() is caller_span
+                    async for _ in event_stream:
+                        assert trace.get_current_span() is caller_span
+                        break
+                assert trace.get_current_span() is caller_span
+
+            await asyncio.create_task(consume_first_and_exit())
+            assert trace.get_current_span() is caller_span
+
+    assert "Failed to detach context" not in caplog.text
+    chat_span = next(
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name == f"chat {NOVA_MODEL_ID}"
+    )
+    assert stream.seen == [chat_span.context.span_id]
+    assert stream.close_seen == [chat_span.context.span_id]
 
 
 @pytest.mark.asyncio
