@@ -30,7 +30,6 @@ from opentelemetry.util.genai._inference_invocation import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
-from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.stream import (
     AbandonedStreamError,
@@ -1811,7 +1810,6 @@ def _started_tool_invocation():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="streaming_tool",
         content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
     )
@@ -2289,7 +2287,6 @@ def _suspended_tool_invocation():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="abandoned_tool",
     )
     invocation.suspend()
@@ -2388,7 +2385,6 @@ def _parent_and_attached_invocation():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="attached_tool",
     )
     assert get_current_span() is invocation.span
@@ -2483,7 +2479,6 @@ def test_tool_stream_wrapper_records_no_chunk_timing_metrics():
             MeterProvider(metric_readers=[reader]).get_meter(__name__)
         ),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="metrics_tool",
     )
     assert list(SyncToolStreamWrapper(iter(["a", "b"]), invocation)) == [
@@ -2508,7 +2503,6 @@ def test_tool_stream_wrapper_activates_unattached_tool_invocation():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="detached_tool",
         _attach_to_context=False,
     )

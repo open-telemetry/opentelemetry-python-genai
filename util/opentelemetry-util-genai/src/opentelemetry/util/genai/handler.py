@@ -422,7 +422,6 @@ class TelemetryHandler:
             self._tracer,
             self._instruments,
             self._logger,
-            self._completion_hook,
             name,
             tool_type=tool_type,
             agent_name=agent_name,

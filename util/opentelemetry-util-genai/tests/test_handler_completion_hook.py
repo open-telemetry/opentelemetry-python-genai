@@ -300,7 +300,13 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         emb_inv.stop()
 
         tool_inv = handler.tool("get_weather")
+        self.assertFalse(tool_inv.should_capture_content)
+        tool_inv.arguments = {"city": "Paris"}
+        tool_inv.tool_result = "sunny"
         tool_inv.stop()
+
+        failed_tool_inv = handler.tool("get_weather")
+        failed_tool_inv.fail(RuntimeError("tool failed"))
 
         hook.on_completion.assert_not_called()
 

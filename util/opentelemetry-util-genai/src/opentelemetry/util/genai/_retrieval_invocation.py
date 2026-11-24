@@ -314,7 +314,7 @@ class SuppressedRetrievalInvocation(RetrievalInvocation):
             self._capture_content_to_context,
             _upload_completion,
             effective_content_mode,
-            _effective_completion_hook,
+            _,
         ) = _resolve_suppressed_content_and_hook(
             ctx_data, content_capturing_mode, None
         )
