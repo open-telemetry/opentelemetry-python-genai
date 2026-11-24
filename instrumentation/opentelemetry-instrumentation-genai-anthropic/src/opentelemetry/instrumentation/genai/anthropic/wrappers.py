@@ -128,6 +128,44 @@ _DRAINING_HELPERS = frozenset(
 )
 
 
+def _close_text_source(text_stream: object) -> None:
+    """Close the SDK generator behind a scoped ``text_stream``.
+
+    Closing the adapter the caller iterates does not reach the generator the
+    SDK handed out, so its frame -- and whatever the read left suspended in it
+    -- would stay alive. A close that fails is logged rather than raised: the
+    caller is abandoning the stream, and a ``GeneratorExit`` in flight must not
+    be displaced by the cleanup's own error.
+    """
+    close = getattr(text_stream, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:  # pylint: disable=broad-exception-caught
+        _logger.debug("error closing the SDK text stream", exc_info=True)
+
+
+async def _aclose_text_source(text_stream: object) -> None:
+    """Async counterpart of ``_close_text_source``.
+
+    Async generators spell it ``aclose``; an SDK exposing an awaitable
+    ``close`` instead (or a synchronous one) is handled the same way the
+    stream wrapper handles its own close.
+    """
+    close = getattr(text_stream, "aclose", None)
+    if close is None:
+        close = getattr(text_stream, "close", None)
+    if not callable(close):
+        return
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except Exception:  # pylint: disable=broad-exception-caught
+        _logger.debug("error closing the SDK text stream", exc_info=True)
+
+
 class _StreamWrapperWithStream(Protocol):
     @property
     def stream(self) -> object: ...
@@ -368,18 +406,26 @@ class MessagesStreamWrapper(
     def _read_text_stream(self, text_stream: Iterator[str]) -> Iterator[str]:
         # Scope each read, restoring the caller's context before the text is
         # handed back, like the wrapper's own iteration does.
-        while True:
+        try:
+            while True:
+                with self._execution_context():
+                    try:
+                        text = next(text_stream)
+                    except StopIteration:
+                        return
+                    except BaseException as error:
+                        # Finalize through the wrapper before ``activate()``
+                        # fails the invocation, so the SDK snapshot is still
+                        # recorded.
+                        self._finalize_failure(error)
+                        raise
+                yield text
+        finally:
+            # The caller can close the adapter early, after one chunk; forward
+            # that to the SDK's generator under the invocation's context so it
+            # is released here instead of staying suspended.
             with self._execution_context():
-                try:
-                    text = next(text_stream)
-                except StopIteration:
-                    return
-                except BaseException as error:
-                    # Finalize through the wrapper before ``activate()`` fails
-                    # the invocation, so the SDK snapshot is still recorded.
-                    self._finalize_failure(error)
-                    raise
-            yield text
+                _close_text_source(text_stream)
 
     def _scoped_helper(self, helper: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(helper)
@@ -478,16 +524,21 @@ class AsyncMessagesStreamWrapper(
     async def _read_text_stream(
         self, text_stream: AsyncIterator[str]
     ) -> AsyncIterator[str]:
-        while True:
+        try:
+            while True:
+                with self._execution_context():
+                    try:
+                        text = await anext(text_stream)
+                    except StopAsyncIteration:
+                        return
+                    except BaseException as error:
+                        self._finalize_failure(error)
+                        raise
+                yield text
+        finally:
+            # See ``MessagesStreamWrapper._read_text_stream``.
             with self._execution_context():
-                try:
-                    text = await anext(text_stream)
-                except StopAsyncIteration:
-                    return
-                except BaseException as error:
-                    self._finalize_failure(error)
-                    raise
-            yield text
+                await _aclose_text_source(text_stream)
 
     def _scoped_helper(
         self, helper: Callable[..., Awaitable[Any]]

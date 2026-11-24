@@ -17,6 +17,7 @@ try:
     import httpx2 as _http_lib
 except ImportError:
     import httpx as _http_lib
+from anthropic import NotFoundError
 from anthropic.types import (
     Message,
     RawMessageStartEvent,
@@ -24,6 +25,9 @@ from anthropic.types import (
 )
 
 from opentelemetry import context, trace
+from opentelemetry.instrumentation.genai.anthropic import (
+    AnthropicInstrumentor,
+)
 from opentelemetry.instrumentation.genai.anthropic._raw_response import (
     wrap_raw_response,
 )
@@ -34,10 +38,17 @@ from opentelemetry.instrumentation.genai.anthropic.wrappers import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 _MODEL = "claude-sonnet-4-20250514"
 _MESSAGES = [{"role": "user", "content": "Say hello in one word."}]
+# The message id the ``test_sync_messages_stream`` cassette replays.
+_STREAM_MESSAGE_ID = "msg_011CgwjfMs7kzbGi4KwkwpwR"
+_SYNC_STREAM_TEXT = "Hello!"
+# ... and the one ``test_async_messages_stream`` replays.
+_ASYNC_STREAM_MESSAGE_ID = "msg_01N2EGWxw2zHUcjTjToMivN6"
+_ASYNC_STREAM_TEXT = "Hello."
 
 
 def _start_event() -> RawMessageStartEvent:
@@ -826,6 +837,122 @@ async def test_async_stream_helper_activates(
     assert context.get_current() is before
 
 
+# --- the scoped text stream closed early by the caller -----------------------
+
+
+class _ClosableTextStream:
+    """A ``MessageStream`` stand-in whose ``text_stream`` is a real generator.
+
+    The SDK hands the caller a generator, so an adapter closed after one chunk
+    has to close that generator; it records the span it is closed under.
+    """
+
+    current_message_snapshot = _start_event().message
+
+    def __init__(
+        self, invocation: Any, closed: list[trace.SpanContext]
+    ) -> None:
+        self._invocation = invocation
+        self._closed = closed
+        self.text_stream = self._texts()
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(())
+
+    def close(self) -> None:
+        pass
+
+    def _texts(self) -> Iterator[str]:
+        try:
+            _assert_invocation_current(self._invocation)
+            yield "hello"
+            _assert_invocation_current(self._invocation)
+            yield " world"
+        finally:
+            self._closed.append(trace.get_current_span().get_span_context())
+
+
+class _AsyncClosableTextStream:
+    """Async counterpart of ``_ClosableTextStream``."""
+
+    current_message_snapshot = _start_event().message
+
+    def __init__(
+        self, invocation: Any, closed: list[trace.SpanContext]
+    ) -> None:
+        self._invocation = invocation
+        self._closed = closed
+        self.text_stream = self._texts()
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self._events()
+
+    async def _events(self) -> AsyncIterator[Any]:
+        return
+        yield
+
+    async def close(self) -> None:
+        pass
+
+    async def _texts(self) -> AsyncIterator[str]:
+        try:
+            await asyncio.sleep(0)
+            _assert_invocation_current(self._invocation)
+            yield "hello"
+            await asyncio.sleep(0)
+            _assert_invocation_current(self._invocation)
+            yield " world"
+        finally:
+            self._closed.append(trace.get_current_span().get_span_context())
+
+
+def test_sync_text_stream_early_close_closes_the_sdk_generator(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    closed: list[trace.SpanContext] = []
+    source = _ClosableTextStream(invocation, closed)
+    stream = MessagesStreamWrapper(source, invocation, False)
+
+    texts = stream.text_stream
+    assert next(texts) == "hello"
+    assert context.get_current() is before
+
+    texts.close()
+
+    assert inspect.getgeneratorstate(source.text_stream) == inspect.GEN_CLOSED
+    _assert_all_in_invocation(closed, invocation)
+    assert context.get_current() is before
+    stream.close()
+    (span,) = span_exporter.get_finished_spans()
+    assert "error.type" not in (span.attributes or {})
+
+
+@pytest.mark.asyncio
+async def test_async_text_stream_early_close_closes_the_sdk_generator(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    closed: list[trace.SpanContext] = []
+    source = _AsyncClosableTextStream(invocation, closed)
+    stream = AsyncMessagesStreamWrapper(source, invocation, False)
+
+    texts = stream.text_stream
+    assert await anext(texts) == "hello"
+    assert context.get_current() is before
+
+    await texts.aclose()
+
+    assert source.text_stream.ag_frame is None
+    _assert_all_in_invocation(closed, invocation)
+    assert context.get_current() is before
+    await stream.close()
+    (span,) = span_exporter.get_finished_spans()
+    assert "error.type" not in (span.attributes or {})
+
+
 def test_stream_helpers_not_advertised_on_plain_streams(
     tracer_provider, logger_provider, meter_provider
 ) -> None:
@@ -895,6 +1022,205 @@ async def test_async_messages_stream_helpers_keep_caller_span_current(
     assert chat.parent.span_id == caller.get_span_context().span_id
     assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
     _assert_no_detach_errors(caplog)
+
+
+# --- MessageStream helpers, one fresh SDK stream per helper -------------------
+
+
+def _assert_chat_under_caller(
+    span_exporter, caller: Any, caplog, request_model: str = _MODEL
+) -> Any:
+    (chat,) = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert chat.parent is not None
+    assert chat.parent.span_id == caller.get_span_context().span_id
+    assert (
+        chat.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == request_model
+    )
+    _assert_no_detach_errors(caplog)
+    return chat
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+@pytest.mark.parametrize("helper", _HELPERS)
+def test_sync_messages_stream_helper_read_keeps_caller_span_current(
+    tracer_provider,
+    span_exporter,
+    anthropic_client,
+    instrument_no_content,
+    caplog,
+    helper,
+):
+    """Each draining helper reads a fresh SDK stream under the invocation."""
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with anthropic_client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            result = getattr(stream, helper)()
+            assert _is_current(caller)
+            if helper == "get_final_text":
+                assert result == _SYNC_STREAM_TEXT
+        assert _is_current(caller)
+    chat = _assert_chat_under_caller(span_exporter, caller, caplog)
+    assert chat.status.status_code is not trace.StatusCode.ERROR
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == (
+        _STREAM_MESSAGE_ID
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+@pytest.mark.parametrize("helper", _HELPERS)
+async def test_async_messages_stream_helper_read_keeps_caller_span_current(
+    tracer_provider,
+    span_exporter,
+    async_anthropic_client,
+    instrument_no_content,
+    caplog,
+    helper,
+):
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        async with async_anthropic_client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            result = await asyncio.create_task(getattr(stream, helper)())
+            assert _is_current(caller)
+            if helper == "get_final_text":
+                assert result == _ASYNC_STREAM_TEXT
+        assert _is_current(caller)
+    chat = _assert_chat_under_caller(span_exporter, caller, caplog)
+    assert chat.status.status_code is not trace.StatusCode.ERROR
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == (
+        _ASYNC_STREAM_MESSAGE_ID
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream_api_error")
+def test_sync_messages_stream_open_error_keeps_caller_span_current(
+    tracer_provider,
+    span_exporter,
+    anthropic_client,
+    instrument_no_content,
+    caplog,
+):
+    """An SDK error opening the stream fails the span under the caller's span."""
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with pytest.raises(NotFoundError):
+            with anthropic_client.messages.stream(
+                model="invalid-model-name",
+                max_tokens=100,
+                messages=_MESSAGES,
+            ) as stream:
+                list(stream)
+        assert _is_current(caller)
+    chat = _assert_chat_under_caller(
+        span_exporter, caller, caplog, request_model="invalid-model-name"
+    )
+    assert chat.status.status_code is trace.StatusCode.ERROR
+    assert chat.attributes is not None
+    assert "NotFoundError" in chat.attributes["error.type"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream_api_error")
+async def test_async_messages_stream_open_error_keeps_caller_span_current(
+    tracer_provider,
+    span_exporter,
+    async_anthropic_client,
+    instrument_no_content,
+    caplog,
+):
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with pytest.raises(NotFoundError):
+            async with async_anthropic_client.messages.stream(
+                model="invalid-model-name",
+                max_tokens=100,
+                messages=_MESSAGES,
+            ) as stream:
+                async for _ in stream:
+                    pass
+        assert _is_current(caller)
+    chat = _assert_chat_under_caller(
+        span_exporter, caller, caplog, request_model="invalid-model-name"
+    )
+    assert chat.status.status_code is trace.StatusCode.ERROR
+    assert chat.attributes is not None
+    assert "NotFoundError" in chat.attributes["error.type"]
+
+
+# --- the SDK text stream closed early through the public API ------------------
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_text_stream_closed_early_by_caller(
+    tracer_provider,
+    span_exporter,
+    anthropic_client,
+    instrument_no_content,
+    caplog,
+):
+    """Closing ``text_stream`` after one chunk closes the SDK generator too."""
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with anthropic_client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            sdk_stream = stream.__wrapped__
+            texts = stream.text_stream
+            assert next(texts) == _SYNC_STREAM_TEXT
+            texts.close()
+            # The generator the SDK handed out is closed rather than left
+            # suspended at the chunk the caller stopped after.
+            assert (
+                inspect.getgeneratorstate(sdk_stream.text_stream)
+                == inspect.GEN_CLOSED
+            )
+            assert _is_current(caller)
+        assert _is_current(caller)
+    chat = _assert_chat_under_caller(span_exporter, caller, caplog)
+    assert chat.status.status_code is not trace.StatusCode.ERROR
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == (
+        _STREAM_MESSAGE_ID
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_text_stream_closed_early_by_caller(
+    tracer_provider,
+    span_exporter,
+    async_anthropic_client,
+    instrument_no_content,
+    caplog,
+):
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        async with async_anthropic_client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            sdk_stream = stream.__wrapped__
+            texts = stream.text_stream
+            assert await anext(texts) == _ASYNC_STREAM_TEXT
+            await texts.aclose()
+            assert sdk_stream.text_stream.ag_frame is None
+            assert _is_current(caller)
+        assert _is_current(caller)
+    chat = _assert_chat_under_caller(span_exporter, caller, caplog)
+    assert chat.status.status_code is not trace.StatusCode.ERROR
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == (
+        _ASYNC_STREAM_MESSAGE_ID
+    )
 
 
 # --- closing through stream.response -----------------------------------------
@@ -1167,3 +1493,166 @@ async def test_async_stream_helper_error_fails_the_span(
     _assert_failed_with_snapshot(span_exporter)
     await stream.close()
     assert len(span_exporter.get_finished_spans()) == 1
+
+
+# --- raw response, public error paths ----------------------------------------
+
+
+class _ContextRecordingHook:
+    """Completion hook that records the span finalization runs under."""
+
+    def __init__(self) -> None:
+        self.contexts: list[trace.SpanContext] = []
+
+    def on_completion(self, **kwargs: Any) -> None:
+        self.contexts.append(trace.get_current_span().get_span_context())
+
+
+@pytest.fixture
+def instrument_with_hook(
+    tracer_provider, logger_provider, meter_provider
+) -> Any:
+    """Instrument with a completion hook that records its span."""
+    hook = _ContextRecordingHook()
+    with instrument(
+        AnthropicInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="NO_CONTENT",
+        completion_hook=hook,
+    ):
+        yield hook
+
+
+def _assert_hook_ran_under(hook: _ContextRecordingHook, span: Any) -> None:
+    assert hook.contexts
+    assert all(
+        span_context == span.get_span_context()
+        for span_context in hook.contexts
+    )
+
+
+def _assert_raw_response_caller_error(
+    span_exporter, caller: Any, hook: _ContextRecordingHook
+) -> None:
+    (chat,) = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert chat.status.status_code is trace.StatusCode.ERROR
+    assert chat.attributes is not None
+    assert chat.attributes["error.type"] == "RuntimeError"
+    assert chat.parent is not None
+    assert chat.parent.span_id == caller.get_span_context().span_id
+    _assert_hook_ran_under(hook, chat)
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_streaming_response_error_before_parse_fails_the_span(
+    tracer_provider, span_exporter, anthropic_client, instrument_with_hook
+) -> None:
+    """A caller error inside the response block fails the span."""
+    before = context.get_current()
+    tracer = tracer_provider.get_tracer(__name__)
+    with pytest.raises(RuntimeError, match="caller failed"):
+        with tracer.start_as_current_span("caller") as caller:
+            with anthropic_client.messages.with_streaming_response.create(
+                model=_MODEL,
+                max_tokens=100,
+                messages=_MESSAGES,
+                stream=True,
+            ):
+                assert _is_current(caller)
+                raise RuntimeError("caller failed")
+    assert context.get_current() is before
+    _assert_raw_response_caller_error(
+        span_exporter, caller, instrument_with_hook
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_streaming_response_error_after_parse_fails_the_span(
+    tracer_provider, span_exporter, anthropic_client, instrument_with_hook
+) -> None:
+    """A caller error after ``parse()`` fails the stream's span."""
+    before = context.get_current()
+    tracer = tracer_provider.get_tracer(__name__)
+    with pytest.raises(RuntimeError, match="caller failed"):
+        with tracer.start_as_current_span("caller") as caller:
+            with anthropic_client.messages.with_streaming_response.create(
+                model=_MODEL,
+                max_tokens=100,
+                messages=_MESSAGES,
+                stream=True,
+            ) as raw_response:
+                assert isinstance(raw_response.parse(), MessagesStreamWrapper)
+                assert _is_current(caller)
+                raise RuntimeError("caller failed")
+    assert context.get_current() is before
+    _assert_raw_response_caller_error(
+        span_exporter, caller, instrument_with_hook
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_create_streaming_with_raw_response")
+async def test_async_streaming_response_error_before_parse_fails_the_span(
+    tracer_provider,
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_hook,
+) -> None:
+    before = context.get_current()
+    tracer = tracer_provider.get_tracer(__name__)
+    with pytest.raises(RuntimeError, match="caller failed"):
+        with tracer.start_as_current_span("caller") as caller:
+            async with (
+                async_anthropic_client.messages.with_streaming_response.create(
+                    model=_MODEL,
+                    max_tokens=100,
+                    messages=_MESSAGES,
+                    stream=True,
+                )
+            ):
+                assert _is_current(caller)
+                raise RuntimeError("caller failed")
+    assert context.get_current() is before
+    _assert_raw_response_caller_error(
+        span_exporter, caller, instrument_with_hook
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_create_streaming_with_raw_response")
+async def test_async_streaming_response_error_after_parse_fails_the_span(
+    tracer_provider,
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_hook,
+) -> None:
+    before = context.get_current()
+    tracer = tracer_provider.get_tracer(__name__)
+    with pytest.raises(RuntimeError, match="caller failed"):
+        with tracer.start_as_current_span("caller") as caller:
+            async with (
+                async_anthropic_client.messages.with_streaming_response.create(
+                    model=_MODEL,
+                    max_tokens=100,
+                    messages=_MESSAGES,
+                    stream=True,
+                )
+            ) as raw_response:
+                stream = raw_response.parse()
+                if inspect.isawaitable(stream):
+                    stream = await stream
+                assert isinstance(stream, AsyncMessagesStreamWrapper)
+                assert _is_current(caller)
+                raise RuntimeError("caller failed")
+    assert context.get_current() is before
+    _assert_raw_response_caller_error(
+        span_exporter, caller, instrument_with_hook
+    )
