@@ -8,7 +8,13 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import (
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Generator,
+    Iterator,
+)
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
@@ -78,10 +84,12 @@ class RawResponseProxy(_ObjectProxy):
     ``with_streaming_response`` call, streaming or not.
 
     The span is finalized independently of ``parse()``. A caller that never
-    parses either reads the body directly (``read()``, ``.text``, ``.json()``)
-    or abandons it, so hooks on the httpx response's ``read`` / ``aread`` and
+    parses either reads the body directly (``read()``, ``iter_raw()`` and the
+    iterators layered on it, ``.text``, ``.json()``) or abandons it, so hooks on
+    the httpx response's ``read`` / ``aread``, ``iter_raw`` / ``aiter_raw`` and
     ``close`` / ``aclose`` finalize the span when no dispatch did: the read hook
-    with response attributes, the close hook with request attributes only.
+    with response attributes, the close hook with request attributes only. The
+    iterators scope each chunk they read, like the read hook does.
 
     Only the instrumented stream wrapper is ever substituted for what the SDK
     returns. Every other ``parse()`` call is delegated, so the caller gets the
@@ -134,13 +142,20 @@ class RawResponseProxy(_ObjectProxy):
             detach(token)
 
     def _fail(self, error: BaseException) -> None:
-        """Finalize this response with a caller-side failure, once."""
+        """Finalize this response with a caller-side failure, once.
+
+        A stream wrapper owns its own reads and finalization scope; otherwise
+        the failure is recorded while this response's span is current, so
+        completion hooks run under it.
+        """
         if self._self_stream_wrapper is not None:
-            self._self_stream_wrapper._finalize_failure(error)
+            with self._self_stream_wrapper._execution_context():
+                self._self_stream_wrapper._finalize_failure(error)
             return
         if self._self_span_open:
-            self._self_span_open = False
-            self._self_invocation.fail(error)
+            with self._current():
+                self._self_span_open = False
+                self._self_invocation.fail(error)
 
     def _install_hooks(self, raw_response: Any) -> None:
         http_response = getattr(raw_response, "http_response", None)
@@ -148,15 +163,67 @@ class RawResponseProxy(_ObjectProxy):
             return
         # Stacking is safe: each hook calls the one it replaced, so two proxies
         # over one response finalize their own invocation in turn.
+        # ``iter_raw`` is the only iterator that reads the stream and closes the
+        # response; ``iter_bytes``, ``iter_text`` and ``iter_lines`` are layered
+        # on top of it, so hooking it scopes every body iteration.
         for name, wrap in (
             ("read", self._wrap_sync_read),
             ("aread", self._wrap_async_read),
             ("close", self._wrap_sync_close),
             ("aclose", self._wrap_async_close),
+            ("iter_raw", self._wrap_sync_iter),
+            ("aiter_raw", self._wrap_async_iter),
         ):
             original = getattr(http_response, name, None)
             if original is not None:
                 setattr(http_response, name, wrap(original))
+
+    def _wrap_sync_iter(
+        self, original: Callable[..., Generator[bytes, None, None]]
+    ) -> Callable[..., Generator[bytes, None, None]]:
+        # Iterating the body is a read like ``read()`` is: each chunk and the
+        # iterator's own close run in this response's context, and the fallbacks
+        # still decide how the span ends.
+        @functools.wraps(original)
+        def _iter(
+            *args: object, **kwargs: object
+        ) -> Generator[bytes, None, None]:
+            iterator = original(*args, **kwargs)
+            try:
+                while True:
+                    with self._current():
+                        try:
+                            chunk = next(iterator)
+                        except StopIteration:
+                            return
+                    yield chunk
+            finally:
+                with self._current():
+                    iterator.close()
+
+        return _iter
+
+    def _wrap_async_iter(
+        self, original: Callable[..., AsyncGenerator[bytes, None]]
+    ) -> Callable[..., AsyncGenerator[bytes, None]]:
+        @functools.wraps(original)
+        async def _aiter(
+            *args: object, **kwargs: object
+        ) -> AsyncGenerator[bytes, None]:
+            iterator = original(*args, **kwargs)
+            try:
+                while True:
+                    with self._current():
+                        try:
+                            chunk = await anext(iterator)
+                        except StopAsyncIteration:
+                            return
+                    yield chunk
+            finally:
+                with self._current():
+                    await iterator.aclose()
+
+        return _aiter
 
     def _wrap_sync_read(
         self, original: Callable[..., Any]
@@ -308,10 +375,13 @@ class RawResponseProxy(_ObjectProxy):
             )
 
     def _finalize_once(self) -> None:
-        # ``stop()`` is not idempotent, so finalize at most once.
+        # ``stop()`` is not idempotent, so finalize at most once. Stopping while
+        # the span is current keeps completion hooks inside it, as the read and
+        # close hooks already do.
         if self._self_span_open:
-            self._self_span_open = False
-            self._self_invocation.stop()
+            with self._current():
+                self._self_span_open = False
+                self._self_invocation.stop()
 
     def parse(self, *args: Any, **kwargs: Any) -> object:
         # The SDK caches per cast target, so every call is delegated and the
