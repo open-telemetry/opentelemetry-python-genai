@@ -35,13 +35,23 @@ class WorkflowScenario(Scenario):
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
-        "gen_ai.invoke_workflow.duration",
+        "gen_ai.invoke_agent.duration",
     )
     # langchain can't populate server.address on chat spans.
     expected_violations = (
         ExpectedViolation(
             advice_id="genai_expected_attribute_missing",
             message_substring="server.address",
+        ),
+        # The pinned semconv registry predates workflow names moving from
+        # `gen_ai.workflow.name` to `gen_ai.agent.name`.
+        ExpectedViolation(
+            advice_id="genai_expected_attribute_missing",
+            message_substring="gen_ai.workflow.name",
+        ),
+        ExpectedViolation(
+            advice_id="genai_span_name_format",
+            message_substring="gen_ai.workflow.name",
         ),
     )
 

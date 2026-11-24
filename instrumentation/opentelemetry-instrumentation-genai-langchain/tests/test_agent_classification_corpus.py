@@ -325,7 +325,7 @@ def test_create_agent_name_wins_over_run_name_override(
     assert agent_span.parent.span_id == workflow_span.context.span_id
     assert workflow_span.parent is None
     assert agent_span.attributes["gen_ai.agent.name"] == "planner_agent"
-    assert "gen_ai.agent.name" not in workflow_span.attributes
+    assert workflow_span.attributes["gen_ai.agent.name"] == "planner"
 
 
 def test_create_agent_internal_nodes_are_not_agents(

@@ -27,6 +27,7 @@ from opentelemetry.semconv._incubating.attributes.error_attributes import (
     ERROR_TYPE,
 )
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
+    GEN_AI_AGENT_NAME,
     GEN_AI_CONVERSATION_ID,
     GEN_AI_OPERATION_NAME,
 )
@@ -239,7 +240,7 @@ def test_workflow_foreground_spawns_background_workflow(
     assert len(spans) == 2
 
     wf_spans_by_name = {
-        s.attributes.get("gen_ai.workflow.name"): s
+        s.attributes.get(GEN_AI_AGENT_NAME): s
         for s in spans
         if s.attributes.get(GEN_AI_OPERATION_NAME) == "invoke_workflow"
     }

@@ -70,7 +70,10 @@ def _assert_agent_call_metrics(
             assert name not in metrics
         else:
             (point,) = metrics[name].data.data_points
-            assert point.attributes == {"gen_ai.agent.name": "test_agent"}
+            assert point.attributes == {
+                "gen_ai.operation.name": "invoke_agent",
+                "gen_ai.agent.name": "test_agent",
+            }
             assert point.count == invocations
             assert point.sum == calls
             assert isinstance(point.sum, int)

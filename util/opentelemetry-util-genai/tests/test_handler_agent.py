@@ -967,7 +967,10 @@ class TestAgentInvocationMetrics(TestBase):
         )
         self.assertEqual(
             dict(inf_points[0].attributes),
-            {GenAI.GEN_AI_AGENT_NAME: "SearchAgent"},
+            {
+                GenAI.GEN_AI_OPERATION_NAME: "invoke_agent",
+                GenAI.GEN_AI_AGENT_NAME: "SearchAgent",
+            },
         )
 
         self.assertIn("gen_ai.invoke_agent.tool_calls", metrics)
@@ -980,7 +983,10 @@ class TestAgentInvocationMetrics(TestBase):
         )
         self.assertEqual(
             dict(tool_points[0].attributes),
-            {GenAI.GEN_AI_AGENT_NAME: "SearchAgent"},
+            {
+                GenAI.GEN_AI_OPERATION_NAME: "invoke_agent",
+                GenAI.GEN_AI_AGENT_NAME: "SearchAgent",
+            },
         )
 
     def test_agent_without_calls_does_not_record_call_metrics(self) -> None:
@@ -1085,7 +1091,10 @@ class TestAgentInvocationMetrics(TestBase):
         inf_point = metrics["gen_ai.invoke_agent.inference_calls"][0]
         self.assertEqual(
             dict(inf_point.attributes),
-            {GenAI.GEN_AI_AGENT_NAME: "FailingAgent"},
+            {
+                GenAI.GEN_AI_OPERATION_NAME: "invoke_agent",
+                GenAI.GEN_AI_AGENT_NAME: "FailingAgent",
+            },
         )
         self.assertAlmostEqual(inf_point.sum, 2.0, places=3)
         duration_point = metrics["gen_ai.invoke_agent.duration"][0]
@@ -1104,7 +1113,10 @@ class TestAgentInvocationMetrics(TestBase):
 
         metrics = self._harvest_metrics()
         inf_point = metrics["gen_ai.invoke_agent.inference_calls"][0]
-        self.assertEqual(dict(inf_point.attributes), {})
+        self.assertEqual(
+            dict(inf_point.attributes),
+            {GenAI.GEN_AI_OPERATION_NAME: "invoke_agent"},
+        )
 
     def _harvest_metrics(self):
         metrics = self.get_sorted_metrics()

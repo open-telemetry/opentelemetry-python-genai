@@ -104,7 +104,7 @@ def main() -> None:
     try:
         # ``RunConfig.workflow_name`` is the agents library's own knob for
         # naming the workflow. The instrumentation reads it and emits the
-        # value as the ``gen_ai.workflow.name`` attribute on the workflow
+        # value as the ``gen_ai.agent.name`` attribute on the workflow
         # span — without it, the default "Agent workflow" is used.
         result = Runner.run_sync(
             triage_agent,

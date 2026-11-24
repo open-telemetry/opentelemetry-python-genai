@@ -80,7 +80,6 @@ class OrchestrationScenario(Scenario):
         "gen_ai.invoke_agent.inference_calls",
         "gen_ai.invoke_agent.tool_calls",
         "gen_ai.execute_tool.duration",
-        "gen_ai.invoke_workflow.duration",
     )
     expected_violations = (
         # `FunctionSpanData` in the openai-agents library doesn't expose
@@ -90,6 +89,16 @@ class OrchestrationScenario(Scenario):
         ExpectedViolation(
             advice_id="genai_expected_attribute_missing",
             message_substring="gen_ai.tool.call.id",
+        ),
+        # The pinned semconv registry predates workflow names moving from
+        # `gen_ai.workflow.name` to `gen_ai.agent.name`.
+        ExpectedViolation(
+            advice_id="genai_expected_attribute_missing",
+            message_substring="gen_ai.workflow.name",
+        ),
+        ExpectedViolation(
+            advice_id="genai_span_name_format",
+            message_substring="gen_ai.workflow.name",
         ),
     )
 

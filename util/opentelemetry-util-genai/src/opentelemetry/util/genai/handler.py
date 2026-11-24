@@ -525,6 +525,9 @@ class TelemetryHandler:
         """Returns a Workflow invocation. Starts a span when called.
 
         Args:
+            name: The workflow name, recorded as ``gen_ai.agent.name``. It must
+                have low cardinality; leave it unset rather than passing a
+                framework default or type name.
             context: An optional OpenTelemetry Context to parent the span.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`

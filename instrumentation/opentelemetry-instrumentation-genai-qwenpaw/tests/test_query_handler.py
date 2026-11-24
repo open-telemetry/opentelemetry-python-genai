@@ -465,7 +465,7 @@ async def test_operation_duration_metric_recorded(
     point = data_points[0]
     assert point.count == 1
     assert point.sum >= 0
-    assert GenAI.GEN_AI_OPERATION_NAME not in point.attributes
+    assert point.attributes[GenAI.GEN_AI_OPERATION_NAME] == "invoke_agent"
 
 
 @pytest.mark.asyncio
