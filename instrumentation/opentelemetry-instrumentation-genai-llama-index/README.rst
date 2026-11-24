@@ -73,6 +73,19 @@ Content capture is controlled through the
 Supported values are ``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, and
 ``SPAN_AND_EVENT``.
 
+Alternatively, content capture can be configured programmatically by passing a
+``ContentCapturingMode`` as ``content_capturing_mode`` to ``instrument()``.
+The supplied mode takes precedence over the environment variable. Omit it or
+pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import ContentCapturingMode
+
+    LlamaIndexInstrumentor().instrument(
+        content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
 Prompts and completions can also be redirected via a completion hook by
 setting ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload`` together with
 ``OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH``, or by passing a custom hook

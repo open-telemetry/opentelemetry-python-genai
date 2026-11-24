@@ -6,10 +6,13 @@
 from __future__ import annotations
 
 import inspect
+from contextlib import nullcontext
+from typing import Any
 
 import ollama
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -143,3 +146,67 @@ def test_embed_without_input_records_no_span(
 
     assert response.embeddings == []
     assert span_exporter.get_finished_spans() == ()
+
+
+def _embed_cases(success_cassette: str) -> list[Any]:
+    return [
+        pytest.param(EMBEDDING_MODEL, success_cassette, id="success"),
+        pytest.param(
+            "no-such-model:1b",
+            "test_embed_error_is_recorded_and_reraised.yaml",
+            id="error",
+        ),
+    ]
+
+
+def _raises(model: str) -> Any:
+    if model == EMBEDDING_MODEL:
+        return nullcontext()
+    return pytest.raises(ollama.ResponseError)
+
+
+@pytest.mark.parametrize(
+    "model, cassette",
+    _embed_cases("test_embed_records_an_embeddings_span.yaml"),
+)
+def test_embed_span_is_current_only_during_the_request(
+    instrument_no_content,
+    span_exporter,
+    vcr,
+    request_span_capture,
+    model,
+    cassette,
+):
+    seen, hook, _ = request_span_capture
+    with vcr.use_cassette(cassette), _raises(model):
+        ollama.Client(host=HOST, event_hooks={"request": [hook]}).embed(
+            model=model, input=INPUT
+        )
+    assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, cassette",
+    _embed_cases("test_async_embed_records_an_embeddings_span.yaml"),
+)
+async def test_async_embed_span_is_current_only_during_the_request(
+    instrument_no_content,
+    span_exporter,
+    vcr,
+    request_span_capture,
+    model,
+    cassette,
+):
+    seen, _, async_hook = request_span_capture
+    with vcr.use_cassette(cassette), _raises(model):
+        await ollama.AsyncClient(
+            host=HOST, event_hooks={"request": [async_hook]}
+        ).embed(model=model, input=INPUT)
+    assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
