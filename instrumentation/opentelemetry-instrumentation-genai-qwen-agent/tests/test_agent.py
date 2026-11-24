@@ -12,10 +12,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from qwen_agent.agent import Agent
 from qwen_agent.agents import Assistant
-from qwen_agent.agents.fncall_agent import FnCallAgent
 from qwen_agent.llm import base as qwen_llm_base
+from qwen_agent.llm import function_calling as qwen_fn_call
+from qwen_agent.llm.base import ModelServiceError
 from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
-from qwen_agent.tools.base import BaseTool, register_tool
+from qwen_agent.tools.base import (
+    TOOL_REGISTRY,
+    BaseTool,
+    ToolServiceError,
+    register_tool,
+)
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.genai.qwen_agent.utils import (
@@ -103,8 +109,10 @@ def test_agent_run(span_exporter, instrument_with_content):
 
 
 @pytest.mark.vcr()
-def test_agent_run_nonstream(span_exporter, instrument_with_content):
-    """run_nonstream() calls run() internally; exactly one invoke_agent span."""
+def test_agent_run_nonstream(
+    span_exporter, metric_reader, instrument_with_content
+):
+    """run_nonstream() calls run() internally; one invoke_agent span and observation."""
     bot = Assistant(
         llm={"model": "qwen-max", "model_type": "qwen_dashscope"},
         name="NonStreamAssistant",
@@ -118,6 +126,19 @@ def test_agent_run_nonstream(span_exporter, instrument_with_content):
         span_exporter, "invoke_agent NonStreamAssistant"
     )
     assert len(agent_spans) == 1
+    span_attrs = dict(agent_spans[0].attributes or {})
+    assert INFERENCE_CALLS_METRIC not in span_attrs
+    assert TOOL_CALLS_METRIC not in span_attrs
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "NonStreamAssistant": (1, 1),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "NonStreamAssistant": (1, 0),
+        "Memory": (1, 0),
+    }
 
 
 @pytest.mark.vcr()
@@ -231,9 +252,15 @@ def test_agent_run_with_tool_call(
     assert tool_span.parent is not None
 
     # Two model turns request the tool, the third produces the final answer.
-    counts = _call_counts(metric_reader)
-    assert counts[INFERENCE_CALLS_METRIC]["WeatherAgent"] == 3
-    assert counts[TOOL_CALLS_METRIC]["WeatherAgent"] == 2
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "WeatherAgent": (1, 3),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "WeatherAgent": (1, 2),
+        "Memory": (1, 0),
+    }
 
 
 def test_agent_run_error(span_exporter, instrument_no_content):
@@ -606,45 +633,23 @@ def test_agent_run_with_user_list_messages(
 
 INFERENCE_CALLS_METRIC = "gen_ai.invoke_agent.inference_calls"
 TOOL_CALLS_METRIC = "gen_ai.invoke_agent.tool_calls"
+_SUPPORTS_FNCALL_PROMPT_TYPE = "fncall_prompt_type" in inspect.getsource(
+    qwen_fn_call
+)
 
 
-class _FakeLLM:
-    """Minimal LLM stub yielding pre-canned response messages."""
-
-    model = "qwen-max"
-    model_type = "fake"
-
-    def __init__(self, chunks=None):
-        self.chunks = chunks or []
-        self.chat_calls = 0
-
-    def chat(
-        self,
-        messages=None,
-        functions=None,
-        stream=True,
-        extra_generate_cfg=None,
-    ):
-        self.chat_calls += 1
-        return iter(list(self.chunks))
-
-
-class _StubFnCallAgent(FnCallAgent):
-    """FnCallAgent subclass that skips the heavy Agent.__init__."""
-
-    @classmethod
-    def create(cls, name="FnBot", llm=None, function_map=None):
-        obj = cls.__new__(cls)
-        obj.name = name
-        obj.description = ""
-        obj.system_message = ""
-        obj.llm = llm
-        obj.function_map = dict(function_map or {})
-        obj.extra_generate_cfg = {}
-        return obj
-
-    def _run(self, messages, **kwargs):
-        raise NotImplementedError
+def _prompt_llm_cfg(*, max_retries: int = 0) -> dict[str, object]:
+    """DashScope config exercising BaseChatModel.chat() across all supported SDKs."""
+    generate_cfg: dict[str, object] = {"max_retries": max_retries}
+    if _SUPPORTS_RAW_API:
+        generate_cfg["use_raw_api"] = False
+    if _SUPPORTS_FNCALL_PROMPT_TYPE:
+        generate_cfg["fncall_prompt_type"] = "qwen"
+    return {
+        "model": "qwen-max",
+        "model_type": "qwen_dashscope",
+        "generate_cfg": generate_cfg,
+    }
 
 
 @register_tool("echo_text_test", allow_overwrite=True)
@@ -660,7 +665,16 @@ class _EchoTool(BaseTool):
     ]
 
     def call(self, params, **kwargs):
-        return "echo"
+        return f"echo:{params}"
+
+
+@register_tool("failing_service_tool_test", allow_overwrite=True)
+class _FailingServiceTool(BaseTool):
+    description = "Always raises ToolServiceError."
+    parameters = []
+
+    def call(self, params, **kwargs):
+        raise ToolServiceError(message="backend down")
 
 
 def _metrics_by_name(metric_reader):
@@ -674,181 +688,304 @@ def _metrics_by_name(metric_reader):
     return metrics
 
 
-def _call_counts(metric_reader):
-    """Map metric name -> {agent_name: sum} for the invoke_agent counters."""
+def _call_observations(metric_reader):
+    """Map metric name -> {agent_name: (observation_count, sum)}."""
     metrics = _metrics_by_name(metric_reader)
-    counts = {}
+    observations = {}
     for name in (INFERENCE_CALLS_METRIC, TOOL_CALLS_METRIC):
-        counts[name] = {}
+        observations[name] = {}
         for point in metrics[name].data.data_points:
-            assert point.count == 1
-            counts[name][
+            observations[name][
                 point.attributes[GenAIAttributes.GEN_AI_AGENT_NAME]
-            ] = point.sum
-    return counts
+            ] = (point.count, point.sum)
+    return observations
 
 
-def test_agent_run_records_inference_and_tool_counts(
+@pytest.mark.vcr()
+def test_assistant_unknown_and_known_tool_calls(
     span_exporter, metric_reader, instrument_no_content
 ):
-    """A run with two LLM calls and one tool call records both counts."""
-    tool = MagicMock(
-        description="Get weather", call=MagicMock(return_value="sunny")
-    )
-    llm = _FakeLLM(
-        [
-            [Message(role="assistant", content="thinking")],
-            [Message(role="assistant", content="final")],
-        ]
-    )
-    agent = _StubAgent.create(name="CountBot", llm=llm)
-    agent.function_map = {"get_weather": tool}
-
-    def fake_run(self, messages, **kwargs):
-        yield from self._call_llm(messages)
-        self._call_tool("get_weather", "{}")
-        yield from self._call_llm(messages)
-
-    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
-        list(agent.run([Message(role="user", content="Go")]))
-
-    counts = _call_counts(metric_reader)
-    assert counts[INFERENCE_CALLS_METRIC] == {"CountBot": 2}
-    assert counts[TOOL_CALLS_METRIC] == {"CountBot": 1}
-
-    (agent_span,) = _spans_named(span_exporter, "invoke_agent CountBot")
-    span_attrs = dict(agent_span.attributes or {})
-    assert INFERENCE_CALLS_METRIC not in span_attrs
-    assert TOOL_CALLS_METRIC not in span_attrs
-
-
-def test_agent_run_records_zero_counts(
-    span_exporter, metric_reader, instrument_no_content
-):
-    """A run that calls neither the model nor a tool records zero counts."""
-    agent = _StubAgent.create(name="IdleBot", llm=_FakeLLM())
-
-    def fake_run(messages, **kwargs):
-        yield [Message(role="assistant", content="no model needed")]
-
-    with patch.object(_StubAgent, "_run", side_effect=fake_run):
-        list(agent.run([Message(role="user", content="Go")]))
-
-    counts = _call_counts(metric_reader)
-    assert counts[INFERENCE_CALLS_METRIC] == {"IdleBot": 0}
-    assert counts[TOOL_CALLS_METRIC] == {"IdleBot": 0}
-
-
-def test_fncall_agent_counts_unknown_and_known_tool_calls(
-    span_exporter, metric_reader, instrument_no_content
-):
-    """Unknown tools short-circuit in FnCallAgent; they must still be counted."""
-    agent = _StubFnCallAgent.create(
+    """Executed tools are counted; unknown tools rejected before execution are not."""
+    bot = Assistant(
+        llm=_prompt_llm_cfg(),
         name="FnCountBot",
-        llm=_FakeLLM(),
-        function_map={"echo_text_test": _EchoTool()},
+        function_list=["echo_text_test"],
     )
+    responses = list(bot.run([{"role": "user", "content": "Run the tools."}]))
+    assert responses[-1][-1]["content"] == "Completed with known tool."
 
-    def fake_run(self, messages, **kwargs):
-        self._call_tool("not_a_registered_tool", "{}")
-        self._call_tool("echo_text_test", '{"text": "hi"}')
-        yield [Message(role="assistant", content="done")]
-
-    with patch.object(
-        _StubFnCallAgent, "_run", autospec=True, side_effect=fake_run
-    ):
-        list(agent.run([Message(role="user", content="Go")]))
-
-    counts = _call_counts(metric_reader)
-    assert counts[TOOL_CALLS_METRIC] == {"FnCountBot": 2}
-    assert counts[INFERENCE_CALLS_METRIC] == {"FnCountBot": 0}
-
-
-def test_agent_run_records_counts_on_early_close(
-    span_exporter, metric_reader, instrument_no_content
-):
-    """Calls made before the caller closes the stream are still recorded."""
-    llm = _FakeLLM([[Message(role="assistant", content="one")]])
-    agent = _StubAgent.create(name="EarlyCountBot", llm=llm)
-
-    def fake_run(self, messages, **kwargs):
-        yield from self._call_llm(messages)
-        yield [Message(role="assistant", content="two")]
-
-    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
-        run_iter = agent.run([Message(role="user", content="Go")])
-        next(run_iter)
-        run_iter.close()
-
-    counts = _call_counts(metric_reader)
-    assert counts[INFERENCE_CALLS_METRIC] == {"EarlyCountBot": 1}
-    assert counts[TOOL_CALLS_METRIC] == {"EarlyCountBot": 0}
-
-
-def test_agent_run_records_counts_on_error(
-    span_exporter, metric_reader, instrument_no_content
-):
-    """Calls made before a failure are recorded on the failed invocation."""
-    tool = MagicMock(
-        description="Get weather", call=MagicMock(return_value="ok")
-    )
-    agent = _StubAgent.create(
-        name="FailingCountBot",
-        llm=_FakeLLM([[Message(role="assistant", content="one")]]),
-    )
-    agent.function_map = {"get_weather": tool}
-
-    def fake_run(self, messages, **kwargs):
-        yield from self._call_llm(messages)
-        self._call_tool("get_weather", "{}")
-        raise ValueError("boom")
-        yield  # pylint: disable=unreachable
-
-    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
-        with pytest.raises(ValueError, match="boom"):
-            list(agent.run([Message(role="user", content="Go")]))
-
-    counts = _call_counts(metric_reader)
-    assert counts[INFERENCE_CALLS_METRIC] == {"FailingCountBot": 1}
-    assert counts[TOOL_CALLS_METRIC] == {"FailingCountBot": 1}
-
-
-def test_nested_agent_runs_keep_counts_separate(
-    span_exporter, metric_reader, instrument_no_content
-):
-    """Sub-agent calls are credited to the sub-agent, not the parent."""
-    parent = _StubAgent.create(name="ParentCountBot", llm=_FakeLLM([]))
-    child = _StubFnCallAgent.create(
-        name="ChildCountBot",
-        llm=_FakeLLM([[Message(role="assistant", content="child")]]),
-        function_map={"echo_text_test": _EchoTool()},
-    )
-
-    def fake_run(self, messages, **kwargs):
-        if self is parent:
-            yield from self._call_llm(messages)
-            yield from child.run([Message(role="user", content="child work")])
-            self._call_tool("echo_text_test", '{"text": "hi"}')
-        else:
-            yield from self._call_llm(messages)
-            self._call_tool("echo_text_test", '{"text": "hi"}')
-
-    with (
-        patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run),
-        patch.object(
-            _StubFnCallAgent, "_run", autospec=True, side_effect=fake_run
-        ),
-    ):
-        list(parent.run([Message(role="user", content="parent work")]))
-
-    counts = _call_counts(metric_reader)
-    assert counts[INFERENCE_CALLS_METRIC] == {
-        "ParentCountBot": 1,
-        "ChildCountBot": 1,
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "FnCountBot": (1, 3),
+        "Memory": (1, 0),
     }
-    assert counts[TOOL_CALLS_METRIC] == {
-        "ParentCountBot": 1,
-        "ChildCountBot": 1,
+    assert observations[TOOL_CALLS_METRIC] == {
+        "FnCountBot": (1, 1),
+        "Memory": (1, 0),
+    }
+
+
+@pytest.mark.vcr()
+def test_assistant_failed_tool_execution_is_counted(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """A client-side tool execution that fails still counts toward tool_calls."""
+    bot = Assistant(
+        llm=_prompt_llm_cfg(),
+        name="FailingToolBot",
+        function_list=["failing_service_tool_test"],
+    )
+    with pytest.raises(ToolServiceError, match="backend down"):
+        list(bot.run([{"role": "user", "content": "Call the service."}]))
+
+    (agent_span,) = _spans_named(span_exporter, "invoke_agent FailingToolBot")
+    assert agent_span.status.status_code == StatusCode.ERROR
+    assert (
+        dict(agent_span.attributes or {})[ErrorAttributes.ERROR_TYPE]
+        == "qwen_agent.tools.base.ToolServiceError"
+    )
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "FailingToolBot": (1, 1),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "FailingToolBot": (1, 1),
+        "Memory": (1, 0),
+    }
+
+
+@pytest.mark.vcr()
+def test_assistant_file_run_counts_memory_retrieval(
+    tmp_path,
+    monkeypatch,
+    span_exporter,
+    metric_reader,
+    instrument_no_content,
+):
+    """Memory's direct retrieval call is counted on Memory, not the parent Assistant."""
+
+    class _TestRetrievalTool(BaseTool):
+        name = "retrieval"
+        description = "Retrieve snippets from local files."
+        parameters = []
+
+        def call(self, params, **kwargs):
+            return json.dumps(
+                [
+                    {
+                        "url": "guide.txt",
+                        "text": ["Telemetry counts matter."],
+                    }
+                ]
+            )
+
+    monkeypatch.setitem(TOOL_REGISTRY, "retrieval", _TestRetrievalTool)
+    doc_path = tmp_path / "guide.txt"
+    doc_path.write_text("Telemetry counts matter.", encoding="utf-8")
+
+    bot = Assistant(
+        llm=_prompt_llm_cfg(),
+        name="FileAssistant",
+        files=[str(doc_path)],
+        rag_cfg={"rag_keygen_strategy": "None"},
+    )
+    responses = list(
+        bot.run([{"role": "user", "content": "Summarize the guide."}])
+    )
+    assert "telemetry counts matter" in responses[-1][-1]["content"].lower()
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "FileAssistant": (1, 1),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "FileAssistant": (1, 0),
+        "Memory": (1, 1),
+    }
+
+
+@pytest.mark.vcr()
+def test_nested_assistant_runs_keep_counts_separate(
+    monkeypatch, span_exporter, metric_reader, instrument_no_content
+):
+    """Nested Assistant.run() invocations keep per-agent counts separate."""
+    child = Assistant(
+        llm=_prompt_llm_cfg(),
+        name="ChildCountBot",
+        function_list=["echo_text_test"],
+    )
+
+    class _DelegateTool(BaseTool):
+        name = "delegate_to_child_test"
+        description = "Delegate a task to ChildCountBot."
+        parameters = [
+            {
+                "name": "task",
+                "type": "string",
+                "description": "Task description.",
+                "required": True,
+            }
+        ]
+
+        def call(self, params, **kwargs):
+            child_responses = list(
+                child.run([{"role": "user", "content": str(params)}])
+            )
+            return child_responses[-1][-1]["content"]
+
+    monkeypatch.setitem(TOOL_REGISTRY, "delegate_to_child_test", _DelegateTool)
+
+    parent = Assistant(
+        llm=_prompt_llm_cfg(),
+        name="ParentCountBot",
+        function_list=["delegate_to_child_test"],
+    )
+    responses = list(
+        parent.run([{"role": "user", "content": "Delegate work."}])
+    )
+    assert responses[-1][-1]["content"] == "Parent finished."
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "ParentCountBot": (1, 2),
+        "ChildCountBot": (1, 2),
+        "Memory": (2, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "ParentCountBot": (1, 1),
+        "ChildCountBot": (1, 1),
+        "Memory": (2, 0),
+    }
+
+
+@pytest.mark.vcr()
+def test_assistant_run_counts_on_provider_error(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """Provider failure re-raises unchanged and records exact totals once."""
+    bot = Assistant(
+        llm=_prompt_llm_cfg(),
+        name="ProviderErrorBot",
+        function_list=["echo_text_test"],
+    )
+    with pytest.raises(ModelServiceError, match="Provider unavailable"):
+        list(
+            bot.run([{"role": "user", "content": "Do step one then answer."}])
+        )
+
+    (agent_span,) = _spans_named(
+        span_exporter, "invoke_agent ProviderErrorBot"
+    )
+    assert agent_span.status.status_code == StatusCode.ERROR
+    assert (
+        dict(agent_span.attributes or {})[ErrorAttributes.ERROR_TYPE]
+        == "qwen_agent.llm.base.ModelServiceError"
+    )
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "ProviderErrorBot": (1, 2),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "ProviderErrorBot": (1, 1),
+        "Memory": (1, 0),
+    }
+
+
+@pytest.mark.vcr()
+def test_assistant_run_counts_on_interrupted_stream(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """Mid-stream failure re-raises unchanged after yielding and records counts."""
+    bot = Assistant(
+        llm=_prompt_llm_cfg(),
+        name="InterruptedStreamBot",
+    )
+    run_iter = bot.run([{"role": "user", "content": "Stream a reply."}])
+    first_chunk = next(run_iter)
+    assert first_chunk[-1]["content"] == "Partial stream "
+
+    with pytest.raises(ModelServiceError, match="Stream connection reset"):
+        list(run_iter)
+
+    (agent_span,) = _spans_named(
+        span_exporter, "invoke_agent InterruptedStreamBot"
+    )
+    assert agent_span.status.status_code == StatusCode.ERROR
+    assert (
+        dict(agent_span.attributes or {})[ErrorAttributes.ERROR_TYPE]
+        == "qwen_agent.llm.base.ModelServiceError"
+    )
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "InterruptedStreamBot": (1, 1),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "InterruptedStreamBot": (1, 0),
+        "Memory": (1, 0),
+    }
+
+
+@pytest.mark.vcr()
+def test_assistant_run_counts_chat_retries_once(
+    vcr_cassette, span_exporter, metric_reader, instrument_no_content
+):
+    """A logical inference call counts once even when BaseChatModel.chat() retries."""
+    bot = Assistant(
+        llm=_prompt_llm_cfg(max_retries=1),
+        name="RetryBot",
+    )
+    responses = list(bot.run([{"role": "user", "content": "Reply reliably."}]))
+    assert responses[-1][-1]["content"] == "Recovered after retry."
+    assert vcr_cassette.play_count == 2
+
+    (agent_span,) = _spans_named(span_exporter, "invoke_agent RetryBot")
+    assert agent_span.status.status_code != StatusCode.ERROR
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "RetryBot": (1, 1),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "RetryBot": (1, 0),
+        "Memory": (1, 0),
+    }
+
+
+@pytest.mark.vcr()
+def test_assistant_run_early_close_records_counts(
+    span_exporter, metric_reader, instrument_no_content
+):
+    """Closing the public Assistant.run() iterator early still records one observation."""
+    bot = Assistant(
+        llm=_prompt_llm_cfg(),
+        name="EarlyCloseCountBot",
+    )
+    run_iter = bot.run([{"role": "user", "content": "Start talking."}])
+    first_chunk = next(run_iter)
+    assert first_chunk[-1]["content"] == "Chunk one "
+    run_iter.close()
+
+    (agent_span,) = _spans_named(
+        span_exporter, "invoke_agent EarlyCloseCountBot"
+    )
+    assert agent_span.status.status_code != StatusCode.ERROR
+
+    observations = _call_observations(metric_reader)
+    assert observations[INFERENCE_CALLS_METRIC] == {
+        "EarlyCloseCountBot": (1, 1),
+        "Memory": (1, 0),
+    }
+    assert observations[TOOL_CALLS_METRIC] == {
+        "EarlyCloseCountBot": (1, 0),
+        "Memory": (1, 0),
     }
 
 
@@ -856,7 +993,7 @@ def test_call_tool_outside_run_is_not_counted(
     span_exporter, metric_reader, instrument_no_content
 ):
     """A tool call outside any agent run must not emit agent call counts."""
-    agent = _StubAgent.create(name="OutsideBot", llm=_FakeLLM())
+    agent = _StubAgent.create(name="OutsideBot", llm=_StubLLM())
     agent.function_map = {
         "get_weather": MagicMock(
             description="Get weather", call=MagicMock(return_value="ok")

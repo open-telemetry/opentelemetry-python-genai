@@ -47,7 +47,7 @@ from opentelemetry.instrumentation.genai.qwen_agent.patch import (
     wrap_agent_call_llm,
     wrap_agent_call_tool,
     wrap_agent_run,
-    wrap_fncall_agent_call_tool,
+    wrap_memory_run,
 )
 from opentelemetry.instrumentation.genai.qwen_agent.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
@@ -58,7 +58,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 __all__ = ["QwenAgentInstrumentor", "__version__"]
 
 _AGENT_MODULE = "qwen_agent.agent"
-_FN_CALL_AGENT_MODULE = "qwen_agent.agents.fncall_agent"
+_MEMORY_MODULE = "qwen_agent.memory.memory"
 
 
 def _with_handler(
@@ -85,11 +85,10 @@ class QwenAgentInstrumentor(BaseInstrumentor):
       ``run()`` internally, so the ``invoke_agent`` span is created once
       by the ``run()`` wrapper.
     - ``Agent._call_tool()``: tool execution spans (``execute_tool``).
-    - ``Agent._call_llm()`` and ``Agent._call_tool()``: model and tool call
-      counts of the enclosing run, reported on the ``invoke_agent``
-      histograms ``gen_ai.invoke_agent.inference_calls`` and
-      ``gen_ai.invoke_agent.tool_calls``. ``FnCallAgent._call_tool()`` is
-      wrapped too so tools unknown to the agent are counted as well.
+    - ``Agent._call_llm()``, ``Agent._call_tool()``, and ``Memory._run()``:
+      model and executed tool call counts of the enclosing run, reported on
+      the ``invoke_agent`` histograms ``gen_ai.invoke_agent.inference_calls``
+      and ``gen_ai.invoke_agent.tool_calls``.
 
     LLM call spans (``chat``) are not emitted by this instrumentation;
     enable the instrumentation of the underlying model client library
@@ -131,17 +130,17 @@ class QwenAgentInstrumentor(BaseInstrumentor):
             _with_handler(wrap_agent_call_llm, handler),
         )
         wrap_function_wrapper(
-            _FN_CALL_AGENT_MODULE,
-            "FnCallAgent._call_tool",
-            _with_handler(wrap_fncall_agent_call_tool, handler),
+            _MEMORY_MODULE,
+            "Memory._run",
+            _with_handler(wrap_memory_run, handler),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Qwen-Agent instrumentation."""
         import qwen_agent.agent
-        import qwen_agent.agents.fncall_agent
+        import qwen_agent.memory.memory
 
         unwrap(qwen_agent.agent.Agent, "run")
         unwrap(qwen_agent.agent.Agent, "_call_tool")
         unwrap(qwen_agent.agent.Agent, "_call_llm")
-        unwrap(qwen_agent.agents.fncall_agent.FnCallAgent, "_call_tool")
+        unwrap(qwen_agent.memory.memory.Memory, "_run")

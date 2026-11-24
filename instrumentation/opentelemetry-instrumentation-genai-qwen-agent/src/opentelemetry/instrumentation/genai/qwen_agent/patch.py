@@ -9,13 +9,10 @@
   not wrapped separately — it calls ``run()`` internally, so a single
   ``invoke_agent`` span is produced by this wrapper.
 - ``Agent._call_tool()`` -> ``execute_tool`` spans.
-- ``Agent._call_llm()`` and ``Agent._call_tool()`` also count the logical
-  model calls and tool calls made by the run, reported as the
-  ``gen_ai.invoke_agent.inference_calls`` and
+- ``Agent._call_llm()``, ``Agent._call_tool()``, and ``Memory._run()`` count
+  the logical model calls and executed tool calls made by the run, reported as
+  the ``gen_ai.invoke_agent.inference_calls`` and
   ``gen_ai.invoke_agent.tool_calls`` histograms when the invocation ends.
-  ``FnCallAgent._call_tool()`` answers unknown tools without delegating to
-  ``Agent._call_tool()``, so it is wrapped as well to keep those calls
-  counted exactly once.
 
 LLM calls made by the agent are intentionally not instrumented here: the
 underlying model client library (e.g. the OpenAI SDK) has its own
@@ -25,9 +22,9 @@ duplicate LLM spans when both are enabled.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry.context import get_value, set_value
 from opentelemetry.instrumentation.genai.qwen_agent.utils import (
@@ -48,6 +45,13 @@ from opentelemetry.util.genai.utils import (
 if TYPE_CHECKING:
     from qwen_agent.agent import Agent
 
+    class _ObjectProxy:
+        __wrapped__: Any
+
+        def __init__(self, wrapped: object) -> None: ...
+else:
+    from wrapt import ObjectProxy as _ObjectProxy
+
 _AGENT_RUN_CONTEXT_KEY = (
     "opentelemetry.instrumentation.genai.qwen_agent.current_agent_run"
 )
@@ -64,17 +68,45 @@ class _AgentRunContext:
 
     agent: Agent
     invocation: LocalAgentInvocation | None = None
+    in_call_tool: int = 0
 
 
-def _active_invocation(agent: Agent) -> LocalAgentInvocation | None:
-    """Return the invocation of the run currently executing for ``agent``."""
+def _active_run_context(agent: Agent) -> _AgentRunContext | None:
+    """Return the active run context when ``agent`` is currently executing."""
     run_context = get_value(_AGENT_RUN_CONTEXT_KEY)
     if (
         isinstance(run_context, _AgentRunContext)
         and run_context.agent is agent
     ):
-        return run_context.invocation
+        return run_context
     return None
+
+
+def _active_invocation(agent: Agent) -> LocalAgentInvocation | None:
+    """Return the invocation of the run currently executing for ``agent``."""
+    run_context = _active_run_context(agent)
+    return run_context.invocation if run_context is not None else None
+
+
+class _MemoryToolProxy(_ObjectProxy):
+    """Counts direct ``retrieval.call()`` invocations inside ``Memory._run()``."""
+
+    _self_memory: Agent
+
+    def __init__(self, tool: object, memory: Agent) -> None:
+        super().__init__(tool)
+        self._self_memory = memory
+
+    def call(self, *args: Any, **kwargs: Any) -> Any:
+        run_context = _active_run_context(self._self_memory)
+        if (
+            run_context is not None
+            and run_context.in_call_tool == 0
+            and run_context.invocation is not None
+            and run_context.invocation.tool_calls is not None
+        ):
+            run_context.invocation.tool_calls += 1
+        return self.__wrapped__.call(*args, **kwargs)
 
 
 class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
@@ -161,48 +193,86 @@ def wrap_agent_call_tool(
     handler: TelemetryHandler,
 ) -> Any:
     """Wrapper for ``Agent._call_tool()`` producing an ``execute_tool`` span."""
-    invocation = _active_invocation(instance)
-    if invocation is not None and invocation.tool_calls is not None:
-        invocation.tool_calls += 1
-
     bound = bind_arguments(wrapped, args, kwargs)
     tool_name = str(bound.get("tool_name") or "")
     tool_args: Any = bound.get("tool_args")
-    tool = getattr(instance, "function_map", {}).get(tool_name)
+    raw_function_map = getattr(instance, "function_map", None)
+    function_map = (
+        cast("dict[str, object]", raw_function_map)
+        if isinstance(raw_function_map, dict)
+        else None
+    )
+    has_tool = function_map is not None and tool_name in function_map
+    tool: object = (
+        function_map.get(tool_name) if function_map is not None else None
+    )
 
-    invocation = handler.tool(
+    run_context = _active_run_context(instance)
+    if (
+        has_tool
+        and run_context is not None
+        and run_context.invocation is not None
+        and run_context.invocation.tool_calls is not None
+    ):
+        run_context.invocation.tool_calls += 1
+
+    tool_invocation = handler.tool(
         tool_name,
         tool_type="function",
         _attach_to_context=False,
     )
     messages_arg: Any = kwargs.get("messages") or bound.get("messages")
-    invocation.tool_call_id = find_tool_call_id(messages_arg, tool_name)
-    invocation.tool_description = getattr(tool, "description", None)
-    if invocation.should_capture_content:
-        invocation.arguments = tool_arguments_to_any_value(tool_args)
+    tool_invocation.tool_call_id = find_tool_call_id(messages_arg, tool_name)
+    description = getattr(tool, "description", None)
+    tool_invocation.tool_description = (
+        description if isinstance(description, str) else None
+    )
+    if tool_invocation.should_capture_content:
+        tool_invocation.arguments = tool_arguments_to_any_value(tool_args)
 
-    with invocation:
-        result = wrapped(*args, **kwargs)
-        if invocation.should_capture_content:
-            invocation.tool_result = object_to_any_value(result)
+    with tool_invocation:
+        if run_context is not None:
+            run_context.in_call_tool += 1
+        try:
+            result = wrapped(*args, **kwargs)
+        finally:
+            if run_context is not None:
+                run_context.in_call_tool -= 1
+        if tool_invocation.should_capture_content:
+            tool_invocation.tool_result = object_to_any_value(result)
     return result
 
 
-def wrap_fncall_agent_call_tool(
+def wrap_memory_run(
     wrapped: Callable[..., Any],
     instance: Any,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     handler: TelemetryHandler,
 ) -> Any:
-    """Wrapper for ``FnCallAgent._call_tool()`` counting unknown tools.
+    """Wrapper for ``Memory._run()`` counting its direct ``retrieval`` call.
 
-    Known tools are delegated to ``Agent._call_tool()`` and counted there;
-    an unknown tool returns early, so it is counted here to avoid missing it.
+    ``Memory._run()`` invokes ``self.function_map['retrieval'].call(...)``
+    directly rather than going through ``Agent._call_tool()``.
     """
-    tool_name = str(get_argument("tool_name", wrapped, args, kwargs) or "")
-    if tool_name not in instance.function_map:
-        invocation = _active_invocation(instance)
-        if invocation is not None and invocation.tool_calls is not None:
-            invocation.tool_calls += 1
-    return wrapped(*args, **kwargs)
+    del handler
+    result = wrapped(*args, **kwargs)
+    raw_function_map = getattr(instance, "function_map", None)
+    if not isinstance(raw_function_map, dict):
+        return result
+    function_map = cast("dict[str, object]", raw_function_map)
+    retrieval = function_map.get("retrieval")
+    if retrieval is None or isinstance(retrieval, _MemoryToolProxy):
+        return result
+
+    proxy = _MemoryToolProxy(retrieval, instance)
+
+    def _iter_memory_run() -> Iterator[Any]:
+        function_map["retrieval"] = proxy
+        try:
+            yield from result
+        finally:
+            if function_map.get("retrieval") is proxy:
+                function_map["retrieval"] = retrieval
+
+    return _iter_memory_run()
