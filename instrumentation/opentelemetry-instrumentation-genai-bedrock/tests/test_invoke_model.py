@@ -723,6 +723,8 @@ def test_invoke_model_mistral(
         "max_tokens": 100,
         "temperature": 0.7,
         "top_p": 0.9,
+        "top_k": 40,
+        "stop": ["END", "STOP"],
     }
     response_body = {
         "outputs": [
@@ -766,6 +768,15 @@ def test_invoke_model_mistral(
     span = spans[0]
 
     assert span.name == "chat mistral.mistral-7b-instruct-v0:2"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K], int
+    )
+    stop_sequences = span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    ]
+    assert stop_sequences == ("END", "STOP")
+    assert all(isinstance(sequence, str) for sequence in stop_sequences)
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
@@ -845,6 +856,99 @@ def test_invoke_model_cohere(
     assert (
         output_msgs[0]["parts"][0]["content"] == "Spring brings blossoms pink"
     )
+
+
+def test_invoke_model_openai(
+    bedrock_client,
+    content_capture,
+    instrument_bedrock,
+    span_exporter,
+) -> None:
+    model_id = "openai.gpt-oss-20b-1:0"
+    request_body = {
+        "messages": [{"role": "user", "content": "Write a haiku"}],
+        "max_completion_tokens": 50,
+        "temperature": 0.3,
+        "top_p": 0.75,
+        "stop": "--",
+    }
+    response_body = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1754352000,
+        "model": model_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        "<reasoning>Write about spring.</reasoning>"
+                        "Rain taps on new leaves\n"
+                        "A sparrow shakes off the dark\n"
+                        "Morning fills the sky"
+                    ),
+                    "refusal": None,
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "service_tier": "default",
+        "usage": {
+            "prompt_tokens": 25,
+            "completion_tokens": 29,
+            "total_tokens": 54,
+        },
+    }
+    raw_response_bytes = json.dumps(response_body).encode("utf-8")
+    invoke_params = {
+        "modelId": model_id,
+        "contentType": "application/json",
+        "body": json.dumps(request_body),
+    }
+
+    with Stubber(bedrock_client) as stubber:
+        stubber.add_response(
+            "invoke_model",
+            service_response={
+                "contentType": "application/json",
+                "body": StreamingBody(
+                    io.BytesIO(raw_response_bytes), len(raw_response_bytes)
+                ),
+            },
+            expected_params=invoke_params,
+        )
+        response = bedrock_client.invoke_model(**invoke_params)
+        assert response["body"].read() == raw_response_bytes
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == f"chat {model_id}"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model_id
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME]
+        == GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.75
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
+        "--",
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "chatcmpl-123"
+    )
+
+    if content_capture.name == "SPAN_ONLY":
+        (message,) = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+        assert message["role"] == "user"
+        assert message["parts"] == (
+            {"type": "text", "content": "Write a haiku"},
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
 
 
 def test_is_embedding_model() -> None:

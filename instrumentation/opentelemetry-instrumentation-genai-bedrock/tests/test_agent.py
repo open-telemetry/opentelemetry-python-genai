@@ -694,7 +694,7 @@ def test_invoke_inline_agent_sync_caller_error_during_stream(
     assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
 
 
-def test_invoke_inline_agent_sync_stream_restores_caller_context(
+def test_invoke_inline_agent_sync_call_between_reads_is_not_nested(
     agent_client,
     instrument_with_content,
     span_exporter,
@@ -1617,7 +1617,7 @@ async def test_async_invoke_inline_agent_caller_error_during_stream(
 
 
 @pytest.mark.asyncio
-async def test_async_invoke_inline_agent_stream_restores_caller_context(
+async def test_async_invoke_inline_agent_call_between_reads_is_not_nested(
     async_agent_client,
     instrument_with_content,
     span_exporter,

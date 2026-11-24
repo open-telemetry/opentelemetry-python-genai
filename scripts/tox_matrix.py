@@ -13,7 +13,7 @@ emitted by hand in misc.yml because each has bespoke per-job logic.
 
 Usage in CI:
 
-  uvx --with tox-uv tox -l | python scripts/tox_matrix.py >> "$GITHUB_OUTPUT"
+  uv run --only-group tox tox -l | python scripts/tox_matrix.py >> "$GITHUB_OUTPUT"
 """
 
 from __future__ import annotations

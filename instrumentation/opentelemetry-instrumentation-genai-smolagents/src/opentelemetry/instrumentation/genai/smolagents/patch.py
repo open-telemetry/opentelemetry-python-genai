@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Generator, Mapping
-from contextlib import AbstractContextManager, ExitStack
 from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 from smolagents import AgentMaxStepsError
@@ -248,6 +247,7 @@ def _start_inference(
     return handler.inference(
         resolve_provider(instance),
         request_model=instance.model_id,
+        _attach_to_context=False,
     )
 
 
@@ -297,7 +297,6 @@ class _ModelStreamWrapper(SyncStreamWrapper["ChatMessageStreamDelta"]):
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_inference = invocation
-        invocation.suspend()
         self._self_capture_content = handler.should_capture_content()
         self._self_content: list[str] = []
         self._self_input_tokens = 0
@@ -369,17 +368,12 @@ def model_generate_stream(handler: TelemetryHandler) -> _Wrapper[Model]:
         kwargs: dict[str, Any],
     ) -> _ModelStreamWrapper:
         invocation = _start_inference(handler, instance)
-        with ExitStack() as finishing:
-            finishing.enter_context(invocation)
+        with invocation.activate():
             _record_request(
                 handler, invocation, wrapped, instance, args, kwargs
             )
-            stream = _ModelStreamWrapper(
-                wrapped(*args, **kwargs), invocation, handler
-            )
-            # Transfer invocation finalization to the stream.
-            finishing.pop_all()
-            return stream
+            stream = wrapped(*args, **kwargs)
+        return _ModelStreamWrapper(stream, invocation, handler)
 
     return wrapper
 
@@ -422,19 +416,12 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
         *,
         capture_content: bool,
     ) -> None:
-        # Model-stream metrics do not apply to agent steps, so do not pass the
-        # invocation to the base class.
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_agent_invocation = invocation
-        invocation.suspend()
         self._self_agent = agent
         self._self_capture_content = capture_content
         self._self_final_output: object = None
         self._self_saw_final = False
-        self._self_finished = False
-
-    def _execution_context(self) -> AbstractContextManager[None]:
-        return self._self_agent_invocation.activate()
 
     def __del__(self) -> None:
         try:
@@ -445,30 +432,6 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
                     self._finalize_success()
         except BaseException:  # pylint: disable=broad-except
             pass
-
-    def _finish_once(self, error: BaseException | None = None) -> None:
-        if self._self_finished:
-            return
-        self._self_finished = True
-        _finish(self._self_agent_invocation, error)
-
-    # The base wrapper finalizes on StopIteration and on an Exception, but not
-    # on an interrupt, which would leave the span open.
-    def __next__(self) -> _RunStreamChunk:
-        try:
-            return super().__next__()
-        except StopIteration:
-            raise
-        except BaseException as error:
-            self._finish_once(error)
-            raise
-
-    def close(self) -> None:
-        try:
-            super().close()
-        except BaseException as error:
-            self._finish_once(error)
-            raise
 
     def _process_chunk(self, chunk: _RunStreamChunk) -> None:
         if isinstance(chunk, FinalAnswerStep):
@@ -486,10 +449,10 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
                     capture_content=self._self_capture_content,
                 )
         finally:
-            self._finish_once()
+            _finish(self._self_agent_invocation)
 
     def _on_stream_error(self, error: BaseException) -> None:
-        self._finish_once(error)
+        _finish(self._self_agent_invocation, error)
 
 
 def _record_agent(
@@ -558,10 +521,10 @@ def agent_run(handler: TelemetryHandler) -> _Wrapper[MultiStepAgent]:
             agent_name=agent.name or type(agent).__name__,
             # ``gen_ai.request.model`` applies because an agent uses one model.
             request_model=getattr(agent.model, "model_id", None),
+            _attach_to_context=False,
         )
 
-        with ExitStack() as finishing:
-            finishing.enter_context(invocation)
+        with invocation.activate():
             _record_agent(
                 invocation, agent, bound, capture_content=capture_content
             )
@@ -573,10 +536,9 @@ def agent_run(handler: TelemetryHandler) -> _Wrapper[MultiStepAgent]:
                 result,
                 capture_content=capture_content,
             )
-            if stream is None:
-                return result
-            # Transfer invocation finalization to the stream.
-            finishing.pop_all()
+        if stream is not None:
             return stream
+        invocation.stop()
+        return result
 
     return wrapper

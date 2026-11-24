@@ -782,3 +782,52 @@ def test_invoke_model_with_response_stream_end_to_end_stubber(
     output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["parts"][0]["content"] == "Hello world!"
+
+
+def test_invoke_model_with_response_stream_errors_restore_caller_context(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    def failing_events():
+        yield {"chunk": {"bytes": b'{"outputText": "chunk"}'}}
+        raise ConnectionError("connection reset")
+
+    stubber = Stubber(bedrock_client)
+    stubber._validate_response = lambda *a, **kw: None
+    for body in (
+        failing_events(),
+        [{"chunk": {"bytes": b'{"outputText": "chunk"}'}}],
+    ):
+        stubber.add_response(
+            "invoke_model_with_response_stream",
+            {"contentType": "application/json", "body": body},
+        )
+
+    with stubber:
+        response = bedrock_client.invoke_model_with_response_stream(
+            modelId="amazon.titan-text-lite-v1", body="{}"
+        )
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        with pytest.raises(ConnectionError, match="connection reset"):
+            for _ in response["body"]:
+                assert trace.get_current_span() is trace.INVALID_SPAN
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
+        response = bedrock_client.invoke_model_with_response_stream(
+            modelId="amazon.titan-text-lite-v1", body="{}"
+        )
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        with pytest.raises(RuntimeError, match="caller error"):
+            with response["body"] as stream:
+                for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
+                    raise RuntimeError("caller error")
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    assert spans[1].status.status_code == StatusCode.ERROR
+    assert spans[1].attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"

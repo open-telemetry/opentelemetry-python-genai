@@ -189,7 +189,7 @@ def _handle_invoke_model(
             _attach_to_context=False,
         )
         extract_embedding_request(api_params, invocation)
-        with invocation.activate():
+        with invocation:
             response: Any = wrapped(*args, **kwargs)
             raw_bytes = b""
             body_stream = response.get("body")
@@ -198,13 +198,11 @@ def _handle_invoke_model(
                 response["body"] = StreamingBody(
                     io.BytesIO(raw_bytes), len(raw_bytes)
                 )
-
-        extract_embedding_response(
-            response,
-            raw_bytes,
-            invocation,
-        )
-        invocation.stop()
+            extract_embedding_response(
+                response,
+                raw_bytes,
+                invocation,
+            )
         return response
 
     invocation = handler.inference(

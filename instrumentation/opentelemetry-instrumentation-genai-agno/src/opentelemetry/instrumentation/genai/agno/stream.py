@@ -155,7 +155,7 @@ class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncStreamWrapper[Any]):
         invocation: LocalAgentInvocation,
         capture_content: bool,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation)
         self._self_agent_invocation = invocation
         self._self_capture_content = capture_content
         self._self_content_parts = []
@@ -172,7 +172,7 @@ class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
         invocation: LocalAgentInvocation,
         capture_content: bool,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation)
         self._self_agent_invocation = invocation
         self._self_capture_content = capture_content
         self._self_content_parts = []
@@ -291,7 +291,7 @@ class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
         capture_content: bool,
         on_close: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation)
         self._self_workflow_invocation = invocation
         self._self_capture_content = capture_content
         self._self_content_parts = []
@@ -312,7 +312,7 @@ class AsyncAgnoWorkflowStreamWrapper(
         capture_content: bool,
         on_close: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation)
         self._self_workflow_invocation = invocation
         self._self_capture_content = capture_content
         self._self_content_parts = []

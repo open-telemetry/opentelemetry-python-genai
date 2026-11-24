@@ -27,13 +27,14 @@ env:
     ) || 'main' }}
   CONTRIB_REPO_SHA: main
   PIP_EXISTS_ACTION: w
+  UV_LOCKED: "true"
 
 jobs:
 
   test:
     name: ${{ matrix.name }}
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(inputs.matrix) }}
@@ -50,6 +51,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ matrix.tox_env }}
 
       - name: Read pinned weaver version
         if: ${{ matrix.needs_weaver }}
@@ -65,6 +69,6 @@ jobs:
           version: ${{ steps.versions.outputs.WEAVER_VERSION }}
 
       - name: Run tests
-        run: uvx --with tox-uv tox -e "${MATRIX_TOX_ENV}" -- -ra
+        run: uv run --only-group tox tox -e "${MATRIX_TOX_ENV}" -- -ra
         env:
           MATRIX_TOX_ENV: ${{ matrix.tox_env }}

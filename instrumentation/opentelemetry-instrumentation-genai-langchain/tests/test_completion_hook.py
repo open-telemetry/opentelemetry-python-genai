@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch, sentinel
 
 from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
 from opentelemetry.test_util_genai.instrumentor import instrument
+from opentelemetry.util.genai.types import ContentCapturingMode
 
 
 def test_completion_hook_forwarded_to_handler(
@@ -53,3 +54,26 @@ def test_completion_hook_defaults_to_load_completion_hook(
             get_handler.call_args.kwargs["completion_hook"]
             is sentinel.default_hook
         )
+
+
+def test_content_capturing_mode_forwarded_to_handler(
+    tracer_provider, logger_provider, meter_provider
+):
+    """An explicit content mode passed to instrument() reaches the handler."""
+    instrumentor = LangChainInstrumentor()
+    with patch(
+        "opentelemetry.instrumentation.genai.langchain.TelemetryHandler"
+    ) as get_handler:
+        try:
+            instrumentor.instrument(
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+                content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+            )
+            assert (
+                get_handler.call_args.kwargs["content_capturing_mode"]
+                is ContentCapturingMode.SPAN_AND_EVENT
+            )
+        finally:
+            instrumentor.uninstrument()

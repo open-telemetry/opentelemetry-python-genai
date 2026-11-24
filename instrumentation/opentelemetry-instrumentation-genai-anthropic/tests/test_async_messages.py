@@ -17,6 +17,7 @@ from anthropic import (
     NOT_GIVEN,
     APIConnectionError,
     AsyncAnthropic,
+    DefaultAsyncHttpxClient,
     NotFoundError,
 )
 from anthropic._response import AsyncAPIResponse, AsyncResponseContextManager
@@ -29,6 +30,8 @@ from anthropic._streaming import AsyncStream as AnthropicAsyncStream
 from anthropic.resources.messages import AsyncMessages as _AsyncMessages
 from anthropic.types import Message, Usage
 
+from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.instrumentation.genai.anthropic import (
     AnthropicInstrumentor,
     _raw_response,
@@ -2330,6 +2333,8 @@ async def test_async_raw_response_proxy_hooks_stack_over_one_response():
         def stop(self):
             self._stops.append(True)
 
+        context = Context()
+
     http_response = _FakeAsyncHTTPResponse()
 
     class _Raw:
@@ -3277,3 +3282,130 @@ async def test_async_messages_create_unset_sentinel_keeps_extra_body_fallback(
     assert (
         spans[0].attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.5
     )
+
+
+def _client_recording_current_span() -> tuple[AsyncAnthropic, list[int]]:
+    seen: list[int] = []
+
+    async def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    client = AsyncAnthropic(
+        http_client=DefaultAsyncHttpxClient(event_hooks={"request": [hook]})
+    )
+    return client, seen
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_span_is_current_only_during_the_request(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_async_messages_create_basic.yaml"):
+        await client.messages.create(**_UNSET_BASE_KWARGS)
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_streaming_span_is_not_current_between_reads(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_async_messages_create_streaming.yaml"):
+        stream = await client.messages.create(
+            **_UNSET_BASE_KWARGS, stream=True
+        )
+        assert not trace.get_current_span().get_span_context().is_valid
+        async with stream:
+            async for _ in stream:
+                assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_span_is_not_current_between_reads(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_async_messages_stream.yaml"):
+        async with client.messages.stream(**_UNSET_BASE_KWARGS) as stream:
+            assert not trace.get_current_span().get_span_context().is_valid
+            async for _ in stream:
+                assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+def test_async_messages_create_closed_while_request_is_pending_fails_the_span(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    monkeypatch.setattr(AsyncAnthropic, "post", lambda *_a, **_kw: _Pending())
+    coro = AsyncAnthropic().messages.create(**_UNSET_BASE_KWARGS)
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
+
+
+_RAW_MESSAGE = {
+    "id": "msg_raw",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-20250514",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+async def test_async_raw_response_close_after_parse_runs_in_caller_context(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    closes: list[int] = []
+    aclose = _http_lib.Response.aclose
+
+    async def recording_aclose(self: _http_lib.Response) -> None:
+        closes.append(trace.get_current_span().get_span_context().span_id)
+        await aclose(self)
+
+    async def body():
+        yield json.dumps(_RAW_MESSAGE).encode()
+
+    monkeypatch.setattr(_http_lib.Response, "aclose", recording_aclose)
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(
+                lambda _request: _http_lib.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    content=body(),
+                )
+            )
+        ),
+    )
+    async with client.messages.with_streaming_response.create(
+        **_UNSET_BASE_KWARGS
+    ) as response:
+        await response.parse()
+        assert len(span_exporter.get_finished_spans()) == 1
+        closes.clear()
+
+    assert closes
+    assert set(closes) == {trace.INVALID_SPAN_ID}
