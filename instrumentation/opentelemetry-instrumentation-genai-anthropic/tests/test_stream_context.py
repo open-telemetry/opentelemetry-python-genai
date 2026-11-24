@@ -1078,37 +1078,81 @@ async def test_async_raw_response_parse_message_stops_inside_invocation(
 
 
 class _FailingHelperStream(_HelperStream):
+    """A ``MessageStream`` whose helpers fail after part of the response
+    arrived, so ``current_message_snapshot`` already holds it."""
+
+    current_message_snapshot = _start_event().message
+
     def get_final_message(self) -> Message:
+        raise ConnectionError("helper failed")
+
+    def _texts(self) -> Iterator[str]:
+        yield "hello"
         raise ConnectionError("helper failed")
 
 
 class _FailingAsyncHelperStream(_AsyncHelperStream):
+    current_message_snapshot = _start_event().message
+
     async def get_final_message(self) -> Message:
         raise ConnectionError("helper failed")
 
+    async def _texts(self) -> AsyncIterator[str]:
+        yield "hello"
+        raise ConnectionError("helper failed")
 
+
+def _assert_failed_with_snapshot(span_exporter) -> None:
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is trace.StatusCode.ERROR
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "ConnectionError"
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == _MODEL
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "msg_1"
+
+
+def _drain_sync_text(stream: Any) -> None:
+    for _ in stream.text_stream:
+        pass
+
+
+async def _drain_async_text(stream: Any) -> None:
+    async for _ in stream.text_stream:
+        pass
+
+
+@pytest.mark.parametrize(
+    "consume",
+    [lambda stream: stream.get_final_message(), _drain_sync_text],
+    ids=["get_final_message", "text_stream"],
+)
 def test_sync_stream_helper_error_fails_the_span(
-    tracer_provider, logger_provider, meter_provider, span_exporter
+    tracer_provider, logger_provider, meter_provider, span_exporter, consume
 ) -> None:
-    # ``_execution_context()`` is ``activate()``, which fails the invocation on
-    # an error escaping it, so a failing helper ends the span as an error.
     before = context.get_current()
     invocation = _invocation(tracer_provider, logger_provider, meter_provider)
     stream = MessagesStreamWrapper(
         _FailingHelperStream(invocation), invocation, False
     )
 
-    with pytest.raises(ConnectionError):
-        stream.get_final_message()
+    with pytest.raises(ConnectionError, match="helper failed"):
+        consume(stream)
 
     assert context.get_current() is before
-    (span,) = span_exporter.get_finished_spans()
-    assert span.status.status_code is trace.StatusCode.ERROR
+    _assert_failed_with_snapshot(span_exporter)
+    # Already finalized: a later close must not end the span again.
+    stream.close()
+    assert len(span_exporter.get_finished_spans()) == 1
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "consume",
+    [lambda stream: stream.get_final_message(), _drain_async_text],
+    ids=["get_final_message", "text_stream"],
+)
 async def test_async_stream_helper_error_fails_the_span(
-    tracer_provider, logger_provider, meter_provider, span_exporter
+    tracer_provider, logger_provider, meter_provider, span_exporter, consume
 ) -> None:
     before = context.get_current()
     invocation = _invocation(tracer_provider, logger_provider, meter_provider)
@@ -1116,9 +1160,10 @@ async def test_async_stream_helper_error_fails_the_span(
         _FailingAsyncHelperStream(invocation), invocation, False
     )
 
-    with pytest.raises(ConnectionError):
-        await asyncio.create_task(stream.get_final_message())
+    with pytest.raises(ConnectionError, match="helper failed"):
+        await asyncio.create_task(consume(stream))
 
     assert context.get_current() is before
-    (span,) = span_exporter.get_finished_spans()
-    assert span.status.status_code is trace.StatusCode.ERROR
+    _assert_failed_with_snapshot(span_exporter)
+    await stream.close()
+    assert len(span_exporter.get_finished_spans()) == 1

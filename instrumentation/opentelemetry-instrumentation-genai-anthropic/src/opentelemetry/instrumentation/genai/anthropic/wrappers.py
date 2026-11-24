@@ -374,13 +374,22 @@ class MessagesStreamWrapper(
                     text = next(text_stream)
                 except StopIteration:
                     return
+                except BaseException as error:
+                    # Finalize through the wrapper before ``activate()`` fails
+                    # the invocation, so the SDK snapshot is still recorded.
+                    self._finalize_failure(error)
+                    raise
             yield text
 
     def _scoped_helper(self, helper: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(helper)
         def scoped(*args: Any, **kwargs: Any) -> Any:
             with self._execution_context():
-                return helper(*args, **kwargs)
+                try:
+                    return helper(*args, **kwargs)
+                except BaseException as error:
+                    self._finalize_failure(error)
+                    raise
 
         return scoped
 
@@ -475,6 +484,9 @@ class AsyncMessagesStreamWrapper(
                     text = await anext(text_stream)
                 except StopAsyncIteration:
                     return
+                except BaseException as error:
+                    self._finalize_failure(error)
+                    raise
             yield text
 
     def _scoped_helper(
@@ -483,7 +495,11 @@ class AsyncMessagesStreamWrapper(
         @functools.wraps(helper)
         async def scoped(*args: Any, **kwargs: Any) -> Any:
             with self._execution_context():
-                return await helper(*args, **kwargs)
+                try:
+                    return await helper(*args, **kwargs)
+                except BaseException as error:
+                    self._finalize_failure(error)
+                    raise
 
         return scoped
 
