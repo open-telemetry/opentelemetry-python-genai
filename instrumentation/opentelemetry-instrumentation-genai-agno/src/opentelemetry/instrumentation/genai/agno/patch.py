@@ -63,7 +63,8 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     extract_session_id,
     format_content,
     format_retrieval_document,
-    is_agno_message,
+    is_message_like,
+    is_message_sequence,
     is_workflow_execution_input,
     prepare_tool_definitions,
     resolve_embedder_provider,
@@ -640,6 +641,65 @@ def _set_tool_invocation_output(
         )
 
 
+def _combine_media(msg_media: Any, extra_media: Any) -> list[Any] | None:
+    combined: list[Any] = []
+    for media_val in (msg_media, extra_media):
+        if media_val is None:
+            continue
+        if isinstance(media_val, Sequence) and not isinstance(
+            media_val, (str, bytes, bytearray, Mapping)
+        ):
+            combined.extend(cast("Sequence[object]", media_val))
+        else:
+            combined.append(media_val)
+    return combined or None
+
+
+def _build_single_input_message(
+    msg: object,
+    *,
+    extra_images: Any = None,
+    extra_audio: Any = None,
+    extra_videos: Any = None,
+    extra_files: Any = None,
+) -> InputMessage | None:
+    role = Role.USER.value
+    name: str | None = None
+
+    if is_message_like(msg):
+        role_val = _get_property_value(msg, "role")
+        if role_val is not None:
+            role = str(role_val)
+        name_val = _get_property_value(msg, "name")
+        if name_val is not None:
+            name = str(name_val)
+        content = _get_property_value(msg, "content")
+        text = format_content(content) if content is not None else ""
+        msg_images = _get_property_value(msg, "images")
+        msg_audio = _get_property_value(msg, "audio")
+        msg_videos = _get_property_value(msg, "videos")
+        msg_files = _get_property_value(msg, "files")
+    else:
+        text = _extract_input_content(msg) if msg is not None else ""
+        msg_images, msg_audio, msg_videos, msg_files = None, None, None, None
+
+    parts: list[MessagePart] = [TextPart(content=text)] if text else []
+    parts.extend(
+        extract_media_parts(
+            images=_combine_media(msg_images, extra_images),
+            audio=_combine_media(msg_audio, extra_audio),
+            videos=_combine_media(msg_videos, extra_videos),
+            files=_combine_media(msg_files, extra_files),
+        )
+    )
+    if parts:
+        kwargs: dict[str, Any] = {"role": role, "parts": parts}
+        if name is not None:
+            kwargs["name"] = name
+        return InputMessage(**kwargs)
+    return None
+
+
 def _build_user_input_messages(
     input_val: object,
     *,
@@ -648,32 +708,43 @@ def _build_user_input_messages(
     videos: Sequence[Video] | None = None,
     files: Sequence[File] | None = None,
 ) -> list[InputMessage]:
-    role = Role.USER.value
-    if is_agno_message(input_val):
-        role = input_val.role or Role.USER.value
-        text = (
-            format_content(input_val.content)
-            if input_val.content is not None
-            else ""
-        )
-        images, audio, videos, files = (
-            input_val.images,
-            input_val.audio,
-            input_val.videos,
-            input_val.files,
-        )
-    else:
-        text = (
-            _extract_input_content(input_val) if input_val is not None else ""
-        )
+    if is_message_sequence(input_val):
+        input_seq = cast("Sequence[object]", input_val)
+        messages: list[InputMessage] = []
+        extra_idx = -1
+        for idx in reversed(range(len(input_seq))):
+            if _get_property_value(input_seq[idx], "role") == Role.USER.value:
+                extra_idx = idx
+                break
+        if extra_idx == -1 and len(input_seq) > 0:
+            extra_idx = len(input_seq) - 1
 
-    parts: list[MessagePart] = [TextPart(content=text)] if text else []
-    parts.extend(
-        extract_media_parts(
-            images=images, audio=audio, videos=videos, files=files
-        )
+        for idx, item in enumerate(input_seq):
+            is_extra_target = idx == extra_idx
+            item_images = images if is_extra_target else None
+            item_audio = audio if is_extra_target else None
+            item_videos = videos if is_extra_target else None
+            item_files = files if is_extra_target else None
+
+            msg = _build_single_input_message(
+                item,
+                extra_images=item_images,
+                extra_audio=item_audio,
+                extra_videos=item_videos,
+                extra_files=item_files,
+            )
+            if msg is not None:
+                messages.append(msg)
+        return messages
+
+    single_msg = _build_single_input_message(
+        input_val,
+        extra_images=images,
+        extra_audio=audio,
+        extra_videos=videos,
+        extra_files=files,
     )
-    return [InputMessage(role=role, parts=parts)] if parts else []
+    return [single_msg] if single_msg is not None else []
 
 
 def _set_invocation_input(

@@ -7,19 +7,17 @@ from __future__ import annotations
 
 import mimetypes
 import os
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
-    from agno.media import Audio, File, Image, Video
+    from agno.media import File
     from agno.media.reference import MediaReference
     from agno.models.message import Message
     from agno.workflow.types import WorkflowExecutionInput
-
-    _AgnoMedia = Image | Audio | Video | File
 
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
@@ -80,10 +78,17 @@ def format_content(val: object) -> str:
     return gen_ai_json_dumps(any_value, ensure_ascii=False)
 
 
-def _get_media_reference(media: _AgnoMedia) -> MediaReference | None:
+def _get_property_value(obj: Any, property_name: str) -> Any:
+    if isinstance(obj, Mapping):
+        return cast("Mapping[str, Any]", obj).get(property_name)
+
+    return getattr(obj, property_name, None)
+
+
+def _get_media_reference(media: Any) -> MediaReference | None:
     # media_reference was added in Agno 3.x.
     return cast(
-        "MediaReference | None", getattr(media, "media_reference", None)
+        "MediaReference | None", _get_property_value(media, "media_reference")
     )
 
 
@@ -96,27 +101,37 @@ _FORMAT_MIME_TYPES: dict[str, str] = {
 
 
 def _resolve_media_mime_type(
-    media: _AgnoMedia,
+    media: Any,
     file_cls: type[File],
     media_ref: MediaReference | None,
 ) -> str | None:
-    if media.mime_type:
-        return media.mime_type
-    if media.format:
-        if "/" in media.format:
-            return media.format
-        ext = media.format.lstrip(".").lower()
+    mime_type = _get_property_value(media, "mime_type")
+    if mime_type:
+        return str(mime_type)
+    format_val = _get_property_value(media, "format")
+    if format_val:
+        format_str = str(format_val)
+        if "/" in format_str:
+            return format_str
+        ext = format_str.lstrip(".").lower()
         if ext in _FORMAT_MIME_TYPES:
             return _FORMAT_MIME_TYPES[ext]
         guessed, _ = mimetypes.guess_type(f"file.{ext}")
         if guessed:
             return guessed
-    if isinstance(media, file_cls) and media.filename:
-        guessed, _ = mimetypes.guess_type(media.filename)
+    filename = _get_property_value(media, "filename")
+    if filename and (
+        isinstance(media, file_cls)
+        or _get_property_value(media, "type") == "file"
+        or (isinstance(media, Mapping) and "id" in media)
+    ):
+        guessed, _ = mimetypes.guess_type(str(filename))
         if guessed:
             return guessed
-    if media_ref is not None and media_ref.mime_type:
-        return media_ref.mime_type
+    if media_ref is not None:
+        ref_mime = _get_property_value(media_ref, "mime_type")
+        if ref_mime:
+            return str(ref_mime)
     return None
 
 
@@ -137,52 +152,68 @@ def _url_to_media_part(
 
 
 def _media_to_part(
-    media: _AgnoMedia,
+    media: Any,
     modality: Modality,
     file_cls: type[File],
 ) -> MessagePart | None:
     media_ref = _get_media_reference(media)
     mime_type = _resolve_media_mime_type(media, file_cls, media_ref)
 
-    if media.url:
+    url = _get_property_value(media, "url")
+    if url:
         return _url_to_media_part(
-            media.url, modality=modality, mime_type=mime_type
+            str(url), modality=modality, mime_type=mime_type
         )
 
-    if isinstance(media.content, (bytes, bytearray)):
+    content = _get_property_value(media, "content")
+    if isinstance(content, (bytes, bytearray)):
         return BlobPart(
             mime_type=mime_type,
             modality=modality,
-            content=bytes(media.content),
+            content=bytes(content),
         )
-    if isinstance(media, file_cls) and isinstance(media.content, str):
+    if (
+        isinstance(media, file_cls)
+        or (isinstance(media, Mapping) and modality == Modality.DOCUMENT)
+    ) and isinstance(content, str):
         return BlobPart(
             mime_type=mime_type,
             modality=modality,
-            content=media.content.encode("utf-8"),
+            content=content.encode("utf-8"),
         )
 
-    if media.filepath:
+    filepath = _get_property_value(media, "filepath")
+    if filepath:
         return UriPart(
             mime_type=mime_type,
             modality=modality,
-            uri=Path(media.filepath).absolute().as_uri(),
+            uri=Path(str(filepath)).absolute().as_uri(),
         )
 
     if media_ref is not None:
-        if media_ref.url:
+        ref_url = _get_property_value(media_ref, "url")
+        if ref_url:
             return _url_to_media_part(
-                media_ref.url, modality=modality, mime_type=mime_type
+                str(ref_url), modality=modality, mime_type=mime_type
             )
         return None
 
     # File.id is a provider file reference only when no other source was supplied;
     # Agno 3.x auto-generates a UUID id whenever another source is present.
-    if isinstance(media, file_cls) and media.external is None and media.id:
+    external = _get_property_value(media, "external")
+    media_id = _get_property_value(media, "id")
+    if (
+        (
+            isinstance(media, file_cls)
+            or (isinstance(media, Mapping) and modality == Modality.DOCUMENT)
+        )
+        and external is None
+        and media_id
+    ):
         return FilePart(
             mime_type=mime_type,
             modality=modality,
-            file_id=media.id,
+            file_id=str(media_id),
         )
 
     return None
@@ -190,10 +221,10 @@ def _media_to_part(
 
 def extract_media_parts(
     *,
-    images: Sequence[Image] | None = None,
-    audio: Sequence[Audio] | None = None,
-    videos: Sequence[Video] | None = None,
-    files: Sequence[File] | None = None,
+    images: Sequence[Any] | None = None,
+    audio: Sequence[Any] | None = None,
+    videos: Sequence[Any] | None = None,
+    files: Sequence[Any] | None = None,
 ) -> list[MessagePart]:
     """Convert Agno media sequences into GenAI message parts."""
     if not (images or audio or videos or files):
@@ -202,7 +233,7 @@ def extract_media_parts(
     from agno.media import File  # pylint: disable=import-outside-toplevel
 
     parts: list[MessagePart] = []
-    media_groups: tuple[tuple[Sequence[_AgnoMedia] | None, Modality], ...] = (
+    media_groups: tuple[tuple[Sequence[Any] | None, Modality], ...] = (
         (images, Modality.IMAGE),
         (audio, Modality.AUDIO),
         (videos, Modality.VIDEO),
@@ -240,11 +271,26 @@ def is_workflow_execution_input(
     return isinstance(val, WorkflowExecutionInput)
 
 
-def _get_property_value(obj: Any, property_name: str) -> Any:
-    if isinstance(obj, dict):
-        return cast(dict[str, Any], obj).get(property_name)
+def is_message_like(val: object) -> bool:
+    """Return True if val is an Agno Message instance or a message-shaped mapping."""
+    if val is None:
+        return False
+    if is_agno_message(val):
+        return True
+    return isinstance(val, Mapping) and "role" in val
 
-    return getattr(obj, property_name, None)
+
+def is_message_sequence(val: object) -> bool:
+    """Return True if val is a non-empty sequence containing message-like objects."""
+    if (
+        isinstance(val, Sequence)
+        and not isinstance(val, (str, bytes, bytearray, Mapping))
+        and len(cast("Sequence[object]", val)) > 0
+    ):
+        return any(
+            is_message_like(item) for item in cast("Sequence[object]", val)
+        )
+    return False
 
 
 def _extract_desc(tool: Any) -> str | None:

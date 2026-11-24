@@ -287,6 +287,78 @@ def test_agent_captures_blob_data_url_and_filepath_media(
         ),
         (
             {
+                "input": [
+                    Message(
+                        role="user",
+                        content="Look",
+                        images=[Image(url="https://example.com/msg.png")],
+                    )
+                ]
+            },
+            (
+                {"type": "text", "content": "Look"},
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "uri": "https://example.com/msg.png",
+                },
+            ),
+        ),
+        (
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": "Look",
+                        "images": [Image(url="https://example.com/msg.png")],
+                    }
+                ]
+            },
+            (
+                {"type": "text", "content": "Look"},
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "uri": "https://example.com/msg.png",
+                },
+            ),
+        ),
+        (
+            {
+                "input": {
+                    "role": "user",
+                    "content": "Look",
+                    "images": [Image(url="https://example.com/msg.png")],
+                }
+            },
+            (
+                {"type": "text", "content": "Look"},
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "uri": "https://example.com/msg.png",
+                },
+            ),
+        ),
+        (
+            {
+                "input": {
+                    "role": "user",
+                    "content": "Look",
+                    "images": [{"url": "https://example.com/msg.png"}],
+                }
+            },
+            (
+                {"type": "text", "content": "Look"},
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "uri": "https://example.com/msg.png",
+                },
+            ),
+        ),
+        (
+            {
                 "input": Message(
                     role="user",
                     content=None,
@@ -313,6 +385,125 @@ def test_agent_media_without_text_and_message_inputs(
     agent = Agent(name="msg-media-agent", model=MockModel(id="mock-model"))
     _run_agent(agent, **run_kwargs)
     assert _input_parts(span_exporter) == expected_parts
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_agent_message_sequence_preserves_roles_and_attachments(
+    instrument_agno_content_capture,
+    span_exporter,
+    is_async: bool,
+) -> None:
+    """Message sequence input preserves each message's role and media attachments."""
+    agent = Agent(name="multi-msg-agent", model=MockModel(id="mock-model"))
+    cat_img = Image(url="https://example.com/cat.png")
+    dog_img = Image(url="https://example.com/dog.png")
+
+    input_messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        Message(role="user", content="Describe cat", images=[cat_img]),
+        {"role": "assistant", "content": "It is a cat."},
+        {
+            "role": "user",
+            "name": "alice",
+            "content": "Describe dog",
+            "images": [dog_img],
+        },
+    ]
+
+    _run_agent(agent, is_async=is_async, input=input_messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    messages = spans[0].attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert messages is not None
+    assert len(messages) == 4
+
+    assert messages[0]["role"] == "system"
+    assert messages[0]["parts"] == (
+        {"type": "text", "content": "You are a helpful assistant."},
+    )
+
+    assert messages[1]["role"] == "user"
+    assert messages[1]["parts"] == (
+        {"type": "text", "content": "Describe cat"},
+        {
+            "type": "uri",
+            "modality": "image",
+            "uri": "https://example.com/cat.png",
+        },
+    )
+
+    assert messages[2]["role"] == "assistant"
+    assert messages[2]["parts"] == (
+        {"type": "text", "content": "It is a cat."},
+    )
+
+    assert messages[3]["role"] == "user"
+    assert messages[3]["name"] == "alice"
+    assert messages[3]["parts"] == (
+        {"type": "text", "content": "Describe dog"},
+        {
+            "type": "uri",
+            "modality": "image",
+            "uri": "https://example.com/dog.png",
+        },
+    )
+
+
+def test_agent_message_sequence_with_top_level_media(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Top-level media arguments are attached when input is a message sequence."""
+    agent = Agent(name="top-media-agent", model=MockModel(id="mock-model"))
+    top_img = Image(url="https://example.com/top.png")
+
+    _run_agent(
+        agent,
+        input=[
+            {"role": "system", "content": "System instruction"},
+            Message(role="user", content="User prompt"),
+        ],
+        images=[top_img],
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    messages = spans[0].attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert messages is not None and len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert messages[1]["parts"] == (
+        {"type": "text", "content": "User prompt"},
+        {
+            "type": "uri",
+            "modality": "image",
+            "uri": "https://example.com/top.png",
+        },
+    )
+
+
+def test_agent_message_sequence_omitted_when_content_capture_disabled(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Message sequence input is not recorded when content capture is disabled."""
+    agent = Agent(
+        name="no-capture-seq-agent", model=MockModel(id="mock-model")
+    )
+    _run_agent(
+        agent,
+        input=[
+            Message(
+                role="user",
+                content="Describe",
+                images=[Image(url="https://example.com/cat.png")],
+            )
+        ],
+    )
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in spans[0].attributes
 
 
 @pytest.mark.parametrize("is_async", [False, True])
