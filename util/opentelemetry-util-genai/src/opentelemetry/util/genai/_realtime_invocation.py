@@ -193,7 +193,6 @@ class RealtimeInferenceInvocation(GenAIInvocation):
             attributes=self._data.attributes,
         )
         self._data.attributes = self.attributes
-        self._end_time_ns: int | None = None
 
     def mark_end(self) -> None:
         """Record the operation end timestamp before finalization.
@@ -563,16 +562,6 @@ class RealtimeInferenceInvocation(GenAIInvocation):
             log_record=None,
         )
 
-    def _finish(self, error: Error | None = None) -> None:
-        if self._finished:
-            return
-        self._finished = True
-        try:
-            self._apply_finish(error)
-        finally:
-            self._detach()
-            self.span.end(end_time=self._end_time_ns)
-
 
 @dataclass
 class _UserSpeechData:
@@ -637,6 +626,11 @@ class UserSpeechInvocation(GenAIInvocation):
             _attach_to_context=_attach_to_context,
             content_capturing_mode=content_capturing_mode,
         )
+
+    @property
+    def should_capture_content(self) -> bool:
+        """Return False because ``user_speech`` spans never capture message content."""
+        return False
 
     @property
     def provider(self) -> str | None:

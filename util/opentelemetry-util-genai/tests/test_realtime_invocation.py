@@ -766,3 +766,7 @@ def test_should_capture_realtime_content_matches_invocation_policy(
         assert handler.should_capture_realtime_content() is expected
         with handler.realtime_inference("gcp.gemini") as inv:
             assert inv.should_capture_content is expected
+        with handler.user_speech(
+            provider="gcp.gemini", realtime_session_id="sess-speech"
+        ) as speech:
+            assert speech.should_capture_content is False
