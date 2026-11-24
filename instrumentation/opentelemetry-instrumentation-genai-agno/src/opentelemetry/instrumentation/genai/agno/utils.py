@@ -38,6 +38,7 @@ else:
 
         return RunMetrics
 
+
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
 )
