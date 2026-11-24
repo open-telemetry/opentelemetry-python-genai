@@ -184,7 +184,6 @@ class GenAITracingProcessor(TracingProcessor):
             if definitions:
                 invocation.tool_definitions = definitions
         elif definitions != first:
-            # Semconv: omit unless every turn offers the same tool list.
             invocation.tool_definitions = None
 
     def _get_agent(self, span_id: str) -> LocalAgentInvocation | None:

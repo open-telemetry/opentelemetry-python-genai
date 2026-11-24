@@ -312,7 +312,6 @@ async def test_runner_tool_definitions_follow_capture_settings(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
-        content_capture=content_capture.name,
     ):
         agent = agents.Agent(
             name="test_agent",

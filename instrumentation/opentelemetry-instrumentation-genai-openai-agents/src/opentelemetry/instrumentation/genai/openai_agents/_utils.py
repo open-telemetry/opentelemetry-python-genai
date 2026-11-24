@@ -6,8 +6,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from openai.types.responses import CustomTool, FunctionTool
-
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -22,7 +20,7 @@ def get_tool_definitions(tools: Sequence[Tool]) -> list[ToolDefinition]:
     """Map Responses API ``Response.tools`` entries onto tool definitions."""
     definitions: list[ToolDefinition] = []
     for tool in tools:
-        if isinstance(tool, FunctionTool):
+        if tool.type == "function":
             definitions.append(
                 FunctionToolDefinition(
                     name=tool.name,
@@ -33,7 +31,7 @@ def get_tool_definitions(tools: Sequence[Tool]) -> list[ToolDefinition]:
             continue
         if tool.type == "mcp":
             name = tool.server_label
-        elif isinstance(tool, CustomTool) or tool.type == "namespace":
+        elif tool.type == "custom" or tool.type == "namespace":
             name = tool.name
         else:
             name = tool.type
