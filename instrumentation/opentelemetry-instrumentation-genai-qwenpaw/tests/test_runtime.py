@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import json
 from contextlib import suppress
 from importlib.metadata import version
 from types import AsyncGeneratorType
@@ -48,9 +47,7 @@ async def _close_runtime_stream(stream: Any) -> None:
 def output_text(span: Any) -> list[str]:
     return [
         part["content"]
-        for message in json.loads(
-            span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
-        )
+        for message in span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
         for part in message["parts"]
         if part["type"] == "text"
     ]
@@ -81,11 +78,11 @@ async def test_runtime_turn(
     assert span.attributes[GenAI.GEN_AI_AGENT_NAME] == "Friday"
     assert span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "sess-2"
     assert GenAI.GEN_AI_AGENT_ID not in span.attributes
-    assert isinstance(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES], str)
-    assert isinstance(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES], str)
-    assert json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])[0][
-        "parts"
-    ] == [{"type": "text", "content": "/test"}]
+    assert isinstance(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES], tuple)
+    assert isinstance(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES], tuple)
+    assert span.attributes[GenAI.GEN_AI_INPUT_MESSAGES][0]["parts"] == (
+        {"type": "text", "content": "/test"},
+    )
     assert output_text(span) == ["Runtime reply."]
     assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
     assert GenAI.GEN_AI_REQUEST_STREAM not in span.attributes
@@ -150,13 +147,13 @@ async def test_runtime_captures_refusal_history(
         )
     (span,) = span_exporter.get_finished_spans()
     if capture_mode == "SPAN_ONLY":
-        messages = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+        messages = span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
         assert [message["role"] for message in messages] == [
             "assistant",
             "user",
         ]
-        assert messages[0]["parts"] == [{"type": "text", "content": refusal}]
-        assert messages[1]["parts"] == [{"type": "text", "content": "/test"}]
+        assert messages[0]["parts"] == ({"type": "text", "content": refusal},)
+        assert messages[1]["parts"] == ({"type": "text", "content": "/test"},)
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in span.attributes
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in span.attributes
@@ -259,14 +256,12 @@ async def test_runtime_heartbeats_do_not_recapture_completed_media(
         assert decode_media.call_count > 0
         parts = [
             part
-            for message in json.loads(
-                span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
-            )
+            for message in span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
             for part in message["parts"]
         ]
         assert parts[0] == {
             "type": "blob",
-            "content": "YWJj",
+            "content": b"abc",
             "mime_type": "image/png",
             "modality": "image",
         }
@@ -277,7 +272,7 @@ async def test_runtime_heartbeats_do_not_recapture_completed_media(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("session_id", [None, "sess-2"])
-async def test_lazy_context_and_nested_invocations(
+async def test_stream_keeps_call_context_and_restores_reader_context(
     instrument_with_content: Any,
     span_exporter: Any,
     tracer_provider: Any,
@@ -307,21 +302,23 @@ async def test_lazy_context_and_nested_invocations(
         assert stream.__class__ is AsyncGeneratorType
         assert span_exporter.get_finished_spans() == ()
         assert get_current_span() is parent
+    with tracer.start_as_current_span("reader") as reader:
         async for _ in stream:
-            assert get_current_span() is parent
-        assert get_current_span() is parent
+            assert get_current_span() is reader
+        assert get_current_span() is reader
     spans = {span.name: span for span in span_exporter.get_finished_spans()}
     assert spans["invoke_agent Friday"].parent == parent.get_span_context()
     assert (
         spans["invoke_agent nested"].parent
         == spans["invoke_agent Friday"].context
     )
-    assert (
-        spans["invoke_agent nested"].attributes[GenAI.GEN_AI_CONVERSATION_ID]
-        == spans["invoke_agent Friday"].attributes[
-            GenAI.GEN_AI_CONVERSATION_ID
-        ]
-    )
+    if session_id is not None:
+        assert (
+            spans["invoke_agent nested"].attributes[
+                GenAI.GEN_AI_CONVERSATION_ID
+            ]
+            == session_id
+        )
 
 
 @pytest.mark.asyncio
@@ -392,14 +389,10 @@ async def test_early_close(
     if read:
         await anext(stream)
         await anext(stream)
-    if read:
         await _close_runtime_stream(stream)
     else:
         await stream.aclose()
     await stream.aclose()
-    if not read:
-        assert span_exporter.get_finished_spans() == ()
-        return
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code is (
         StatusCode.ERROR
@@ -410,6 +403,8 @@ async def test_early_close(
     assert stream.ag_frame is None
     if read:
         assert output_text(span) == ["Runtime reply."]
+    else:
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.asyncio
@@ -630,7 +625,7 @@ async def test_output_message_parts(
     )
     await drain(stream)
     (span,) = span_exporter.get_finished_spans()
-    (message,) = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    (message,) = span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert message["parts"][0]["type"] == part_type
     if message_type == "function_call":
         assert message["parts"][0]["arguments"] == {"city": "Paris"}
@@ -716,10 +711,10 @@ async def test_real_envelope_parts(
             await _close_runtime_stream(stream)
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAI.GEN_AI_CONVERSATION_ID]
-    assert json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])[0][
-        "parts"
-    ] == [{"type": "text", "content": "Describe the weather."}]
-    messages = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    assert span.attributes[GenAI.GEN_AI_INPUT_MESSAGES][0]["parts"] == (
+        {"type": "text", "content": "Describe the weather."},
+    )
+    messages = span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     parts = [part for msg in messages for part in msg["parts"]]
     if part_kind == "reasoning":
         assert parts == [{"type": "reasoning", "content": "hello world"}]
@@ -768,85 +763,16 @@ async def test_normalization_error_restores_context(
 
 
 @pytest.mark.asyncio
-async def test_unread_abandoned_stream_does_not_invoke_agent(
+async def test_unread_abandoned_stream_finalizes_invocation(
     instrument_no_content: Any, span_exporter: Any
 ) -> None:
     stream = make_runtime().run(runtime_request())
     del stream
     gc.collect()
-    assert span_exporter.get_finished_spans() == ()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("fail", [False, True])
-async def test_hook_context_survives_yields(
-    instrument_with_content: Any,
-    tracer_provider: Any,
-    span_exporter: Any,
-    fail: bool,
-) -> None:
-    from qwenpaw.runtime.hooks import HookBase, HookResult
-    from qwenpaw.runtime.phases import Phase
-
-    from opentelemetry import baggage
-    from opentelemetry.context import attach, detach
-
-    tracer = tracer_provider.get_tracer(__name__)
-    error = ConnectionError("after response")
-
-    class OpenScope(HookBase):
-        phase = Phase.PRE_DISPATCH
-        name = "open-scope"
-
-        async def run(self, ctx: Any) -> HookResult:
-            scope = tracer.start_as_current_span("hook")
-            ctx.extras["scope"] = scope
-            ctx.extras["span"] = scope.__enter__()
-            ctx.extras["token"] = attach(baggage.set_baggage("hook", "active"))
-            return HookResult()
-
-    class AfterResponse(HookBase):
-        phase = Phase.POST_RESPONSE
-        name = "after-response"
-
-        async def run(self, ctx: Any) -> HookResult:
-            assert get_current_span() is ctx.extras["span"]
-            assert baggage.get_baggage("hook") == "active"
-            with tracer.start_as_current_span("after-response"):
-                pass
-            if fail:
-                raise error
-            return HookResult()
-
-    class CloseScope(HookBase):
-        phase = Phase.FINALLY
-        name = "close-scope"
-
-        async def run(self, ctx: Any) -> HookResult:
-            assert get_current_span() is ctx.extras["span"]
-            detach(ctx.extras["token"])
-            ctx.extras["scope"].__exit__(None, None, None)
-            return HookResult()
-
-    runtime = make_runtime()
-    for hook in (OpenScope(), AfterResponse(), CloseScope()):
-        runtime.workspace.plugins.hook_registry.register(hook)
-    with tracer.start_as_current_span("parent") as parent:
-        try:
-            async for _ in runtime.run(runtime_request()):
-                assert get_current_span() is parent
-                assert baggage.get_baggage("hook") is None
-        except ConnectionError as caught:
-            assert fail
-            assert caught is error
-        else:
-            assert not fail
-        assert get_current_span() is parent
-        assert baggage.get_baggage("hook") is None
-    spans = {span.name: span for span in span_exporter.get_finished_spans()}
-    assert spans["hook"].parent == spans["invoke_agent Friday"].context
-    assert spans["after-response"].parent == spans["hook"].context
-    assert spans["invoke_agent Friday"].parent == parent.get_span_context()
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == "invoke_agent Friday"
+    assert span.attributes[ERROR_TYPE] == "_OTHER"
+    assert span.status.description == "abandoned stream"
 
 
 @pytest.mark.asyncio
@@ -1101,21 +1027,21 @@ async def test_real_envelope_mixed_content(
     assert message.parts == expected
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAI.GEN_AI_CONVERSATION_ID]
-    assert json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])[0][
-        "parts"
-    ] == [{"type": "text", "content": "Describe the media."}]
-    (recorded,) = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    assert span.attributes[GenAI.GEN_AI_INPUT_MESSAGES][0]["parts"] == (
+        {"type": "text", "content": "Describe the media."},
+    )
+    (recorded,) = span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert recorded["role"] == "assistant"
-    assert recorded["parts"] == [
+    assert recorded["parts"] == (
         {"type": "text", "content": "before"},
         {
             "type": "blob",
-            "content": "YWJj",
+            "content": b"abc",
             "mime_type": mime_type,
             "modality": mime_type.split("/")[0],
         },
         {"type": "text", "content": "after"},
-    ]
+    )
     assert span.status.status_code is (
         StatusCode.ERROR
         if ending == "error"

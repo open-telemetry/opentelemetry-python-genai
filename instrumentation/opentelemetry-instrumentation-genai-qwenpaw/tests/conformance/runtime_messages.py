@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -37,9 +36,7 @@ class RuntimeMessagesScenario(Scenario):
             attribute["name"]: attribute["value"]
             for attribute in span["attributes"]
         }
-        history, input_message = json.loads(
-            attributes[GenAI.GEN_AI_INPUT_MESSAGES]
-        )
+        history, input_message = attributes[GenAI.GEN_AI_INPUT_MESSAGES]
         assert history["role"] == "assistant"
         assert history["parts"] == [
             {"type": "text", "content": "I cannot help with that."}
@@ -69,14 +66,14 @@ class RuntimeMessagesScenario(Scenario):
         assert [
             (part["mime_type"], part["content"]) for part in input_parts[5:]
         ] == [
-            ("image/png", "YWJj"),
-            ("video/mp4", "YWJj"),
-            ("application/pdf", "YWJj"),
-            ("audio/wav", "YWJj"),
+            ("image/png", b"abc"),
+            ("video/mp4", b"abc"),
+            ("application/pdf", b"abc"),
+            ("audio/wav", b"abc"),
         ]
         output_parts = [
             part
-            for message in json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+            for message in attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
             for part in message["parts"]
         ]
         assert [
@@ -108,9 +105,9 @@ class RuntimeMessagesScenario(Scenario):
         assert [
             (part["mime_type"], part["content"]) for part in output_parts[4:]
         ] == [
-            ("image/png", "YWJj"),
-            ("video/mp4", "YWJj"),
-            ("audio/wav", "YWJj"),
+            ("image/png", b"abc"),
+            ("video/mp4", b"abc"),
+            ("audio/wav", b"abc"),
         ]
         assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in attributes
 

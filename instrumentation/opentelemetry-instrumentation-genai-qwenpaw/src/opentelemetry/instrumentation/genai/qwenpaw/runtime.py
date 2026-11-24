@@ -6,20 +6,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator, Callable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import AsyncGenerator, Callable
 from enum import Enum
 from typing import cast
 from urllib.parse import urlsplit
 
-from opentelemetry.context import Context, attach, detach, get_current
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
-from opentelemetry.util.genai.stream import (
-    AbandonedStreamError,
-    AsyncStreamWrapper,
-)
+from opentelemetry.util.genai.stream import AsyncStreamWrapper
 from opentelemetry.util.genai.types import (
     Error,
     InputMessage,
@@ -134,70 +128,6 @@ def input_messages_from_request(request: object) -> list[InputMessage]:
     ]
 
 
-_current_runtime: ContextVar[_RuntimeInvocation | None] = ContextVar(
-    "qwenpaw_runtime_invocation", default=None
-)
-
-
-class _RuntimeInvocation:
-    """Bind the invocation after the SDK lazily normalizes its request."""
-
-    _suspended = True
-
-    def __init__(
-        self, handler: TelemetryHandler, runtime: object, request: object
-    ) -> None:
-        self.handler = handler
-        self.runtime = runtime
-        self.request = request
-        self.invocation: LocalAgentInvocation | None = None
-        self._context: Context | None = None
-
-    def start(self, request: object) -> LocalAgentInvocation:
-        if self.invocation is None:
-            workspace = getattr(self.runtime, "workspace", None)
-            # Workspace.config can load from disk; use only the cached configuration.
-            config = getattr(workspace, "_config", None)
-            self.invocation = self.handler.invoke_local_agent(
-                agent_name=non_empty_str(getattr(config, "name", None)),
-                conversation_id=non_empty_str(_field(request, "session_id")),
-            )
-            if self.invocation.should_capture_content:
-                self.invocation.input_messages = input_messages_from_request(
-                    request
-                )
-        return self.invocation
-
-    @contextmanager
-    def activate(self) -> Iterator[None]:
-        token = _current_runtime.set(self)
-        context_token = (
-            attach(self._context) if self._context is not None else None
-        )
-        try:
-            yield
-        finally:
-            # Runtime hooks can keep a child span open across SSE yields.
-            self._context = get_current()
-            if self.invocation is not None:
-                self.invocation.suspend()
-            if context_token is not None:
-                detach(context_token)
-            _current_runtime.reset(token)
-
-
-def observe_context_build(
-    wrapped: Callable[..., object],
-    instance: object,
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-) -> object:
-    current = _current_runtime.get()
-    if current is not None:
-        current.start(args[0] if args else kwargs.get("request"))
-    return wrapped(*args, **kwargs)
-
-
 class _ContentBlock:
     def __init__(self, part: MessagePart) -> None:
         self.part: MessagePart = part
@@ -224,10 +154,10 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
     def __init__(
         self,
         stream: AsyncGenerator[object, None],
-        pending: _RuntimeInvocation,
+        invocation: LocalAgentInvocation,
     ) -> None:
-        super().__init__(stream, pending)
-        self._self_pending = pending
+        super().__init__(stream, invocation)
+        self._self_invocation = invocation
         self._self_blocks: dict[
             str, dict[tuple[object, object], _ContentBlock]
         ] = {}
@@ -236,7 +166,7 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         self._self_error: Error | None = None
 
     def _process_chunk(self, chunk: object) -> None:
-        invocation = self._self_pending.start(self._self_pending.request)
+        invocation = self._self_invocation
         if _field(chunk, "object") == "response":
             session_id = non_empty_str(_field(chunk, "session_id"))
             if session_id:
@@ -324,9 +254,7 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         ]
 
     def _on_stream_end(self) -> None:
-        invocation = self._self_pending.invocation
-        if invocation is None:
-            return
+        invocation = self._self_invocation
         invocation.output_messages = self._output_messages()
         if self._self_error is not None:
             invocation.fail(self._self_error)
@@ -334,13 +262,8 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
             invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
-        if self._self_pending.invocation is None and isinstance(
-            error, AbandonedStreamError
-        ):
-            return
-        invocation = self._self_pending.start(self._self_pending.request)
-        invocation.output_messages = self._output_messages()
-        invocation.fail(error)
+        self._self_invocation.output_messages = self._output_messages()
+        self._self_invocation.fail(error)
 
 
 def make_runtime_wrapper(
@@ -355,12 +278,18 @@ def make_runtime_wrapper(
         kwargs: dict[str, object],
     ) -> RuntimeStreamWrapper:
         request = args[0] if args else kwargs.get("request")
-        pending = _RuntimeInvocation(handler, instance, request)
-        try:
+        workspace = getattr(instance, "workspace", None)
+        # Workspace.config can load from disk; use only the cached configuration.
+        config = getattr(workspace, "_config", None)
+        invocation = handler.invoke_local_agent(
+            agent_name=non_empty_str(getattr(config, "name", None)),
+            conversation_id=non_empty_str(_field(request, "session_id")),
+            _attach_to_context=False,
+        )
+        if invocation.should_capture_content:
+            invocation.input_messages = input_messages_from_request(request)
+        with invocation.activate():
             stream = wrapped(*args, **kwargs)
-        except BaseException as error:
-            pending.start(request).fail(error)
-            raise
-        return RuntimeStreamWrapper(stream, pending)
+        return RuntimeStreamWrapper(stream, invocation)
 
     return runtime_wrapper

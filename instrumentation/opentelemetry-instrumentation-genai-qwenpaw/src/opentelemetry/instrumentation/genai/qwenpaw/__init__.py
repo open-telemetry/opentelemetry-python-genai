@@ -64,7 +64,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
 from .patch import make_query_handler_wrapper
-from .runtime import make_runtime_wrapper, observe_context_build
+from .runtime import make_runtime_wrapper
 from .version import __version__
 
 logger = logging.getLogger(__name__)
@@ -118,11 +118,6 @@ class QwenPawInstrumentor(BaseInstrumentor):
         )
         if _runtime_v2():
             wrap_function_wrapper(
-                _RUNTIME_MODULE,
-                "Runtime._build_context",
-                observe_context_build,
-            )
-            wrap_function_wrapper(
                 _RUNTIME_MODULE, "Runtime.run", make_runtime_wrapper(handler)
             )
         else:
@@ -136,8 +131,6 @@ class QwenPawInstrumentor(BaseInstrumentor):
         """Disable instrumentation for the installed QwenPaw runtime."""
         del kwargs
         if _runtime_v2():
-            runtime = import_module(_RUNTIME_MODULE).Runtime
-            unwrap(runtime, "run")
-            unwrap(runtime, "_build_context")
+            unwrap(import_module(_RUNTIME_MODULE).Runtime, "run")
         else:
             unwrap(import_module(_RUNNER_MODULE).AgentRunner, "query_handler")

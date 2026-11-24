@@ -15,8 +15,9 @@ name (``gen_ai.agent.name``, when already cached by the runner), the session id
 (``gen_ai.conversation.id``), and — when content capture is enabled — the
 turn's input and output messages.
 
-The request's session ID is propagated to nested GenAI invocations through
-OpenTelemetry context.
+A session ID supplied in the request propagates to nested GenAI invocations
+through OpenTelemetry context. When the 2.x runtime generates the ID, the
+instrumentation records it on the turn span from the response.
 
 The span remains open until the response stream is drained or closed.
 For the 1.x runner, successful finalization records
@@ -38,19 +39,6 @@ suite covers none — those operations belong to the AgentScope
 instrumentation. Pair this package with the instrumentations of AgentScope
 and the underlying model libraries so their calls appear as child spans
 under the ``invoke_agent`` span.
-
-Supported versions
-------------------
-
-QwenPaw >= 1.1.0, < 3.0.0. Version 1.x uses the agent runner; version
-2.x uses the runtime request entry point and captures text (including refusals),
-reasoning, tool calls/results, and image/audio/video/file content from request
-messages and streamed SSE envelopes. Request normalization and span creation remain lazy;
-SDK-generated session IDs propagate to nested GenAI invocations.
-Version 2.x support requires ``opentelemetry-util-genai`` 1.4b0 or newer.
-QwenPaw 2.x requires Python >= 3.11,
-< 3.14. Both entry points produce one internal ``invoke_agent`` span per
-turn; model and tool execution remain owned by the underlying libraries.
 
 Installation
 ------------
@@ -131,33 +119,6 @@ Conformance
 
 Semantic-convention conformance scenarios live in `tests/conformance
 <tests/conformance>`_.
-
-The same ``QwenPawInstrumentor`` selects the entry point for the installed
-QwenPaw major version. The 1.x runner instrumentation remains supported.
-Tests cover both the oldest and latest releases of each runtime generation:
-
-.. list-table::
-   :header-rows: 1
-
-   * - QwenPaw
-     - Entry point
-     - Conformance tox environment
-   * - 1.1.0
-     - ``AgentRunner.query_handler``
-     - ``py311-test-instrumentation-genai-qwenpaw-oldest-conformance``
-   * - Latest 1.x
-     - ``AgentRunner.query_handler``
-     - ``py313-test-instrumentation-genai-qwenpaw-v1-conformance``
-   * - 2.0.0
-     - ``Runtime.run``
-     - ``py311-test-instrumentation-genai-qwenpaw-v2-conformance``
-   * - Latest 2.x
-     - ``Runtime.run``
-     - ``py313-test-instrumentation-genai-qwenpaw-conformance``
-
-Each version runs successful and failed turns through Weaver live-check.
-The 2.x scenarios additionally cover reasoning, tool calls/results, and
-multimodal request messages.
 
 References
 ----------
