@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from agno.agent import RunOutput
     from agno.media import Image, Video
+    from agno.metrics import MessageMetrics
     from agno.models.base import MessageData, Model
     from agno.models.message import Message
     from agno.models.response import ModelResponse
@@ -353,7 +354,25 @@ class _ModelStreamMixin:
     _self_model: Model | None
     _self_stream_images: list[Image]
     _self_stream_videos: list[Video]
-    _self_last_chunk_usage: Any
+    _self_last_chunk_usage: MessageMetrics | None
+
+    def _init_model_stream_state(
+        self,
+        *,
+        assistant_message: Message | None,
+        stream_data: MessageData | None,
+        model: Model | None,
+        start_invocation: Callable[[], InferenceInvocation] | None,
+        refresh_endpoint: Callable[[InferenceInvocation], None] | None,
+    ) -> None:
+        self._self_start_invocation = start_invocation
+        self._self_refresh_endpoint = refresh_endpoint
+        self._self_assistant_message = assistant_message
+        self._self_stream_data = stream_data
+        self._self_model = model
+        self._self_stream_images = []
+        self._self_stream_videos = []
+        self._self_last_chunk_usage = None
 
     def _ensure_invocation(self) -> InferenceInvocation:
         if self._self_invocation is None:
@@ -369,7 +388,7 @@ class _ModelStreamMixin:
         if self._self_refresh_endpoint is not None:
             self._self_refresh_endpoint(invocation)
 
-    def _record_chunk_usage(self, usage: Any) -> None:
+    def _record_chunk_usage(self, usage: MessageMetrics) -> None:
         if has_model_token_usage(usage):
             self._self_last_chunk_usage = usage
 
@@ -377,9 +396,8 @@ class _ModelStreamMixin:
         invocation = self._ensure_invocation()
         self._refresh_invocation_endpoint(invocation)
         populate_provider_data(invocation, chunk.provider_data)
-        chunk_usage = getattr(chunk, "response_usage", None)
-        if chunk_usage is not None:
-            self._record_chunk_usage(chunk_usage)
+        if chunk.response_usage is not None:
+            self._record_chunk_usage(chunk.response_usage)
         if invocation.should_capture_content:
             if chunk.images:
                 self._self_stream_images.extend(chunk.images)
@@ -400,22 +418,22 @@ class _ModelStreamMixin:
                 self._self_stream_data.response_provider_data,
             )
 
-        metrics: Any = None
+        metrics: MessageMetrics | None = None
         if (
             self._self_last_chunk_usage is not None
             and uses_cumulative_stream_usage(invocation, self._self_model)
         ):
             metrics = self._self_last_chunk_usage
         else:
-            assistant_metrics = getattr(
-                self._self_assistant_message, "metrics", None
+            assistant_metrics = (
+                self._self_assistant_message.metrics
+                if self._self_assistant_message is not None
+                else None
             )
             if has_model_token_usage(assistant_metrics):
                 metrics = assistant_metrics
             elif self._self_stream_data is not None:
-                sd_metrics = getattr(
-                    self._self_stream_data, "response_metrics", None
-                )
+                sd_metrics = self._self_stream_data.response_metrics
                 if has_model_token_usage(sd_metrics):
                     metrics = sd_metrics
         if metrics is not None:
@@ -472,14 +490,13 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         refresh_endpoint: Callable[[InferenceInvocation], None] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
-        self._self_start_invocation = start_invocation
-        self._self_refresh_endpoint = refresh_endpoint
-        self._self_assistant_message = assistant_message
-        self._self_stream_data = stream_data
-        self._self_model = model
-        self._self_stream_images = []
-        self._self_stream_videos = []
-        self._self_last_chunk_usage = None
+        self._init_model_stream_state(
+            assistant_message=assistant_message,
+            stream_data=stream_data,
+            model=model,
+            start_invocation=start_invocation,
+            refresh_endpoint=refresh_endpoint,
+        )
         outer = _CURRENT_OUTER_STREAM.get()
         if outer is not None:
             outer._bind_inner(self)
@@ -498,7 +515,7 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         return super()._advance(read)
 
 
-def record_model_stream_usage(model: Any, usage: Any) -> None:
+def record_model_stream_usage(model: Model, usage: MessageMetrics) -> None:
     """Record per-chunk provider usage on the active model stream wrapper."""
     current = _CURRENT_MODEL_STREAM.get()
     if current is not None and current._self_model is model:
@@ -540,14 +557,13 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         refresh_endpoint: Callable[[InferenceInvocation], None] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
-        self._self_start_invocation = start_invocation
-        self._self_refresh_endpoint = refresh_endpoint
-        self._self_assistant_message = assistant_message
-        self._self_stream_data = stream_data
-        self._self_model = model
-        self._self_stream_images = []
-        self._self_stream_videos = []
-        self._self_last_chunk_usage = None
+        self._init_model_stream_state(
+            assistant_message=assistant_message,
+            stream_data=stream_data,
+            model=model,
+            start_invocation=start_invocation,
+            refresh_endpoint=refresh_endpoint,
+        )
         self._self_delegate_streams: list[Any] = []
         outer = _CURRENT_OUTER_ASTREAM.get()
         if outer is not None:

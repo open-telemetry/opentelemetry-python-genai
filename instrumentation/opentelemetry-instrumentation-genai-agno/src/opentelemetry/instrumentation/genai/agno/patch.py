@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from agno.knowledge.knowledge import Knowledge
     from agno.models.base import MessageData, Model
     from agno.models.message import Message
-    from agno.models.response import ToolExecution
+    from agno.models.response import ModelResponse, ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
     from wrapt import BoundFunctionWrapper, FunctionWrapper
 
@@ -1818,7 +1818,7 @@ def _lookup_request_setting(
     return None, False
 
 
-def _get_request_setting(instance: Model, *names: str) -> Any:
+def _get_request_setting(instance: Model, names: tuple[str, ...]) -> Any:
     excluded: set[str] = set()
     req_params = getattr(instance, "request_params", None)
     if isinstance(req_params, Mapping):
@@ -1849,32 +1849,26 @@ def _get_active_model_invocation(
     return get_active_model_stream_invocation(instance)
 
 
-def _apply_request_settings_from_config(
+def _apply_request_settings(
     invocation: InferenceInvocation,
-    cfg: Any,
+    resolve_setting: Callable[[tuple[str, ...]], Any],
 ) -> None:
-    """Sync request settings on ``invocation`` with the effective outgoing Gemini config."""
-    temp, _ = _lookup_request_setting(cfg, ("temperature",), set())
-    invocation.temperature = safe_float(temp)
-    top_p, _ = _lookup_request_setting(cfg, ("top_p",), set())
-    invocation.top_p = safe_float(top_p)
-    top_k, _ = _lookup_request_setting(cfg, ("top_k",), set())
-    invocation.top_k = safe_int(top_k)
-    max_tokens, _ = _lookup_request_setting(
-        cfg,
-        ("max_tokens", "max_completion_tokens", "max_output_tokens"),
-        set(),
+    """Populate or sync request settings on ``invocation`` via ``resolve_setting``."""
+    invocation.temperature = safe_float(resolve_setting(("temperature",)))
+    invocation.top_p = safe_float(resolve_setting(("top_p",)))
+    invocation.top_k = safe_int(resolve_setting(("top_k",)))
+    invocation.max_tokens = safe_int(
+        resolve_setting(
+            ("max_tokens", "max_completion_tokens", "max_output_tokens")
+        )
     )
-    invocation.max_tokens = safe_int(max_tokens)
-    freq_penalty, _ = _lookup_request_setting(
-        cfg, ("frequency_penalty",), set()
+    invocation.frequency_penalty = safe_float(
+        resolve_setting(("frequency_penalty",))
     )
-    invocation.frequency_penalty = safe_float(freq_penalty)
-    pres_penalty, _ = _lookup_request_setting(
-        cfg, ("presence_penalty",), set()
+    invocation.presence_penalty = safe_float(
+        resolve_setting(("presence_penalty",))
     )
-    invocation.presence_penalty = safe_float(pres_penalty)
-    stop, _ = _lookup_request_setting(cfg, ("stop_sequences", "stop"), set())
+    stop = resolve_setting(("stop_sequences", "stop"))
     if isinstance(stop, str):
         invocation.stop_sequences = [stop]
     elif isinstance(stop, (list, tuple)):
@@ -1882,8 +1876,7 @@ def _apply_request_settings_from_config(
         invocation.stop_sequences = [str(s) for s in stop_seqs]
     else:
         invocation.stop_sequences = None
-    seed, _ = _lookup_request_setting(cfg, ("seed",), set())
-    invocation.seed = safe_int(seed)
+    invocation.seed = safe_int(resolve_setting(("seed",)))
 
 
 def _gemini_get_request_params(
@@ -1896,8 +1889,10 @@ def _gemini_get_request_params(
     invocation = _get_active_model_invocation(instance)
     if invocation is not None and isinstance(result, Mapping):
         typed_result = cast(Mapping[str, Any], result)
-        _apply_request_settings_from_config(
-            invocation, typed_result.get("config")
+        cfg = typed_result.get("config")
+        _apply_request_settings(
+            invocation,
+            lambda names: _lookup_request_setting(cfg, names, set())[0],
         )
         return typed_result
     return result
@@ -2087,34 +2082,9 @@ def _start_model_inference(
         _attach_to_context=False,
     )
 
-    invocation.temperature = safe_float(
-        _get_request_setting(instance, "temperature")
+    _apply_request_settings(
+        invocation, functools.partial(_get_request_setting, instance)
     )
-    invocation.top_p = safe_float(_get_request_setting(instance, "top_p"))
-    invocation.top_k = safe_int(_get_request_setting(instance, "top_k"))
-    invocation.max_tokens = safe_int(
-        _get_request_setting(
-            instance,
-            "max_tokens",
-            "max_completion_tokens",
-            "max_output_tokens",
-        )
-    )
-    invocation.frequency_penalty = safe_float(
-        _get_request_setting(instance, "frequency_penalty")
-    )
-    invocation.presence_penalty = safe_float(
-        _get_request_setting(instance, "presence_penalty")
-    )
-
-    stop = _get_request_setting(instance, "stop_sequences", "stop")
-    if isinstance(stop, str):
-        invocation.stop_sequences = [stop]
-    elif isinstance(stop, (list, tuple)):
-        stop_seqs = cast(Sequence[object], stop)
-        invocation.stop_sequences = [str(s) for s in stop_seqs]
-
-    invocation.seed = safe_int(_get_request_setting(instance, "seed"))
 
     if invocation.should_capture_content:
         if tools:
@@ -2139,7 +2109,7 @@ def _populate_model_response_telemetry(
     populate_provider_data(invocation, provider_data)
 
     if assistant_message is not None:
-        metrics = getattr(assistant_message, "metrics", None)
+        metrics = assistant_message.metrics
         if has_model_token_usage(metrics):
             record_model_token_usage(invocation, metrics, model=model)
 
@@ -2271,11 +2241,12 @@ def _model_populate_stream_data(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> Any:
-    delta = args[1] if len(args) > 1 else kwargs.get("model_response_delta")
-    if delta is not None:
-        usage = getattr(delta, "response_usage", None)
-        if usage is not None:
-            record_model_stream_usage(instance, usage)
+    delta = cast(
+        "ModelResponse | None",
+        args[1] if len(args) > 1 else kwargs.get("model_response_delta"),
+    )
+    if delta is not None and delta.response_usage is not None:
+        record_model_stream_usage(instance, delta.response_usage)
     return wrapped(*args, **kwargs)
 
 

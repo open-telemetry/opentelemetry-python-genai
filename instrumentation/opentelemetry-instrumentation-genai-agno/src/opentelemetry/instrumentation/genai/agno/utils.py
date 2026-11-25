@@ -17,6 +17,9 @@ if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
     from agno.media import Audio, File, Image, Video
+
+    # Renamed from agno.models.metrics.Metrics in Agno 3; TYPE_CHECKING keeps 2.x runtime-safe.
+    from agno.metrics import MessageMetrics
     from agno.models.base import MessageData, Model
     from agno.models.message import Message
     from agno.models.response import ModelResponse
@@ -149,25 +152,22 @@ def _has_mro_class(model: Model | None, class_names: frozenset[str]) -> bool:
     return any(cls.__name__ in class_names for cls in type(model).__mro__)
 
 
-_TOKEN_USAGE_ATTRS = (
-    "input_tokens",
-    "output_tokens",
-    "total_tokens",
-    "cache_read_tokens",
-    "cache_write_tokens",
-    "reasoning_tokens",
-    "audio_input_tokens",
-    "audio_output_tokens",
-)
-
-
-def has_model_token_usage(metrics: Any) -> bool:
+def has_model_token_usage(metrics: MessageMetrics | None) -> bool:
     """Return True if an Agno metrics object has any positive token usage counts."""
     if metrics is None:
         return False
     return any(
-        (val := safe_int(getattr(metrics, attr, None))) is not None and val > 0
-        for attr in _TOKEN_USAGE_ATTRS
+        val > 0
+        for val in (
+            metrics.input_tokens,
+            metrics.output_tokens,
+            metrics.total_tokens,
+            metrics.cache_read_tokens,
+            metrics.cache_write_tokens,
+            metrics.reasoning_tokens,
+            metrics.audio_input_tokens,
+            metrics.audio_output_tokens,
+        )
     )
 
 
@@ -207,58 +207,37 @@ def _excludes_reasoning_from_output_tokens(
 
 def record_model_token_usage(
     invocation: InferenceInvocation,
-    metrics: Any,
+    metrics: MessageMetrics | None,
     model: Model | None = None,
 ) -> None:
     """Populate token usage fields on an InferenceInvocation from Agno metrics."""
     if metrics is None:
         return
-    input_tokens = safe_int(getattr(metrics, "input_tokens", None))
-    cache_read_tokens = safe_int(getattr(metrics, "cache_read_tokens", None))
-    cache_write_tokens = safe_int(getattr(metrics, "cache_write_tokens", None))
-    if cache_read_tokens is not None and cache_read_tokens > 0:
+    input_tokens = metrics.input_tokens
+    cache_read_tokens = metrics.cache_read_tokens
+    cache_write_tokens = metrics.cache_write_tokens
+    if cache_read_tokens > 0:
         invocation.cache_read_input_tokens = cache_read_tokens
-    if cache_write_tokens is not None and cache_write_tokens > 0:
+    if cache_write_tokens > 0:
         invocation.cache_write_input_tokens = cache_write_tokens
 
     if _uses_uncached_input_tokens(invocation, model):
-        cache_read_count = (
-            cache_read_tokens
-            if cache_read_tokens is not None and cache_read_tokens > 0
-            else 0
-        )
-        cache_write_count = (
-            cache_write_tokens
-            if cache_write_tokens is not None and cache_write_tokens > 0
-            else 0
-        )
-        if (
-            input_tokens is not None
-            or cache_read_count > 0
-            or cache_write_count > 0
-        ):
-            input_tokens = (
-                (input_tokens or 0) + cache_read_count + cache_write_count
-            )
-    if input_tokens is not None:
-        invocation.input_tokens = input_tokens
+        cache_read_count = max(0, cache_read_tokens)
+        cache_write_count = max(0, cache_write_tokens)
+        input_tokens += cache_read_count + cache_write_count
+    invocation.input_tokens = input_tokens
 
-    output_tokens = safe_int(getattr(metrics, "output_tokens", None))
-    reasoning_tokens = safe_int(getattr(metrics, "reasoning_tokens", None))
-    if reasoning_tokens is not None and reasoning_tokens > 0:
+    output_tokens = metrics.output_tokens
+    reasoning_tokens = metrics.reasoning_tokens
+    if reasoning_tokens > 0:
         invocation.thinking_tokens = reasoning_tokens
         if _excludes_reasoning_from_output_tokens(invocation, model):
-            output_tokens = (output_tokens or 0) + reasoning_tokens
-    if output_tokens is not None:
-        invocation.output_tokens = output_tokens
-    if (
-        tok := safe_int(getattr(metrics, "audio_input_tokens", None))
-    ) is not None and tok > 0:
-        invocation.audio_input_tokens = tok
-    if (
-        tok := safe_int(getattr(metrics, "audio_output_tokens", None))
-    ) is not None and tok > 0:
-        invocation.audio_output_tokens = tok
+            output_tokens += reasoning_tokens
+    invocation.output_tokens = output_tokens
+    if metrics.audio_input_tokens > 0:
+        invocation.audio_input_tokens = metrics.audio_input_tokens
+    if metrics.audio_output_tokens > 0:
+        invocation.audio_output_tokens = metrics.audio_output_tokens
 
 
 def format_retrieval_document(doc: Document) -> RetrievalDocument:
