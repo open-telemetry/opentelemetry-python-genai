@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
@@ -18,18 +18,14 @@ from opentelemetry.semconv.attributes import (
     server_attributes,
 )
 from opentelemetry.trace import SpanKind, Tracer
+from opentelemetry.util.genai._inference_base import (
+    _BaseInferenceInvocation,
+)
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
-    _CACHE_READ_MODALITY_FIELDS,
-    _GEN_AI_REQUEST_REASONING_LEVEL,
-    _INPUT_MODALITY_FIELDS,
-    _OUTPUT_MODALITY_FIELDS,
     Error,
     GenAIInvocation,
-    _get_token_usage_attributes,
     _is_active_completion_hook,
-    _resolve_finish_reasons,
-    _set_modality_tokens,
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import (
@@ -41,7 +37,6 @@ from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
-    ModalityTokens,
     OutputMessage,
     SystemInstructionPart,
     ToolDefinition,
@@ -97,12 +92,9 @@ class _RealtimeInferenceData:
     usage_text_cache_read_input_tokens: int | None = None
     usage_text_input_tokens: int | None = None
     usage_text_output_tokens: int | None = None
-    attributes: dict[str, AttributeValue] = field(
-        default_factory=dict[str, AttributeValue]
-    )
 
 
-class RealtimeInferenceInvocation(GenAIInvocation):
+class RealtimeInferenceInvocation(_BaseInferenceInvocation):
     """Represents a single realtime inference generation turn.
 
     Use ``handler.realtime_inference(provider)`` rather than constructing this directly.
@@ -174,9 +166,11 @@ class RealtimeInferenceInvocation(GenAIInvocation):
             conversation_id=conversation_id,
             content_capturing_mode=content_capturing_mode,
             _attach_to_context=_attach_to_context,
-            attributes=self._data.attributes,
         )
-        self._data.attributes = self.attributes
+
+    @property
+    def _inference_data(self) -> _RealtimeInferenceData:
+        return self._data
 
     def mark_end(self) -> None:
         """Record the operation end timestamp before finalization.
@@ -190,270 +184,12 @@ class RealtimeInferenceInvocation(GenAIInvocation):
         self._end_time_ns = time.time_ns()
 
     @property
-    def provider(self) -> str | None:
-        return self._data.provider_name
-
-    @property
-    def request_model(self) -> str | None:
-        return self._data.request_model
-
-    @property
-    def server_address(self) -> str | None:
-        return self._data.server_address
-
-    @property
-    def server_port(self) -> int | None:
-        return self._data.server_port
-
-    @property
     def realtime_session_id(self) -> str | None:
         return self._data.realtime_session_id
 
     @realtime_session_id.setter
     def realtime_session_id(self, value: str | None) -> None:
         self._data.realtime_session_id = value
-
-    @property
-    def response_model_name(self) -> str | None:
-        return self._data.response_model
-
-    @response_model_name.setter
-    def response_model_name(self, value: str | None) -> None:
-        self._data.response_model = value
-
-    @property
-    def response_id(self) -> str | None:
-        return self._data.response_id
-
-    @response_id.setter
-    def response_id(self, value: str | None) -> None:
-        self._data.response_id = value
-
-    @property
-    def finish_reasons(self) -> list[str] | None:
-        return self._data.response_finish_reasons
-
-    @finish_reasons.setter
-    def finish_reasons(self, value: Sequence[str] | None) -> None:
-        self._data.response_finish_reasons = (
-            list(value) if value is not None else None
-        )
-
-    @property
-    def output_type(self) -> str | None:
-        return self._data.output_type
-
-    @output_type.setter
-    def output_type(self, value: str | None) -> None:
-        self._data.output_type = value
-
-    @property
-    def max_tokens(self) -> int | None:
-        return self._data.request_max_tokens
-
-    @max_tokens.setter
-    def max_tokens(self, value: int | None) -> None:
-        self._data.request_max_tokens = value
-
-    @property
-    def reasoning_level(self) -> str | None:
-        return self._data.request_reasoning_level
-
-    @reasoning_level.setter
-    def reasoning_level(self, value: str | None) -> None:
-        self._data.request_reasoning_level = value
-
-    @property
-    def input_tokens(self) -> int | None:
-        return self._data.usage_input_tokens
-
-    @input_tokens.setter
-    def input_tokens(self, value: int | None) -> None:
-        self._data.usage_input_tokens = value
-
-    @property
-    def output_tokens(self) -> int | None:
-        return self._data.usage_output_tokens
-
-    @output_tokens.setter
-    def output_tokens(self, value: int | None) -> None:
-        self._data.usage_output_tokens = value
-
-    @property
-    def thinking_tokens(self) -> int | None:
-        return self._data.usage_reasoning_output_tokens
-
-    @thinking_tokens.setter
-    def thinking_tokens(self, value: int | None) -> None:
-        self._data.usage_reasoning_output_tokens = value
-
-    @property
-    def cache_write_input_tokens(self) -> int | None:
-        return self._data.usage_cache_write_input_tokens
-
-    @cache_write_input_tokens.setter
-    def cache_write_input_tokens(self, value: int | None) -> None:
-        self._data.usage_cache_write_input_tokens = value
-
-    @property
-    def cache_read_input_tokens(self) -> int | None:
-        return self._data.usage_cache_read_input_tokens
-
-    @cache_read_input_tokens.setter
-    def cache_read_input_tokens(self, value: int | None) -> None:
-        self._data.usage_cache_read_input_tokens = value
-
-    @property
-    def text_input_tokens(self) -> int | None:
-        return self._data.usage_text_input_tokens
-
-    @text_input_tokens.setter
-    def text_input_tokens(self, value: int | None) -> None:
-        self._data.usage_text_input_tokens = value
-
-    @property
-    def image_input_tokens(self) -> int | None:
-        return self._data.usage_image_input_tokens
-
-    @image_input_tokens.setter
-    def image_input_tokens(self, value: int | None) -> None:
-        self._data.usage_image_input_tokens = value
-
-    @property
-    def audio_input_tokens(self) -> int | None:
-        return self._data.usage_audio_input_tokens
-
-    @audio_input_tokens.setter
-    def audio_input_tokens(self, value: int | None) -> None:
-        self._data.usage_audio_input_tokens = value
-
-    @property
-    def text_output_tokens(self) -> int | None:
-        return self._data.usage_text_output_tokens
-
-    @text_output_tokens.setter
-    def text_output_tokens(self, value: int | None) -> None:
-        self._data.usage_text_output_tokens = value
-
-    @property
-    def image_output_tokens(self) -> int | None:
-        return self._data.usage_image_output_tokens
-
-    @image_output_tokens.setter
-    def image_output_tokens(self, value: int | None) -> None:
-        self._data.usage_image_output_tokens = value
-
-    @property
-    def audio_output_tokens(self) -> int | None:
-        return self._data.usage_audio_output_tokens
-
-    @audio_output_tokens.setter
-    def audio_output_tokens(self, value: int | None) -> None:
-        self._data.usage_audio_output_tokens = value
-
-    @property
-    def text_cache_read_input_tokens(self) -> int | None:
-        return self._data.usage_text_cache_read_input_tokens
-
-    @text_cache_read_input_tokens.setter
-    def text_cache_read_input_tokens(self, value: int | None) -> None:
-        self._data.usage_text_cache_read_input_tokens = value
-
-    @property
-    def image_cache_read_input_tokens(self) -> int | None:
-        return self._data.usage_image_cache_read_input_tokens
-
-    @image_cache_read_input_tokens.setter
-    def image_cache_read_input_tokens(self, value: int | None) -> None:
-        self._data.usage_image_cache_read_input_tokens = value
-
-    @property
-    def audio_cache_read_input_tokens(self) -> int | None:
-        return self._data.usage_audio_cache_read_input_tokens
-
-    @audio_cache_read_input_tokens.setter
-    def audio_cache_read_input_tokens(self, value: int | None) -> None:
-        self._data.usage_audio_cache_read_input_tokens = value
-
-    @property
-    def input_messages(self) -> list[InputMessage]:
-        if isinstance(self._data.input_messages, list):
-            return self._data.input_messages
-        messages = (
-            list(self._data.input_messages)
-            if self._data.input_messages
-            else []
-        )
-        self._data.input_messages = messages
-        return messages
-
-    @input_messages.setter
-    def input_messages(self, value: Sequence[InputMessage]) -> None:
-        self._data.input_messages = value
-
-    @property
-    def output_messages(self) -> list[OutputMessage]:
-        if isinstance(self._data.output_messages, list):
-            return self._data.output_messages
-        messages = (
-            list(self._data.output_messages)
-            if self._data.output_messages
-            else []
-        )
-        self._data.output_messages = messages
-        return messages
-
-    @output_messages.setter
-    def output_messages(self, value: Sequence[OutputMessage]) -> None:
-        self._data.output_messages = value
-
-    @property
-    def system_instruction(
-        self,
-    ) -> list[SystemInstructionPart] | list[MessagePart]:
-        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
-        if isinstance(self._data.system_instructions, list):
-            return self._data.system_instructions
-        instructions = (
-            list(self._data.system_instructions)
-            if self._data.system_instructions
-            else []
-        )
-        self._data.system_instructions = instructions
-        return instructions
-
-    @system_instruction.setter
-    def system_instruction(
-        self,
-        value: Sequence[SystemInstructionPart] | Sequence[MessagePart] | None,
-    ) -> None:
-        self._data.system_instructions = (
-            list(value) if value is not None else None
-        )
-
-    @property
-    def tool_definitions(self) -> list[ToolDefinition] | None:
-        return self._data.tool_definitions
-
-    @tool_definitions.setter
-    def tool_definitions(self, value: Sequence[ToolDefinition] | None) -> None:
-        self._data.tool_definitions = (
-            list(value) if value is not None else None
-        )
-
-    def set_input_tokens(self, entries: ModalityTokens | None) -> None:
-        """Record the per-modality breakdown of the input tokens."""
-        _set_modality_tokens(self._data, _INPUT_MODALITY_FIELDS, entries)
-
-    def set_output_tokens(self, entries: ModalityTokens | None) -> None:
-        """Record the per-modality breakdown of the output tokens."""
-        _set_modality_tokens(self._data, _OUTPUT_MODALITY_FIELDS, entries)
-
-    def set_cache_read_input_tokens(
-        self, entries: ModalityTokens | None
-    ) -> None:
-        """Record the per-modality breakdown of the cache read input tokens."""
-        _set_modality_tokens(self._data, _CACHE_READ_MODALITY_FIELDS, entries)
 
     @property
     def should_capture_content(self) -> bool:
@@ -468,54 +204,16 @@ class RealtimeInferenceInvocation(GenAIInvocation):
         )
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
-        finish_reasons = _resolve_finish_reasons(
-            self._data.response_finish_reasons,
-            self._data.output_messages,
-        )
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self._data.provider_name),
-            (GenAI.GEN_AI_REQUEST_MODEL, self._data.request_model),
-            (server_attributes.SERVER_ADDRESS, self._data.server_address),
-            (server_attributes.SERVER_PORT, self._data.server_port),
-            (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
-            (GenAI.GEN_AI_OUTPUT_TYPE, self._data.output_type),
-            (_GEN_AI_REALTIME_SESSION_ID, self._data.realtime_session_id),
-            (GenAI.GEN_AI_REQUEST_MAX_TOKENS, self._data.request_max_tokens),
-            (
-                _GEN_AI_REQUEST_REASONING_LEVEL,
-                self._data.request_reasoning_level,
-            ),
-            (GenAI.GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons),
-            (GenAI.GEN_AI_RESPONSE_ID, self._data.response_id),
-            (GenAI.GEN_AI_RESPONSE_MODEL, self._data.response_model),
-        )
-        attrs: dict[str, AttributeValue] = {
-            k: v for k, v in optional_attrs if v is not None
-        }
-        attrs.update(
-            _get_token_usage_attributes(
-                input_tokens=self._data.usage_input_tokens,
-                output_tokens=self._data.usage_output_tokens,
-                cache_write_input_tokens=self._data.usage_cache_write_input_tokens,
-                cache_read_input_tokens=self._data.usage_cache_read_input_tokens,
-                reasoning_output_tokens=self._data.usage_reasoning_output_tokens,
-                text_input_tokens=self._data.usage_text_input_tokens,
-                image_input_tokens=self._data.usage_image_input_tokens,
-                audio_input_tokens=self._data.usage_audio_input_tokens,
-                text_output_tokens=self._data.usage_text_output_tokens,
-                image_output_tokens=self._data.usage_image_output_tokens,
-                audio_output_tokens=self._data.usage_audio_output_tokens,
-                text_cache_read_input_tokens=self._data.usage_text_cache_read_input_tokens,
-                image_cache_read_input_tokens=self._data.usage_image_cache_read_input_tokens,
-                audio_cache_read_input_tokens=self._data.usage_audio_cache_read_input_tokens,
-            )
-        )
+        attrs = self._get_common_attributes()
+        if self.conversation_id is not None:
+            attrs[GenAI.GEN_AI_CONVERSATION_ID] = self.conversation_id
+        if self._data.realtime_session_id is not None:
+            attrs[_GEN_AI_REALTIME_SESSION_ID] = self._data.realtime_session_id
         return attrs
 
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        self._data.attributes = self.attributes
         if self.span.is_recording():
             attributes: dict[str, AttributeValue] = {}
             attributes.update(self._get_attributes())

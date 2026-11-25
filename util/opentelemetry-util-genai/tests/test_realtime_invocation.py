@@ -140,6 +140,7 @@ def test_realtime_session_events_and_invocations():
         assert isinstance(inv, GenAIInvocation)
         assert not isinstance(inv, InferenceInvocation)
         inv.output_type = "speech"
+        inv.attributes["custom.live"] = "active"
         inv.max_tokens = 256
         inv.reasoning_level = "medium"
         inv.response_id = "resp-1"
@@ -231,6 +232,7 @@ def test_realtime_session_events_and_invocations():
     assert inf_span.attributes["gen_ai.realtime_session.id"] == "sess-1"
     assert isinstance(inf_span.attributes["gen_ai.realtime_session.id"], str)
     assert inf_span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "conv-1"
+    assert inf_span.attributes["custom.live"] == "active"
     assert inf_span.attributes[GenAI.GEN_AI_OUTPUT_TYPE] == "speech"
     assert inf_span.attributes[GenAI.GEN_AI_REQUEST_MAX_TOKENS] == 256
     assert inf_span.attributes["gen_ai.request.reasoning.level"] == "medium"
