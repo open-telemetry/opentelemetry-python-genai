@@ -28,7 +28,7 @@ from opentelemetry.util.genai.stream import (
     finalize_on_aclose,
     finalize_on_close,
 )
-from opentelemetry.util.genai.types import OutputMessage
+from opentelemetry.util.genai.types import MessagePart, OutputMessage
 
 from .messages_extractors import (
     get_input_messages,
@@ -38,6 +38,7 @@ from .messages_extractors import (
 )
 from .utils import (
     StreamBlockState,
+    _convert_content_block_to_part,
     create_stream_block_state,
     stream_block_state_to_part,
     update_stream_block_state,
@@ -200,7 +201,10 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     def _partial_output_messages(
         self, *, trust_last_block: bool
     ) -> list[OutputMessage] | None:
-        block_states = self._self_block_states.copy()
+        indices: dict[int, MessagePart | None] = {
+            index: stream_block_state_to_part(state)
+            for index, state in self._self_block_states.items()
+        }
         if self._self_message is not None:
             content = self._self_message.content
             last_index = len(content) - 1
@@ -237,12 +241,17 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
                         and index not in self._self_block_states
                     )
                 ):
-                    block_states[index] = create_stream_block_state(block)
+                    # A trusted block is a real, complete SDK object, so the
+                    # same converter the non-streaming path uses applies
+                    # directly. StreamBlockState only knows text, thinking
+                    # and a generic tool call; it has no branch for a server
+                    # tool call or its paired result block (e.g. a web
+                    # search and its result), so routing a trusted block
+                    # through it would silently drop the result.
+                    indices[index] = _convert_content_block_to_part(block)
 
         parts = [
-            part
-            for _, state in sorted(block_states.items())
-            if (part := stream_block_state_to_part(state)) is not None
+            part for _, part in sorted(indices.items()) if part is not None
         ]
         if not parts:
             return None

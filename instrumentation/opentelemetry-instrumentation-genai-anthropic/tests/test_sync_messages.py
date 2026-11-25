@@ -1746,6 +1746,161 @@ def _completed_tool_use_then_truncated_text_sse_body() -> bytes:
     )
 
 
+def _completed_web_search_then_truncated_text_sse_body() -> bytes:
+    """A completed server tool call (web search) and its result, both
+    finished before a later text block starts, the body cutting off right
+    after the text block's first delta with no content_block_stop."""
+
+    def _event(name: str, payload: dict[str, object]) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    return b"".join(
+        [
+            _event(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_completed_web_search",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 3, "output_tokens": 0},
+                    },
+                },
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_A",
+                        "name": "web_search",
+                        "input": {},
+                    },
+                },
+            ),
+            _event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": '{"query": "weather in SF"}',
+                    },
+                },
+            ),
+            _event(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": 0},
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_A",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "title": "SF weather",
+                                "url": "https://example.com/sf-weather",
+                                "encrypted_content": "abc123",
+                            }
+                        ],
+                    },
+                },
+            ),
+            _event(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": 1},
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 2,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            _event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 2,
+                    "delta": {"type": "text_delta", "text": "It's"},
+                },
+            ),
+        ]
+    )
+
+
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_stream_text_stream_preserves_web_search_result(
+    span_exporter, instrument_with_content
+):
+    """A completed web search call and its result both stay on the span
+    when the caller stops after the first text_stream chunk, rather than
+    the search collapsing into a plain tool call with its result dropped."""
+
+    def respond(_request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_completed_web_search_then_truncated_text_sse_body(),
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        for _ in stream.text_stream:
+            break
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
+    parts = _load_span_messages(span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)[
+        0
+    ]["parts"]
+    assert parts[0]["type"] == "server_tool_call"
+    assert parts[0]["name"] == "web_search"
+    assert parts[0]["id"] == "srvtoolu_A"
+    assert parts[1]["type"] == "server_tool_call_response"
+    assert parts[1]["id"] == "srvtoolu_A"
+    assert parts[1]["server_tool_call_response"]["content"] == [
+        {
+            "type": "web_search_result",
+            "title": "SF weather",
+            "url": "https://example.com/sf-weather",
+            "encrypted_content": "abc123",
+        }
+    ]
+
+
 def _completed_tool_use_only_block_truncated_sse_body() -> bytes:
     """A single tool call whose content_block_stop fires, then the body
     ends with no further block and no message_stop. The completed tool
