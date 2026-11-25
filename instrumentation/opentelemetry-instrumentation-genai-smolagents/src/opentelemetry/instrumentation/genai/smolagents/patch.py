@@ -448,6 +448,11 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
                     self._self_final_output,
                     capture_content=self._self_capture_content,
                 )
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Converting the answer runs user code, such as ``__str__``.
+            _logger.debug(
+                "Failed to record smolagents run answer", exc_info=True
+            )
         finally:
             _finish(self._self_agent_invocation)
 
