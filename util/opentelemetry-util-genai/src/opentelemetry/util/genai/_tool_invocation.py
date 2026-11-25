@@ -17,7 +17,7 @@ from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
 )
-from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.completion_hook import _NoOpCompletionHook
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
     object_to_any_value,
@@ -73,7 +73,6 @@ class ToolInvocation(GenAIInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         name: str,
         *,
         tool_type: str | None = None,
@@ -111,7 +110,7 @@ class ToolInvocation(GenAIInvocation):
             tracer,
             instruments,
             logger,
-            completion_hook,
+            _NoOpCompletionHook(),
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
