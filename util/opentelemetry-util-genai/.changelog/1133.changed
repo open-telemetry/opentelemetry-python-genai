@@ -1,0 +1,1 @@
+GenAI content models now implement ``Mapping`` and are recorded on spans and events without an extra conversion pass

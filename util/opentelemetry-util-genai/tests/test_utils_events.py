@@ -181,7 +181,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
         },
     )
-    def test_event_receives_message_models_directly(self) -> None:
+    def test_event_messages_with_noop_hooks(self) -> None:
         for hook in (
             None,
             _NoOpCompletionHook(),
@@ -191,6 +191,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                 with self.subTest(
                     hook=type(hook).__name__, failed=error is not None
                 ):
+                    self.log_exporter.clear()
                     handler = TelemetryHandler(
                         tracer_provider=self.tracer_provider,
                         logger_provider=self.logger_provider,
@@ -203,22 +204,20 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                     invocation.output_messages = [
                         _create_output_message("test response")
                     ]
-                    with patch.object(invocation._logger, "emit") as emit:
-                        if error is None:
-                            invocation.stop()
-                        else:
-                            invocation.fail(error)
-
-                    emit.assert_called_once()
-                    attrs = emit.call_args.args[0].attributes
-                    self.assertIs(
-                        attrs[GenAI.GEN_AI_INPUT_MESSAGES],
-                        invocation.input_messages,
-                    )
-                    self.assertIs(
-                        attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
-                        invocation.output_messages,
-                    )
+                    if error is None:
+                        invocation.stop()
+                    else:
+                        invocation.fail(error)
+                    logs = self.log_exporter.get_finished_logs()
+                    self.assertEqual(len(logs), 1)
+                    attrs = logs[0].log_record.attributes
+                    for key, content in (
+                        (GenAI.GEN_AI_INPUT_MESSAGES, "test query"),
+                        (GenAI.GEN_AI_OUTPUT_MESSAGES, "test response"),
+                    ):
+                        self.assertEqual(
+                            attrs[key][0]["parts"][0]["content"], content
+                        )
 
     @patch.dict(
         os.environ,

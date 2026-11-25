@@ -66,24 +66,19 @@ class _AnyValueMapping(Mapping[str, AnyValue]):
     _KEEP_NONE: ClassVar[frozenset[str]] = frozenset()
 
     def __getitem__(self, key: str) -> AnyValue:
-        if key not in self._present_fields():
+        if key not in self.__dataclass_fields__:
             raise KeyError(key)
         value = getattr(self, key)
-        message_parts: list[MessagePart] | None = None
-        if key == "parts" and isinstance(self, (InputMessage, OutputMessage)):
-            if any(isinstance(part, GenericPart) for part in self.parts):
-                message_parts = self.parts
-        if key not in self._SANITIZE and message_parts is None:
+        if value is None and key not in self._KEEP_NONE:
+            raise KeyError(key)
+        if key not in self._SANITIZE:
             return value
 
         from opentelemetry.util.genai.utils import (  # pylint: disable=import-outside-toplevel
             object_to_any_value,
         )
 
-        if message_parts is None:
-            return object_to_any_value(value)
-
-        return _convert_generic_parts(message_parts)
+        return object_to_any_value(value)
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._present_fields())
@@ -422,15 +417,24 @@ class Role(str, Enum):
 SystemInstructionPart = Union[TextPart, GenericPart]
 
 
+class _MessageMapping(_AnyValueMapping):
+    parts: list[MessagePart]
+
+    def __getitem__(self, key: str) -> AnyValue:
+        if key == "parts":
+            return _convert_generic_parts(self.parts)
+        return super().__getitem__(key)
+
+
 @dataclass()
-class InputMessage(_AnyValueMapping):
+class InputMessage(_MessageMapping):
     role: str
     parts: list[MessagePart]
     name: str | None = None
 
 
 @dataclass()
-class OutputMessage(_AnyValueMapping):
+class OutputMessage(_MessageMapping):
     role: str
     parts: list[MessagePart]
     finish_reason: str | FinishReason | None = None

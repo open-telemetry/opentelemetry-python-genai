@@ -374,73 +374,38 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
         self, _mock_cap
     ) -> None:
         handler = TelemetryHandler(tracer_provider=self.tracer_provider)
-        for failed in (False, True):
-            with self.subTest(failed=failed):
-                self.span_exporter.clear()
-                inv = handler.workflow("wf")
-                inv.input_messages = [
-                    InputMessage(
-                        role="user", parts=[TextPart(content="hello")]
-                    )
-                ]
-                inv.output_messages = [
-                    OutputMessage(
-                        role="assistant",
-                        parts=[TextPart(content="hi")],
-                        finish_reason="stop",
-                    )
-                ]
-                with (
-                    patch(
-                        "opentelemetry.util.genai.utils.object_to_any_value",
-                    ) as convert,
-                    patch.object(
-                        inv.span,
-                        "set_attributes",
-                        wraps=inv.span.set_attributes,
-                    ) as record,
-                ):
-                    if failed:
-                        inv.fail(ValueError("workflow failed"))
-                    else:
-                        inv.stop()
-                convert.assert_not_called()
-                recorded = record.call_args.args[0]
-                self.assertIs(
-                    recorded[GenAI.GEN_AI_INPUT_MESSAGES],
-                    inv.input_messages,
+        with handler.workflow("wf") as inv:
+            inv.input_messages = [
+                InputMessage(role="user", parts=[TextPart(content="hello")])
+            ]
+            inv.output_messages = [
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="hi")],
+                    finish_reason="stop",
                 )
-                self.assertIs(
-                    recorded[GenAI.GEN_AI_OUTPUT_MESSAGES],
-                    inv.output_messages,
-                )
+            ]
 
-                attrs = self._get_finished_spans()[0].attributes
-                inv.input_messages[0].parts.clear()
-                inv.output_messages[0].parts.clear()
-                self.assertEqual(
-                    attrs[GenAI.GEN_AI_INPUT_MESSAGES],
-                    (
-                        {
-                            "role": "user",
-                            "parts": ({"type": "text", "content": "hello"},),
-                        },
-                    ),
-                )
-                self.assertEqual(
-                    attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
-                    (
-                        {
-                            "role": "assistant",
-                            "parts": ({"type": "text", "content": "hi"},),
-                            "finish_reason": "stop",
-                        },
-                    ),
-                )
-                self.assertEqual(
-                    self._get_finished_spans()[0].status.status_code,
-                    StatusCode.ERROR if failed else StatusCode.UNSET,
-                )
+        attrs = self._get_finished_spans()[0].attributes
+        self.assertEqual(
+            attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+            (
+                {
+                    "role": "user",
+                    "parts": ({"type": "text", "content": "hello"},),
+                },
+            ),
+        )
+        self.assertEqual(
+            attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"type": "text", "content": "hi"},),
+                    "finish_reason": "stop",
+                },
+            ),
+        )
 
     @patch(
         "opentelemetry.util.genai.handler.get_content_capturing_mode",

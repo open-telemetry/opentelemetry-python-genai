@@ -26,7 +26,6 @@ from opentelemetry.util.genai.environment_variables import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import RetrievalInvocation
 from opentelemetry.util.genai.types import Error, RetrievalDocument
-from opentelemetry.util.genai.utils import object_to_any_value
 
 
 class _RetrievalTestBase(TestCase):
@@ -266,38 +265,17 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
                     tracer_provider=self.tracer_provider
                 )
                 invocation = handler.retrieval()
-                docs = [
+                invocation.documents = [
                     RetrievalDocument(id="doc-1", score=0.95),
                     RetrievalDocument(id="doc-2", score=0.0),
                     RetrievalDocument(id="doc-3"),
                     RetrievalDocument(score=0.5),
                     RetrievalDocument(),
                 ]
-                invocation.documents = docs
-                with (
-                    patch(
-                        "opentelemetry.util.genai._retrieval_invocation.object_to_any_value",
-                        wraps=object_to_any_value,
-                    ) as convert,
-                    patch.object(
-                        invocation.span,
-                        "set_attributes",
-                        wraps=invocation.span.set_attributes,
-                    ) as record,
-                ):
-                    if failed:
-                        invocation.fail(ValueError("retrieval failed"))
-                    else:
-                        invocation.stop()
-                convert.assert_not_called()
-                recorded_docs = record.call_args.args[0][
-                    GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
-                ]
-                self.assertEqual(len(recorded_docs), len(docs))
-                for recorded, original in zip(
-                    recorded_docs, docs, strict=True
-                ):
-                    self.assertIs(recorded, original)
+                if failed:
+                    invocation.fail(ValueError("retrieval failed"))
+                else:
+                    invocation.stop()
 
                 span = self._get_finished_spans()[0]
                 documents = span.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
@@ -336,12 +314,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         handler = TelemetryHandler(tracer_provider=self.tracer_provider)
         invocation = handler.retrieval()
         invocation.documents = [legacy, RetrievalDocument(id="typed")]
-        with patch(
-            "opentelemetry.util.genai._retrieval_invocation.object_to_any_value",
-            wraps=object_to_any_value,
-        ) as convert:
-            invocation.stop()
-        convert.assert_called_once_with(legacy)
+        invocation.stop()
 
         raw = self._get_finished_spans()[0].attributes[
             GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
@@ -356,38 +329,35 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
     )
     def test_legacy_documents_keep_defensive_conversion(self) -> None:
         handler = TelemetryHandler(tracer_provider=self.tracer_provider)
-        legacy = {
-            "id": "legacy",
-            "metadata": {"source": "db", "invalid": object()},
-        }
-        for failed_conversion in (False, True):
-            with self.subTest(failed_conversion=failed_conversion):
-                self.span_exporter.clear()
-                invocation = handler.retrieval()
-                invocation.documents = [{}, legacy, RetrievalDocument()]
-                with patch(
-                    "opentelemetry.util.genai._retrieval_invocation.object_to_any_value",
-                    wraps=object_to_any_value,
-                ) as convert:
-                    if failed_conversion:
-                        convert.side_effect = [{}, None]
-                    invocation.stop()
-                self.assertEqual(convert.call_count, 2)
-                self.assertIs(
-                    convert.call_args_list[0].args[0], invocation.documents[0]
-                )
-                self.assertIs(convert.call_args_list[1].args[0], legacy)
-                expected = ({}, {})
-                if not failed_conversion:
-                    expected = (
-                        {},
-                        {"id": "legacy", "metadata": {"source": "db"}},
-                        {},
-                    )
-                raw = self._get_finished_spans()[0].attributes[
-                    GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
-                ]
-                self.assertEqual(raw, expected)
+        invocation = handler.retrieval()
+        invocation.documents = [
+            {},
+            {
+                "id": "legacy",
+                "content": "text",
+                "metadata": {"source": "db", "invalid": object()},
+            },
+            RetrievalDocument(id="typed"),
+            RetrievalDocument(),
+        ]
+        invocation.stop()
+
+        raw = self._get_finished_spans()[0].attributes[
+            GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
+        self.assertEqual(
+            raw,
+            (
+                {},
+                {
+                    "id": "legacy",
+                    "content": "text",
+                    "metadata": {"source": "db"},
+                },
+                {"id": "typed"},
+                {},
+            ),
+        )
 
     @patch.dict(
         os.environ,

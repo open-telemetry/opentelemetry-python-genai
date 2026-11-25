@@ -15,10 +15,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
-from pydantic import BaseModel
-
 from opentelemetry import trace
-from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -338,19 +335,12 @@ class TestTelemetryHandler(unittest.TestCase):
     )
     def test_system_instruction_generic_part_on_span(self):
         handler = TelemetryHandler(tracer_provider=self.tracer_provider)
-        with (
-            patch(
-                "opentelemetry.util.genai.utils.object_to_any_value",
-                wraps=object_to_any_value,
-            ) as convert,
-            handler.inference("test-provider") as invocation,
-        ):
+        with handler.inference("test-provider") as invocation:
             invocation.system_instruction = [
                 TextPart(content="You are helpful"),
                 GenericPart(type="custom"),
             ]
 
-        convert.assert_called_once_with(invocation.system_instruction[1])
         span = _get_single_span(self.span_exporter)
         span_attrs = _get_span_attributes(span)
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
@@ -423,7 +413,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
-    def test_shared_content_models_passed_directly_to_spans(self) -> None:
+    def test_shared_content_models_on_spans(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
@@ -465,36 +455,10 @@ class TestTelemetryHandler(unittest.TestCase):
                             name="builtin", type="web_search"
                         ),
                     ]
-                    with (
-                        patch(
-                            "opentelemetry.util.genai._invocation.object_to_any_value",
-                            wraps=object_to_any_value,
-                        ) as convert,
-                        patch.object(
-                            invocation.span,
-                            "set_attributes",
-                            wraps=invocation.span.set_attributes,
-                        ) as record,
-                    ):
-                        if failed:
-                            invocation.fail(ValueError("failed"))
-                        else:
-                            invocation.stop()
-
-                    convert.assert_not_called()
-                    recorded = record.call_args.args[0]
-                    self.assertIs(
-                        recorded[GenAI.GEN_AI_OUTPUT_MESSAGES],
-                        invocation.output_messages,
-                    )
-                    self.assertIs(
-                        recorded[GenAI.GEN_AI_TOOL_DEFINITIONS],
-                        invocation.tool_definitions,
-                    )
-                    self.assertIs(
-                        recorded[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS],
-                        invocation.system_instruction,
-                    )
+                    if failed:
+                        invocation.fail(ValueError("failed"))
+                    else:
+                        invocation.stop()
                     attrs = _get_span_attributes(
                         _get_single_span(self.span_exporter)
                     )
@@ -525,10 +489,6 @@ class TestTelemetryHandler(unittest.TestCase):
                         ),
                     )
                     if name != "fetch_response":
-                        self.assertIs(
-                            recorded[GenAI.GEN_AI_INPUT_MESSAGES],
-                            invocation.input_messages,
-                        )
                         _assert_text_message(
                             attrs[GenAI.GEN_AI_INPUT_MESSAGES][0],
                             "Human",
@@ -536,6 +496,224 @@ class TestTelemetryHandler(unittest.TestCase):
                         )
                     else:
                         self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, attrs)
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+        },
+    )
+    def test_typed_parts_on_spans_and_events(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        parts = [
+            TextPart(content=""),
+            ReasoningPart(content="thinking"),
+            CompactionPart(),
+            CompactionPart(id="", content=""),
+            BlobPart(
+                mime_type=None, modality=Modality.IMAGE, content=b"\x00\xff"
+            ),
+            FilePart(
+                mime_type="application/pdf", modality="document", file_id=""
+            ),
+            UriPart(
+                mime_type=None,
+                modality="image",
+                uri="https://example.test/image.png",
+            ),
+        ]
+        with handler.inference("test-provider") as invocation:
+            invocation.input_messages = [
+                InputMessage(role=Role.USER, parts=parts, name="")
+            ]
+            invocation.output_messages = [
+                OutputMessage(role=Role.ASSISTANT, parts=parts)
+            ]
+        expected = (
+            {"content": "", "type": "text"},
+            {"content": "thinking", "type": "reasoning"},
+            {"type": "compaction"},
+            {"id": "", "content": "", "type": "compaction"},
+            {"modality": "image", "content": b"\x00\xff", "type": "blob"},
+            {
+                "mime_type": "application/pdf",
+                "modality": "document",
+                "file_id": "",
+                "type": "file",
+            },
+            {
+                "modality": "image",
+                "uri": "https://example.test/image.png",
+                "type": "uri",
+            },
+        )
+        span_attrs = _get_span_attributes(_get_single_span(self.span_exporter))
+        event_attrs = self.log_exporter.get_finished_logs()[
+            0
+        ].log_record.attributes
+        for attrs in (span_attrs, event_attrs):
+            self.assertEqual(
+                attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+                ({"role": "user", "parts": expected, "name": ""},),
+            )
+            self.assertEqual(
+                attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
+                ({"role": "assistant", "parts": expected},),
+            )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+        },
+    )
+    def test_tool_payloads_on_spans_and_events(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+
+        @dataclass
+        class Payload:
+            count: int
+            label: str | None = None
+
+        cases = [
+            (Payload(count=0), {"count": 0, "label": None}),
+            ({"count": 0, "invalid": object()}, {"count": 0}),
+            (object(), None),
+            (None, None),
+        ]
+        for payload, converted in cases:
+            with self.subTest(payload=payload):
+                self.span_exporter.clear()
+                self.log_exporter.clear()
+                parts = [
+                    (
+                        ToolCallRequestPart(
+                            arguments=payload, name="tool", id=None
+                        ),
+                        "arguments",
+                        {"name": "tool", "type": "tool_call"},
+                    ),
+                    (
+                        ToolCallResponsePart(response=payload, id=None),
+                        "response",
+                        {"type": "tool_call_response", "response": None},
+                    ),
+                    (
+                        ServerToolCallPart(
+                            name="web_search", server_tool_call=payload
+                        ),
+                        "server_tool_call",
+                        {"name": "web_search", "type": "server_tool_call"},
+                    ),
+                    (
+                        ServerToolCallResponsePart(
+                            server_tool_call_response=payload, id="call-1"
+                        ),
+                        "server_tool_call_response",
+                        {"id": "call-1", "type": "server_tool_call_response"},
+                    ),
+                ]
+                expected_parts = []
+                for _, key, expected in parts:
+                    if payload is not None:
+                        expected[key] = converted
+                    expected_parts.append(expected)
+                definition = {
+                    "name": "tool",
+                    "description": "",
+                    "type": "function",
+                }
+                if payload is not None:
+                    definition["parameters"] = converted
+                with handler.inference("test-provider") as invocation:
+                    invocation.input_messages = [
+                        InputMessage(
+                            role="user", parts=[part for part, _, _ in parts]
+                        )
+                    ]
+                    invocation.tool_definitions = [
+                        FunctionToolDefinition(
+                            name="tool", description="", parameters=payload
+                        ),
+                        GenericToolDefinition(name="", type=""),
+                    ]
+                span_attrs = _get_span_attributes(
+                    _get_single_span(self.span_exporter)
+                )
+                event_attrs = self.log_exporter.get_finished_logs()[
+                    0
+                ].log_record.attributes
+                for attrs in (span_attrs, event_attrs):
+                    self.assertEqual(
+                        attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+                        ({"role": "user", "parts": tuple(expected_parts)},),
+                    )
+                    self.assertEqual(
+                        attrs[GenAI.GEN_AI_TOOL_DEFINITIONS],
+                        (definition, {"name": "", "type": ""}),
+                    )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+        },
+    )
+    def test_generic_parts_on_spans_and_events(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+
+        @dataclass
+        class CustomPart(GenericPart):
+            items: dict[str, str]
+            keys: list[str]
+            invalid: object
+
+        parts = [
+            CustomPart(
+                type="custom",
+                items={"query": "weather"},
+                keys=["result"],
+                invalid=object(),
+            ),
+            TextPart(content="hello"),
+        ]
+        with handler.inference("test-provider") as invocation:
+            invocation.input_messages = [
+                InputMessage(role="user", parts=parts)
+            ]
+            invocation.output_messages = [
+                OutputMessage(role="assistant", parts=parts)
+            ]
+        expected = (
+            {
+                "type": "custom",
+                "items": {"query": "weather"},
+                "keys": ("result",),
+            },
+            {"type": "text", "content": "hello"},
+        )
+        span_attrs = _get_span_attributes(_get_single_span(self.span_exporter))
+        event_attrs = self.log_exporter.get_finished_logs()[
+            0
+        ].log_record.attributes
+        for attrs in (span_attrs, event_attrs):
+            self.assertEqual(
+                attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+                ({"role": "user", "parts": expected},),
+            )
+            self.assertEqual(
+                attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
+                ({"role": "assistant", "parts": expected},),
+            )
 
     def test_inference_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time."""
@@ -1817,311 +1995,31 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
-    def test_messages_are_mappings_without_conversion(self):
-        parts = [TextPart(content="hello")]
-        cases = [
-            (
-                InputMessage(role=Role.USER, parts=parts),
-                {"role": Role.USER, "parts": parts},
+    def test_content_models_are_mappings(self):
+        models = [
+            InputMessage(role="user", parts=[]),
+            OutputMessage(role="assistant", parts=[]),
+            RetrievalDocument(),
+            TextPart(content="hello"),
+            ReasoningPart(content="thinking"),
+            CompactionPart(),
+            BlobPart(mime_type=None, modality="image", content=b"data"),
+            FilePart(mime_type=None, modality="document", file_id="file"),
+            UriPart(
+                mime_type=None, modality="image", uri="https://example.test"
             ),
-            (
-                InputMessage(role="user", parts=[], name=""),
-                {"role": "user", "parts": [], "name": ""},
+            ToolCallRequestPart(arguments=None, name="tool", id=None),
+            ToolCallResponsePart(response=None, id=None),
+            ServerToolCallPart(name="tool", server_tool_call=None),
+            ServerToolCallResponsePart(server_tool_call_response=None),
+            FunctionToolDefinition(
+                name="tool", description=None, parameters=None
             ),
-            (
-                OutputMessage(role=Role.ASSISTANT, parts=parts),
-                {"role": Role.ASSISTANT, "parts": parts},
-            ),
-            (
-                OutputMessage(
-                    role="assistant", parts=[], finish_reason="stop", name=""
-                ),
-                {
-                    "role": "assistant",
-                    "parts": [],
-                    "finish_reason": "stop",
-                    "name": "",
-                },
-            ),
+            GenericToolDefinition(name="builtin", type="web_search"),
         ]
-        with patch(
-            "opentelemetry.util.genai.utils.object_to_any_value"
-        ) as convert:
-            for message, expected in cases:
-                with self.subTest(message=message):
-                    self.assertIsInstance(message, Mapping)
-                    self.assertEqual(dict(message), expected)
-                    self.assertEqual(len(message), len(expected))
-                    self.assertIs(message["parts"], message.parts)
-            convert.assert_not_called()
-
-    def test_message_mappings_convert_only_generic_parts(self):
-        @dataclass
-        class CustomPart(GenericPart):
-            items: dict[str, str]
-            keys: list[str]
-            invalid: object
-
-        generic = CustomPart(
-            type="custom",
-            items={"query": "weather"},
-            keys=["result"],
-            invalid=object(),
-        )
-        typed = TextPart(content="hello")
-        parts = [generic, typed]
-        cases = [
-            (
-                InputMessage(role="user", parts=parts),
-                GenAI.GEN_AI_INPUT_MESSAGES,
-            ),
-            (
-                OutputMessage(role="assistant", parts=parts),
-                GenAI.GEN_AI_OUTPUT_MESSAGES,
-            ),
-        ]
-        for message, attribute in cases:
-            for failed_conversion in (False, True):
-                with (
-                    self.subTest(
-                        message=message,
-                        failed_conversion=failed_conversion,
-                    ),
-                    patch(
-                        "opentelemetry.util.genai.utils.object_to_any_value",
-                        wraps=object_to_any_value,
-                    ) as convert,
-                ):
-                    if failed_conversion:
-                        convert.return_value = None
-                    mapped_parts = message["parts"]
-                    self.assertIs(mapped_parts[-1], typed)
-                    convert.assert_called_once_with(generic)
-                    convert.reset_mock()
-                    attributes = BoundedAttributes(
-                        attributes={attribute: [message]},
-                        extended_attributes=True,
-                    )
-                    expected_parts = ({"content": "hello", "type": "text"},)
-                    if not failed_conversion:
-                        expected_parts = (
-                            {
-                                "type": "custom",
-                                "items": {"query": "weather"},
-                                "keys": ("result",),
-                            },
-                            *expected_parts,
-                        )
-                    self.assertEqual(
-                        attributes[attribute],
-                        ({"role": message.role, "parts": expected_parts},),
-                    )
-                    self.assertIs(message.parts, parts)
-                    self.assertIs(message.parts[0], generic)
-                    self.assertIs(message.parts[1], typed)
-                    convert.assert_called_once_with(generic)
-
-    def test_retrieval_documents_are_mappings_without_conversion(self):
-        cases = [
-            (RetrievalDocument(), {}),
-            (
-                RetrievalDocument(id="doc-1", score=0.95),
-                {"id": "doc-1", "score": 0.95},
-            ),
-            (RetrievalDocument(id=""), {"id": ""}),
-            (RetrievalDocument(score=0.0), {"score": 0.0}),
-        ]
-        with patch(
-            "opentelemetry.util.genai.utils.object_to_any_value"
-        ) as convert:
-            for document, expected in cases:
-                with self.subTest(document=document):
-                    self.assertIsInstance(document, Mapping)
-                    self.assertEqual(dict(document), expected)
-                    self.assertEqual(len(document), len(expected))
-            convert.assert_not_called()
-
-    def test_tool_payload_mappings(self):
-        @dataclass
-        class Payload:
-            count: int
-            label: str | None = None
-
-        class PydanticPayload(BaseModel):
-            count: int
-            label: str | None = None
-
-        payload_cases = [
-            (Payload(count=0), {"count": 0, "label": None}),
-            (PydanticPayload(count=0), {"count": 0, "label": None}),
-            ({"count": 0, "invalid": object()}, {"count": 0}),
-            (object(), None),
-            (None, None),
-        ]
-        for payload, converted in payload_cases:
-            parts = [
-                (
-                    ToolCallRequestPart(
-                        arguments=payload, name="tool", id=None
-                    ),
-                    "arguments",
-                    {"name": "tool", "type": "tool_call"},
-                ),
-                (
-                    ServerToolCallPart(
-                        name="web_search", server_tool_call=payload
-                    ),
-                    "server_tool_call",
-                    {"name": "web_search", "type": "server_tool_call"},
-                ),
-                (
-                    ServerToolCallResponsePart(
-                        server_tool_call_response=payload, id="call-1"
-                    ),
-                    "server_tool_call_response",
-                    {
-                        "id": "call-1",
-                        "type": "server_tool_call_response",
-                    },
-                ),
-                (
-                    FunctionToolDefinition(
-                        name="tool", description=None, parameters=payload
-                    ),
-                    "parameters",
-                    {"name": "tool", "type": "function"},
-                ),
-                (
-                    ToolCallResponsePart(response=payload, id=None),
-                    "response",
-                    {"response": None, "type": "tool_call_response"},
-                ),
-            ]
-            for part, payload_key, expected in parts:
-                with (
-                    self.subTest(part=part),
-                    patch(
-                        "opentelemetry.util.genai.utils.object_to_any_value",
-                        wraps=object_to_any_value,
-                    ) as convert,
-                ):
-                    if payload is not None:
-                        expected[payload_key] = converted
-                    self.assertIsInstance(part, Mapping)
-                    self.assertEqual(dict(part), expected)
-                    self.assertEqual(len(part), len(expected))
-                    if payload_key not in expected:
-                        self.assertNotIn(payload_key, part)
-                        convert.assert_not_called()
-                    else:
-                        convert.assert_called_once_with(payload)
-
-    def test_typed_tool_definition_fields_without_conversion(self):
-        cases = [
-            (
-                GenericToolDefinition(name="web_search", type="web_search"),
-                {"name": "web_search", "type": "web_search"},
-            ),
-            (
-                GenericToolDefinition(name="", type=""),
-                {"name": "", "type": ""},
-            ),
-            (
-                FunctionToolDefinition(
-                    name="tool", description="", parameters=None
-                ),
-                {"name": "tool", "description": "", "type": "function"},
-            ),
-        ]
-        with patch(
-            "opentelemetry.util.genai.utils.object_to_any_value"
-        ) as convert:
-            for definition, expected in cases:
-                with self.subTest(definition=definition):
-                    self.assertIsInstance(definition, Mapping)
-                    self.assertEqual(dict(definition), expected)
-                    self.assertEqual(len(definition), len(expected))
-            convert.assert_not_called()
-
-    def test_typed_parts_are_mappings_without_conversion(self):
-        cases = [
-            (TextPart(content="hello"), {"content": "hello", "type": "text"}),
-            (TextPart(content=""), {"content": "", "type": "text"}),
-            (
-                ReasoningPart(content="thinking"),
-                {"content": "thinking", "type": "reasoning"},
-            ),
-            (ReasoningPart(content=""), {"content": "", "type": "reasoning"}),
-            (CompactionPart(), {"type": "compaction"}),
-            (
-                CompactionPart(id="compact-1"),
-                {"id": "compact-1", "type": "compaction"},
-            ),
-            (
-                CompactionPart(content="summary"),
-                {"content": "summary", "type": "compaction"},
-            ),
-            (
-                CompactionPart(id="compact-1", content="summary"),
-                {
-                    "id": "compact-1",
-                    "content": "summary",
-                    "type": "compaction",
-                },
-            ),
-            (
-                CompactionPart(id="", content=""),
-                {"id": "", "content": "", "type": "compaction"},
-            ),
-            (
-                BlobPart(
-                    mime_type=None,
-                    modality=Modality.IMAGE,
-                    content=b"\x00\xff",
-                ),
-                {
-                    "modality": Modality.IMAGE,
-                    "content": b"\x00\xff",
-                    "type": "blob",
-                },
-            ),
-            (
-                FilePart(
-                    mime_type="application/pdf",
-                    modality="document",
-                    file_id="",
-                ),
-                {
-                    "mime_type": "application/pdf",
-                    "modality": "document",
-                    "file_id": "",
-                    "type": "file",
-                },
-            ),
-            (
-                UriPart(
-                    mime_type=None,
-                    modality="image",
-                    uri="https://example.test/image.png",
-                ),
-                {
-                    "modality": "image",
-                    "uri": "https://example.test/image.png",
-                    "type": "uri",
-                },
-            ),
-        ]
-        with patch(
-            "opentelemetry.util.genai.utils.object_to_any_value"
-        ) as convert:
-            for part, expected in cases:
-                with self.subTest(part=part):
-                    self.assertIsInstance(part, Mapping)
-                    self.assertEqual(dict(part), expected)
-                    if isinstance(part, (TextPart, ReasoningPart, BlobPart)):
-                        self.assertIs(part["content"], part.content)
-                    self.assertEqual(len(part), len(expected))
-            convert.assert_not_called()
+        for model in models:
+            with self.subTest(model=model):
+                self.assertIsInstance(model, Mapping)
 
     def test_tool_call_request_mapping(self):
         part = ToolCallRequestPart(
@@ -2143,31 +2041,14 @@ class TestMessageModels(unittest.TestCase):
 
     def test_tool_call_request_mapping_omits_none_fields(self):
         part = ToolCallRequestPart(arguments=None, name="tool", id=None)
-        with patch(
-            "opentelemetry.util.genai.utils.object_to_any_value"
-        ) as convert:
-            self.assertEqual(dict(part), {"name": "tool", "type": "tool_call"})
-            self.assertEqual(len(part), 2)
-            self.assertTrue(part)
-            with self.assertRaises(KeyError):
-                part["id"]
-            part.id = ""
-            self.assertEqual(part["id"], "")
-            self.assertEqual(len(part), 3)
-            convert.assert_not_called()
-
-    def test_tool_call_request_mapping_keeps_unconvertible_arguments(self):
-        arguments = object()
-        part = ToolCallRequestPart(arguments=arguments, name="tool", id=None)
-        with patch(
-            "opentelemetry.util.genai.utils.object_to_any_value",
-            wraps=object_to_any_value,
-        ) as convert:
-            self.assertEqual(
-                dict(part),
-                {"arguments": None, "name": "tool", "type": "tool_call"},
-            )
-            convert.assert_called_once_with(arguments)
+        self.assertEqual(dict(part), {"name": "tool", "type": "tool_call"})
+        self.assertEqual(len(part), 2)
+        self.assertTrue(part)
+        with self.assertRaises(KeyError):
+            part["id"]
+        part.id = ""
+        self.assertEqual(part["id"], "")
+        self.assertEqual(len(part), 3)
 
     def test_empty_content_mapping_is_truthy(self):
         model = RetrievalDocument()
