@@ -18,11 +18,13 @@ from opentelemetry.trace import (
     SpanKind,
     Tracer,
 )
+from opentelemetry.util.genai._inference_base import (
+    _BaseInferenceInvocation,
+)
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     ContextData,
     Error,
-    GenAIInvocation,
     _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
@@ -32,48 +34,12 @@ from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
-    Modality,
-    ModalityTokens,
     OutputMessage,
     SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
 
-_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
-    "gen_ai.usage.cache_write.input_tokens"
-)
-_GEN_AI_USAGE_TEXT_INPUT_TOKENS: Final = "gen_ai.usage.text.input_tokens"
-_GEN_AI_USAGE_IMAGE_INPUT_TOKENS: Final = "gen_ai.usage.image.input_tokens"
-_GEN_AI_USAGE_AUDIO_INPUT_TOKENS: Final = "gen_ai.usage.audio.input_tokens"
-_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS: Final = "gen_ai.usage.text.output_tokens"
-_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.image.output_tokens"
-_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS: Final = "gen_ai.usage.audio.output_tokens"
-_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.text.cache_read.input_tokens"
-)
-_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.image.cache_read.input_tokens"
-)
-_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.audio.cache_read.input_tokens"
-)
-_INPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    Modality.TEXT: "usage_text_input_tokens",
-    Modality.IMAGE: "usage_image_input_tokens",
-    Modality.AUDIO: "usage_audio_input_tokens",
-}
-_OUTPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    Modality.TEXT: "usage_text_output_tokens",
-    Modality.IMAGE: "usage_image_output_tokens",
-    Modality.AUDIO: "usage_audio_output_tokens",
-}
-_CACHE_READ_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    Modality.TEXT: "usage_text_cache_read_input_tokens",
-    Modality.IMAGE: "usage_image_cache_read_input_tokens",
-    Modality.AUDIO: "usage_audio_cache_read_input_tokens",
-}
-_GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
 _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
     "gen_ai.request.previous_response.id"
 )
@@ -140,7 +106,7 @@ class InferenceData(ContextData):
     usage_text_output_tokens: int | None = None
 
 
-class InferenceInvocation(GenAIInvocation):
+class InferenceInvocation(_BaseInferenceInvocation):
     """Represents a single LLM chat/completion call.
 
     Use handler.inference(provider) rather than constructing this directly.
@@ -231,70 +197,8 @@ class InferenceInvocation(GenAIInvocation):
         )
 
     @property
-    def provider(self) -> str | None:
-        return self.data.provider_name
-
-    @property
-    def request_model(self) -> str | None:
-        return self.data.request_model
-
-    @property
-    def response_model_name(self) -> str | None:
-        return self.data.response_model
-
-    @response_model_name.setter
-    def response_model_name(self, value: str | None) -> None:
-        self.data.response_model = value
-
-    @property
-    def server_address(self) -> str | None:
-        return self.data.server_address
-
-    @property
-    def server_port(self) -> int | None:
-        return self.data.server_port
-
-    @property
-    def response_id(self) -> str | None:
-        return self.data.response_id
-
-    @response_id.setter
-    def response_id(self, value: str | None) -> None:
-        self.data.response_id = value
-
-    @property
-    def finish_reasons(self) -> list[str] | None:
-        return self.data.response_finish_reasons
-
-    @finish_reasons.setter
-    def finish_reasons(self, value: Sequence[str] | None) -> None:
-        self.data.response_finish_reasons = (
-            list(value) if value is not None else None
-        )
-
-    @property
-    def input_tokens(self) -> int | None:
-        return self.data.usage_input_tokens
-
-    @input_tokens.setter
-    def input_tokens(self, value: int | None) -> None:
-        self.data.usage_input_tokens = value
-
-    @property
-    def output_tokens(self) -> int | None:
-        return self.data.usage_output_tokens
-
-    @output_tokens.setter
-    def output_tokens(self, value: int | None) -> None:
-        self.data.usage_output_tokens = value
-
-    @property
-    def thinking_tokens(self) -> int | None:
-        return self.data.usage_reasoning_output_tokens
-
-    @thinking_tokens.setter
-    def thinking_tokens(self, value: int | None) -> None:
-        self.data.usage_reasoning_output_tokens = value
+    def _inference_data(self) -> InferenceData:
+        return self.data
 
     @property
     def temperature(self) -> float | None:
@@ -337,14 +241,6 @@ class InferenceInvocation(GenAIInvocation):
         self.data.request_presence_penalty = value
 
     @property
-    def max_tokens(self) -> int | None:
-        return self.data.request_max_tokens
-
-    @max_tokens.setter
-    def max_tokens(self, value: int | None) -> None:
-        self.data.request_max_tokens = value
-
-    @property
     def stop_sequences(self) -> list[str] | None:
         return self.data.request_stop_sequences
 
@@ -371,14 +267,6 @@ class InferenceInvocation(GenAIInvocation):
         self.data.request_choice_count = value
 
     @property
-    def output_type(self) -> str | None:
-        return self.data.output_type
-
-    @output_type.setter
-    def output_type(self, value: str | None) -> None:
-        self.data.output_type = value
-
-    @property
     def request_stream(self) -> bool | None:
         return (
             self._request_stream
@@ -400,14 +288,6 @@ class InferenceInvocation(GenAIInvocation):
         self.data.response_time_to_first_chunk = value
 
     @property
-    def cache_write_input_tokens(self) -> int | None:
-        return self.data.usage_cache_write_input_tokens
-
-    @cache_write_input_tokens.setter
-    def cache_write_input_tokens(self, value: int | None) -> None:
-        self.data.usage_cache_write_input_tokens = value
-
-    @property
     def cache_creation_input_tokens(self) -> int | None:
         """
         .. deprecated:: 1.3b0
@@ -418,94 +298,6 @@ class InferenceInvocation(GenAIInvocation):
     @cache_creation_input_tokens.setter
     def cache_creation_input_tokens(self, value: int | None) -> None:
         self.data.usage_cache_write_input_tokens = value
-
-    @property
-    def cache_read_input_tokens(self) -> int | None:
-        return self.data.usage_cache_read_input_tokens
-
-    @cache_read_input_tokens.setter
-    def cache_read_input_tokens(self, value: int | None) -> None:
-        self.data.usage_cache_read_input_tokens = value
-
-    @property
-    def text_input_tokens(self) -> int | None:
-        return self.data.usage_text_input_tokens
-
-    @text_input_tokens.setter
-    def text_input_tokens(self, value: int | None) -> None:
-        self.data.usage_text_input_tokens = value
-
-    @property
-    def image_input_tokens(self) -> int | None:
-        return self.data.usage_image_input_tokens
-
-    @image_input_tokens.setter
-    def image_input_tokens(self, value: int | None) -> None:
-        self.data.usage_image_input_tokens = value
-
-    @property
-    def audio_input_tokens(self) -> int | None:
-        return self.data.usage_audio_input_tokens
-
-    @audio_input_tokens.setter
-    def audio_input_tokens(self, value: int | None) -> None:
-        self.data.usage_audio_input_tokens = value
-
-    @property
-    def text_output_tokens(self) -> int | None:
-        return self.data.usage_text_output_tokens
-
-    @text_output_tokens.setter
-    def text_output_tokens(self, value: int | None) -> None:
-        self.data.usage_text_output_tokens = value
-
-    @property
-    def image_output_tokens(self) -> int | None:
-        return self.data.usage_image_output_tokens
-
-    @image_output_tokens.setter
-    def image_output_tokens(self, value: int | None) -> None:
-        self.data.usage_image_output_tokens = value
-
-    @property
-    def audio_output_tokens(self) -> int | None:
-        return self.data.usage_audio_output_tokens
-
-    @audio_output_tokens.setter
-    def audio_output_tokens(self, value: int | None) -> None:
-        self.data.usage_audio_output_tokens = value
-
-    @property
-    def text_cache_read_input_tokens(self) -> int | None:
-        return self.data.usage_text_cache_read_input_tokens
-
-    @text_cache_read_input_tokens.setter
-    def text_cache_read_input_tokens(self, value: int | None) -> None:
-        self.data.usage_text_cache_read_input_tokens = value
-
-    @property
-    def image_cache_read_input_tokens(self) -> int | None:
-        return self.data.usage_image_cache_read_input_tokens
-
-    @image_cache_read_input_tokens.setter
-    def image_cache_read_input_tokens(self, value: int | None) -> None:
-        self.data.usage_image_cache_read_input_tokens = value
-
-    @property
-    def audio_cache_read_input_tokens(self) -> int | None:
-        return self.data.usage_audio_cache_read_input_tokens
-
-    @audio_cache_read_input_tokens.setter
-    def audio_cache_read_input_tokens(self, value: int | None) -> None:
-        self.data.usage_audio_cache_read_input_tokens = value
-
-    @property
-    def reasoning_level(self) -> str | None:
-        return self.data.request_reasoning_level
-
-    @reasoning_level.setter
-    def reasoning_level(self, value: str | None) -> None:
-        self.data.request_reasoning_level = value
 
     @property
     def previous_response_id(self) -> str | None:
@@ -540,60 +332,6 @@ class InferenceInvocation(GenAIInvocation):
         self.data.prompt_version = value
 
     @property
-    def input_messages(self) -> list[InputMessage]:
-        if isinstance(self.data.input_messages, list):
-            return self.data.input_messages
-        messages = (
-            list(self.data.input_messages) if self.data.input_messages else []
-        )
-        self.data.input_messages = messages
-        return messages
-
-    @input_messages.setter
-    def input_messages(self, value: Sequence[InputMessage]) -> None:
-        self.data.input_messages = value
-
-    @property
-    def output_messages(self) -> list[OutputMessage]:
-        if isinstance(self.data.output_messages, list):
-            return self.data.output_messages
-        messages = (
-            list(self.data.output_messages)
-            if self.data.output_messages
-            else []
-        )
-        self.data.output_messages = messages
-        return messages
-
-    @output_messages.setter
-    def output_messages(self, value: Sequence[OutputMessage]) -> None:
-        self.data.output_messages = value
-
-    @property
-    def system_instruction(
-        self,
-    ) -> list[SystemInstructionPart] | list[MessagePart]:
-        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
-        if isinstance(self.data.system_instructions, list):
-            return self.data.system_instructions
-        instructions = (
-            list(self.data.system_instructions)
-            if self.data.system_instructions
-            else []
-        )
-        self.data.system_instructions = instructions
-        return instructions
-
-    @system_instruction.setter
-    def system_instruction(
-        self,
-        value: Sequence[SystemInstructionPart] | Sequence[MessagePart] | None,
-    ) -> None:
-        self.data.system_instructions = (
-            list(value) if value is not None else None
-        )
-
-    @property
     def prompt_variables(self) -> Mapping[str, object] | None:
         """Variables passed to the prompt template.
 
@@ -605,69 +343,6 @@ class InferenceInvocation(GenAIInvocation):
     @prompt_variables.setter
     def prompt_variables(self, value: Mapping[str, object] | None) -> None:
         self.data.prompt_variable = value
-
-    @property
-    def tool_definitions(self) -> list[ToolDefinition] | None:
-        return self.data.tool_definitions
-
-    @tool_definitions.setter
-    def tool_definitions(self, value: Sequence[ToolDefinition] | None) -> None:
-        self.data.tool_definitions = list(value) if value is not None else None
-
-    def set_input_tokens(self, entries: ModalityTokens | None) -> None:
-        """Record the per-modality breakdown of the input tokens.
-
-        Sets ``gen_ai.usage.{text,image,audio}.input_tokens`` from
-        ``entries``, an iterable of ``(modality, token count)`` pairs.
-        The modality may be a plain string or an enum member carrying one as
-        its ``value``; anything outside text, image and audio is dropped, as is
-        a count that is not a non-negative :class:`int`.
-
-        The breakdown is replaced wholesale, so a modality missing from
-        ``entries`` is cleared. Pass ``None`` to leave the current values
-        alone, which is what a streaming chunk carrying no usage should do.
-        """
-        self._set_modality_tokens(_INPUT_MODALITY_FIELDS, entries)
-
-    def set_output_tokens(self, entries: ModalityTokens | None) -> None:
-        """Record the per-modality breakdown of the output tokens.
-
-        Sets ``gen_ai.usage.{text,image,audio}.output_tokens``. See
-        :meth:`set_input_tokens` for the argument contract.
-        """
-        self._set_modality_tokens(_OUTPUT_MODALITY_FIELDS, entries)
-
-    def set_cache_read_input_tokens(
-        self, entries: ModalityTokens | None
-    ) -> None:
-        """Record the per-modality breakdown of the cache read input tokens.
-
-        Sets ``gen_ai.usage.{text,image,audio}.cache_read.input_tokens``. See
-        :meth:`set_input_tokens` for the argument contract.
-        """
-        self._set_modality_tokens(_CACHE_READ_MODALITY_FIELDS, entries)
-
-    def _set_modality_tokens(
-        self, fields: Mapping[str, str], entries: ModalityTokens | None
-    ) -> None:
-        if entries is None:
-            return
-        for field_name in fields.values():
-            setattr(self.data, field_name, None)
-        for modality, token_count in entries:
-            if (
-                not isinstance(token_count, int)
-                or isinstance(token_count, bool)
-                or token_count < 0
-            ):
-                continue
-            # modality may be an enum, whose str() is "MediaModality.AUDIO"
-            # rather than the bare name.
-            field_name = fields.get(
-                str(getattr(modality, "value", modality)).lower()
-            )
-            if field_name is not None:
-                setattr(self.data, field_name, token_count)
 
     def _get_message_attributes(
         self, *, for_span: bool
@@ -681,18 +356,6 @@ class InferenceInvocation(GenAIInvocation):
             for_span=for_span,
             content_capturing_mode=self._content_capturing_mode,
         )
-
-    def _get_finish_reasons(self) -> list[str] | None:
-        if self.data.response_finish_reasons is not None:
-            return list(self.data.response_finish_reasons) or None
-        if self.data.output_messages:
-            reasons = [
-                msg.finish_reason
-                for msg in self.data.output_messages
-                if msg.finish_reason
-            ]
-            return reasons or None
-        return None
 
     def record_stream_chunk(self) -> None:
         """Mark the request as streamed and record one output chunk arriving."""
@@ -742,12 +405,8 @@ class InferenceInvocation(GenAIInvocation):
             )
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
-        attrs: dict[str, AttributeValue] = {}
-        optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.data.provider_name),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.data.request_model),
-            (server_attributes.SERVER_ADDRESS, self.data.server_address),
-            (server_attributes.SERVER_PORT, self.data.server_port),
+        attrs = self._get_common_attributes()
+        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
             (
                 GenAI.GEN_AI_CONVERSATION_ID,
                 self.conversation_id or self.data.conversation_id,
@@ -764,73 +423,14 @@ class InferenceInvocation(GenAIInvocation):
                 GenAI.GEN_AI_REQUEST_PRESENCE_PENALTY,
                 self.data.request_presence_penalty,
             ),
-            (GenAI.GEN_AI_REQUEST_MAX_TOKENS, self.data.request_max_tokens),
             (
                 GenAI.GEN_AI_REQUEST_STOP_SEQUENCES,
                 self.data.request_stop_sequences,
             ),
             (GenAI.GEN_AI_REQUEST_SEED, self.data.request_seed),
-            (GenAI.GEN_AI_RESPONSE_FINISH_REASONS, self._get_finish_reasons()),
-            (GenAI.GEN_AI_RESPONSE_MODEL, self.data.response_model),
-            (GenAI.GEN_AI_RESPONSE_ID, self.data.response_id),
-            (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.data.usage_input_tokens),
-            (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.data.usage_output_tokens),
             (
                 GenAI.GEN_AI_REQUEST_CHOICE_COUNT,
                 self.data.request_choice_count,
-            ),
-            (GenAI.GEN_AI_OUTPUT_TYPE, self.data.output_type),
-            (
-                _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-                self.data.usage_cache_write_input_tokens or None,
-            ),
-            (
-                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-                self.data.usage_cache_read_input_tokens or None,
-            ),
-            (
-                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-                self.data.usage_reasoning_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_INPUT_TOKENS,
-                self.data.usage_text_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
-                self.data.usage_image_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
-                self.data.usage_audio_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
-                self.data.usage_text_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
-                self.data.usage_image_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
-                self.data.usage_audio_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
-                self.data.usage_text_cache_read_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
-                self.data.usage_image_cache_read_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
-                self.data.usage_audio_cache_read_input_tokens or None,
-            ),
-            (
-                _GEN_AI_REQUEST_REASONING_LEVEL,
-                self.data.request_reasoning_level,
             ),
             (
                 _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,

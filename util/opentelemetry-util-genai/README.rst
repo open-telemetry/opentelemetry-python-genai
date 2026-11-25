@@ -218,6 +218,23 @@ To suppress these events while keeping a ``LoggerProvider`` active, configure yo
 ``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
 <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
 
+When content capture is enabled, ``BlobPart.content`` carries raw ``bytes`` inside structured
+``AnyValue`` message dictionaries on both spans and log events. To truncate large ``bytes`` (and
+``str``) values without corrupting the surrounding message structure, set
+``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT``, ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` /
+``SpanLimits(max_span_attribute_length=...)``, or
+``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`` /
+``LogRecordLimits(max_log_record_attribute_length=...)``. Note that truncating ``bytes`` /
+``bytearray`` attribute values requires `open-telemetry/opentelemetry-python#5855
+<https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased
+version of ``opentelemetry-api``).
+
+For realtime APIs, ``TelemetryHandler.realtime_inference()`` tracks one model generation turn
+and ``TelemetryHandler.user_speech()`` tracks one user utterance.
+``emit_realtime_session_started()`` and ``emit_realtime_session_ended()`` emit events when a
+session opens and closes. Pass the same ``realtime_session_id`` to all of them to tie one
+session together. Use ``TranscriptionPart`` for text transcripts of spoken audio.
+
 When an inference, embeddings, retrieval, fetch response, agent invocation, or tool execution
 operation fails with an exception, the package also emits the operation's exception event (for
 example ``gen_ai.client.inference.exception``) with ``WARN`` severity, carrying ``exception.type``,

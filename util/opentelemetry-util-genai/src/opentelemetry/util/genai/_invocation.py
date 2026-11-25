@@ -67,6 +67,7 @@ __all__ = [
     "ContextData",
     "ContextToken",
     "GenAIInvocation",
+    "_is_active_completion_hook",
     "_resolve_suppressed_content_and_hook",
     "get_content_attributes",
 ]
@@ -285,6 +286,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         # scopes, where detaching it would restore contexts out of order.
         self._with_token: ContextToken | None = None
         self._monotonic_start_s: float = timeit.default_timer()
+        self._end_time_ns: int | None = None
         self._finished: bool = False
 
     @property
@@ -487,7 +489,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 self._emit_exception_event(error)
         finally:
             self._detach()
-            self.span.end()
+            if self._end_time_ns is not None:
+                self.span.end(end_time=self._end_time_ns)
+            else:
+                self.span.end()
             if self._context_key is not None:
                 self._span_context = set_value(
                     self._context_key, None, context=self._span_context
