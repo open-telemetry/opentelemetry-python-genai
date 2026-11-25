@@ -47,7 +47,7 @@ pytestmark = [
                 "generate_content", id="models.generate_content_stream"
             ),
             pytest.param(
-                "interactions.create",
+                "chat",
                 id="interactions.create-model",
                 marks=REQUIRES_INTERACTIONS,
             ),

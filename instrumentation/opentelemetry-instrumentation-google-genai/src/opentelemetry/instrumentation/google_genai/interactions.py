@@ -1245,7 +1245,6 @@ def _start_interactions_invocation(
         invocation = telemetry_handler.inference(
             provider=provider,
             request_model=_get_field(request, "model"),
-            operation_name="interactions.create",
             server_address=server_address,
             error_type_resolver=resolve_error_type,
             _attach_to_context=False,

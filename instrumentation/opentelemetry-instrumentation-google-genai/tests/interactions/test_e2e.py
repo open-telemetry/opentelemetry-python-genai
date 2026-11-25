@@ -216,12 +216,12 @@ def test_sync_interactions_create(
     assert response is not None
     assert response.id is not None
 
-    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    span = otel_mocker.get_span_named("chat gemini-2.5-flash")
     assert span is not None
     assert span.attributes["gen_ai.provider.name"] == "gemini"
     assert span.attributes["gen_ai.request.model"] == "gemini-2.5-flash"
     assert span.attributes["gen_ai.response.model"] == "gemini-2.5-flash"
-    assert span.attributes["gen_ai.operation.name"] == "interactions.create"
+    assert span.attributes["gen_ai.operation.name"] == "chat"
     for name, expected in expected_attributes.items():
         actual = span.attributes[name]
         if isinstance(expected, list):
@@ -252,12 +252,12 @@ async def test_async_interactions_create(
     assert response is not None
     assert response.id is not None
 
-    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    span = otel_mocker.get_span_named("chat gemini-2.5-flash")
     assert span is not None
     assert span.attributes["gen_ai.provider.name"] == "gemini"
     assert span.attributes["gen_ai.request.model"] == "gemini-2.5-flash"
     assert span.attributes["gen_ai.response.model"] == "gemini-2.5-flash"
-    assert span.attributes["gen_ai.operation.name"] == "interactions.create"
+    assert span.attributes["gen_ai.operation.name"] == "chat"
     for name, expected in expected_attributes.items():
         actual = span.attributes[name]
         if isinstance(expected, list):
@@ -279,7 +279,7 @@ def _assert_streamed_create_span(
         for event in events
         if event.event_type == "interaction.completed"
     ]
-    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    span = otel_mocker.get_span_named(f"chat {_STREAM_MODEL}")
     assert span is not None
     assert span.attributes["gen_ai.request.stream"] is True
     # Content capture is off, so this comes from the status alone.
@@ -378,7 +378,7 @@ def fixture_no_content_capture(
 def _assert_streamed_create_output(
     otel_mocker: OTelMocker, events: list[Any]
 ) -> None:
-    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    span = otel_mocker.get_span_named(f"chat {_STREAM_MODEL}")
     assert span is not None
     # Text deltas only: the thought step's signature must not leak in.
     expected_output = "".join(
@@ -457,7 +457,7 @@ def _assert_streamed_tool_call(
         if event.event_type == "step.start"
         and event.step.type == "function_call"
     ]
-    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    span = otel_mocker.get_span_named(f"chat {_STREAM_MODEL}")
     assert span is not None
     assert span.attributes["gen_ai.response.finish_reasons"] == ("tool_calls",)
     if content_mode == "no_content_capture":
@@ -570,7 +570,7 @@ def _inject_stream_error(
 def _assert_failed_stream_span(
     otel_mocker: OTelMocker, error_type: str
 ) -> None:
-    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    span = otel_mocker.get_span_named(f"chat {_STREAM_MODEL}")
     assert span is not None
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes["error.type"] == error_type
@@ -704,7 +704,7 @@ def _is_text_delta(event: Any) -> bool:
 def _assert_closed_early_span(
     otel_mocker: OTelMocker, content_mode: str, received_text: str
 ) -> None:
-    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    span = otel_mocker.get_span_named(f"chat {_STREAM_MODEL}")
     assert span is not None
     assert span.status.status_code == StatusCode.UNSET
     assert "error.type" not in span.attributes
@@ -997,10 +997,7 @@ def test_sync_interactions_get_streaming(
     assert span.attributes["gen_ai.response.status"] == interaction.status
     assert span.attributes["gen_ai.response.model"] == interaction.model
     # The create call is a separate operation with its own span.
-    assert (
-        otel_mocker.get_span_named(f"interactions.create {_BACKGROUND_MODEL}")
-        is not None
-    )
+    assert otel_mocker.get_span_named(f"chat {_BACKGROUND_MODEL}") is not None
     # The completion event carries metadata only (`steps` comes back null), so
     # the captured content has to come from the step deltas.
     assert interaction.steps is None

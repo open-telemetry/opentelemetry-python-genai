@@ -498,7 +498,7 @@ def test_tool_content_not_on_span_with_completion_hook():
         tracer_provider=tracer_provider, completion_hook=mock_hook
     )
     invocation = handler.tool("get_weather")
-    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content is False
     invocation.arguments = {"city": "Paris"}
     invocation.tool_result = "sunny"
     invocation.stop()
@@ -508,6 +508,7 @@ def test_tool_content_not_on_span_with_completion_hook():
     attrs = finished[0].attributes or {}
     assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
     assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
+    mock_hook.on_completion.assert_not_called()
 
 
 @patch.dict(
@@ -522,13 +523,11 @@ def test_direct_invocation_instantiation_falls_back_to_env():
     meter_provider = MeterProvider()
     meter = meter_provider.get_meter(__name__)
     mock_logger = MagicMock()
-    mock_hook = MagicMock(spec=CompletionHook)
 
     invocation = ToolInvocation(
         tracer=tracer,
         instruments=_Instruments(meter),
         logger=mock_logger,
-        completion_hook=mock_hook,
         name="direct_tool",
     )
     assert invocation.should_capture_content is True
@@ -549,7 +548,6 @@ def _invocation_with_exporter():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="ctx_tool",
     )
     return invocation, span_exporter
