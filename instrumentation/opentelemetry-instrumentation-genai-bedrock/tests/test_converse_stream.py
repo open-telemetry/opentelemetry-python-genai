@@ -47,9 +47,14 @@ def test_converse_stream_with_content(
             "stopSequences": ["|"],
         },
     )
+    assert trace.get_current_span() is trace.INVALID_SPAN
 
-    events = list(response["stream"])
+    events = []
+    for event in response["stream"]:
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        events.append(event)
     assert len(events) > 0
+    assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -275,7 +280,9 @@ def test_converse_stream_close_before_consumption(
         },
     )
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
     response["stream"].close()
+    assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -331,6 +338,8 @@ def test_converse_stream_handles_event_stream_error(
         },
     )
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
+
     with mock.patch.object(
         EventStream,
         "_parse_event",
@@ -340,8 +349,9 @@ def test_converse_stream_handles_event_stream_error(
     ):
         with pytest.raises(EventStreamError):
             for _event in response["stream"]:
-                pass
+                assert trace.get_current_span() is trace.INVALID_SPAN
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
@@ -372,11 +382,15 @@ def test_converse_stream_caller_side_error(
         },
     )
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
+
     with pytest.raises(RuntimeError, match="caller aborted stream"):
         with response["stream"] as stream:
             for _event in stream:
+                assert trace.get_current_span() is trace.INVALID_SPAN
                 raise RuntimeError("caller aborted stream")
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]

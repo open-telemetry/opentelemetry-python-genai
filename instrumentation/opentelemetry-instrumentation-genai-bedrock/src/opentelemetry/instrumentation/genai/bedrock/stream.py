@@ -684,7 +684,12 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
     async def __aenter__(self) -> AsyncBedrockStreamingBodyWrapper:
         # Returning self is what keeps `async with body as b` instrumented;
         # ObjectProxy would otherwise bind the unwrapped SDK body to b.
-        await self.__wrapped__.__aenter__()
+        with self._self_invocation.activate():
+            try:
+                await self.__wrapped__.__aenter__()
+            except BaseException as exc:
+                self._finalize_error(exc)
+                raise
         return self
 
     async def aclose(self) -> None:

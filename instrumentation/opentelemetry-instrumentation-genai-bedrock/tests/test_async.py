@@ -70,6 +70,22 @@ class _FakeHTTPContent:
         return self._pos >= len(self._data)
 
 
+class _RecordingHTTPContent(_FakeHTTPContent):
+    """Records the span that is current while the real transport read runs."""
+
+    def __init__(self, data: bytes, observed: list[Any] | None = None) -> None:
+        super().__init__(data)
+        self._observed = observed
+        self.seen: list[int] = []
+
+    async def read(self, n: int = -1) -> bytes:
+        current = trace.get_current_span()
+        if self._observed is not None:
+            self._observed.append(current)
+        self.seen.append(current.get_span_context().span_id)
+        return await super().read(n)
+
+
 class _FakeHTTPResponse:
     """Transport-level stand-in so tests exercise the SDK's real body class.
 
@@ -78,15 +94,20 @@ class _FakeHTTPResponse:
     one under test.
     """
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(
+        self, data: bytes, observed_close: list[Any] | None = None
+    ) -> None:
         self.content = _FakeHTTPContent(data)
         self.url = "https://bedrock-runtime.us-east-1.amazonaws.com/"
         self.closed = False
+        self._observed_close = observed_close
 
     def at_eof(self) -> bool:
         return self.content.at_eof()
 
     def close(self) -> None:
+        if self._observed_close is not None:
+            self._observed_close.append(trace.get_current_span())
         self.closed = True
 
     async def __aenter__(self) -> _FakeHTTPResponse:
@@ -94,6 +115,29 @@ class _FakeHTTPResponse:
 
     async def __aexit__(self, *_exc: Any) -> None:
         self.close()
+
+
+class _ProbingStreamingBody(AioStreamingBody):
+    """Real AioStreamingBody probing span context and errors in __aenter__."""
+
+    def __init__(
+        self,
+        raw_stream: _FakeHTTPResponse,
+        content_length: int,
+        *,
+        observed_enter: list[Any] | None = None,
+        enter_error: BaseException | None = None,
+    ) -> None:
+        super().__init__(raw_stream, content_length)
+        self._self_observed_enter = observed_enter
+        self._self_enter_error = enter_error
+
+    async def __aenter__(self) -> Any:
+        if self._self_observed_enter is not None:
+            self._self_observed_enter.append(trace.get_current_span())
+        if self._self_enter_error is not None:
+            raise self._self_enter_error
+        return await super().__aenter__()
 
 
 def _streaming_body(data: bytes | None = None) -> AioStreamingBody:
@@ -421,12 +465,17 @@ async def test_async_converse_stream_success(
         response = await async_bedrock_client.converse_stream(
             modelId=NOVA_MODEL_ID, messages=[]
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert isinstance(
             response["stream"], AsyncBedrockConverseStreamWrapper
         )
-        chunks = [chunk async for chunk in response["stream"]]
+        chunks = []
+        async for chunk in response["stream"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            chunks.append(chunk)
         assert len(chunks) == len(CONVERSE_STREAM_EVENTS)
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -463,9 +512,13 @@ async def test_async_converse_stream_error(
             modelId=NOVA_MODEL_ID, messages=[]
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(RuntimeError, match="Stream read failure"):
             async for _ in response["stream"]:
                 pass
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -490,10 +543,15 @@ async def test_async_converse_stream_caller_error(
             modelId=NOVA_MODEL_ID, messages=[]
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(ValueError, match="caller error"):
             async with response["stream"] as stream:
                 async for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
                     raise ValueError("caller error")
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -518,10 +576,16 @@ async def test_async_converse_stream_async_with_success(
             modelId=NOVA_MODEL_ID, messages=[]
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         async with response["stream"] as stream:
-            chunks = [chunk async for chunk in stream]
+            chunks = []
+            async for chunk in stream:
+                assert trace.get_current_span() is trace.INVALID_SPAN
+                chunks.append(chunk)
             assert len(chunks) == len(CONVERSE_STREAM_EVENTS)
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
     assert mock_stream.closed
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -574,8 +638,10 @@ async def test_async_invoke_model_lazy_read(
         # The span stays open until the caller drains the body.
         assert len(span_exporter.get_finished_spans()) == 0
         assert isinstance(response["body"], AsyncBedrockStreamingBodyWrapper)
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert await response["body"].read() == body_content
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -584,6 +650,213 @@ async def test_async_invoke_model_lazy_read(
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_read_activates_invocation_span(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+    tracer_provider,
+) -> None:
+    """Provider reads run under the chat span, then restore caller."""
+    body_content = _anthropic_body("Async invoke response")
+    observed: list[Any] = []
+    raw_response = _FakeHTTPResponse(body_content)
+    raw_response.content = _RecordingHTTPContent(body_content, observed)
+
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": AioStreamingBody(raw_response, len(body_content)),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+        assert isinstance(response["body"], AsyncBedrockStreamingBodyWrapper)
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+            assert trace.get_current_span() is caller_span
+            assert await response["body"].read() == body_content
+            assert trace.get_current_span() is caller_span
+
+    chat_span = next(
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name == f"chat {MODEL_ID}"
+    )
+    assert observed
+    assert all(
+        span.get_span_context().span_id == chat_span.get_span_context().span_id
+        for span in observed
+    )
+    assert (
+        chat_span.get_span_context().span_id
+        != caller_span.get_span_context().span_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_read_in_task_restores_context(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+    tracer_provider,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A read consumed in another asyncio task restores that task's context."""
+    body_content = _anthropic_body("Async invoke response")
+    observed: list[Any] = []
+    raw_response = _FakeHTTPResponse(body_content)
+    raw_response.content = _RecordingHTTPContent(body_content, observed)
+
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": AioStreamingBody(raw_response, len(body_content)),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+
+            async def consume() -> bytes:
+                assert trace.get_current_span() is caller_span
+                data = await response["body"].read()
+                # asyncio.create_task() copies the context, so an assertion in
+                # the parent cannot observe an invocation left current inside
+                # this task. Check the restoration where the read happened.
+                assert trace.get_current_span() is caller_span
+                return data
+
+            assert await asyncio.create_task(consume()) == body_content
+            assert trace.get_current_span() is caller_span
+
+    assert "Failed to detach context" not in caplog.text
+    chat_span = next(
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name == f"chat {MODEL_ID}"
+    )
+    assert observed
+    assert all(
+        span.get_span_context().span_id == chat_span.get_span_context().span_id
+        for span in observed
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_read_keeps_caller_span_for_suppressed_invocation(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+    tracer_provider,
+) -> None:
+    """A suppressed invocation must not be reactivated around a later read.
+
+    An inner ``invoke_model`` started inside another inference is suppressed
+    (it never attached itself). The outer invocation is stopped before the
+    caller drains the body, so activating the inner invocation would
+    reinstate the ended outer span instead of the caller's current one.
+    """
+    body_content = _anthropic_body("Async invoke response")
+    observed: list[Any] = []
+    raw_response = _FakeHTTPResponse(body_content)
+    raw_response.content = _RecordingHTTPContent(body_content, observed)
+
+    outer_handler = TelemetryHandler(tracer_provider=tracer_provider)
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": AioStreamingBody(raw_response, len(body_content)),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        with outer_handler.inference(
+            provider="aws.bedrock", request_model="outer-model"
+        ):
+            response = await async_bedrock_client.invoke_model(
+                modelId=MODEL_ID, body="{}"
+            )
+            assert isinstance(
+                response["body"], AsyncBedrockStreamingBodyWrapper
+            )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+            assert await response["body"].read() == body_content
+            assert trace.get_current_span() is caller_span
+
+    assert observed
+    assert all(
+        span.get_span_context().span_id
+        == caller_span.get_span_context().span_id
+        for span in observed
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_close_activates_invocation_span(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+    tracer_provider,
+) -> None:
+    """Transport cleanup runs under the chat span, then restores caller."""
+    body_content = _anthropic_body("Async invoke response")
+    observed_close: list[Any] = []
+    raw_response = _FakeHTTPResponse(body_content, observed_close)
+
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": AioStreamingBody(raw_response, len(body_content)),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+            await response["body"].aclose()
+            assert trace.get_current_span() is caller_span
+
+    assert raw_response.closed
+    chat_span = next(
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name == f"chat {MODEL_ID}"
+    )
+    assert observed_close
+    assert all(
+        span.get_span_context().span_id == chat_span.get_span_context().span_id
+        for span in observed_close
+    )
+    assert (
+        chat_span.get_span_context().span_id
+        != caller_span.get_span_context().span_id
     )
 
 
@@ -842,9 +1115,14 @@ async def test_async_invoke_model_context_manager(
             modelId=MODEL_ID, body="{}"
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         async with response["body"] as body:
             assert body is response["body"]
+            assert trace.get_current_span() is trace.INVALID_SPAN
             assert await body.read() == body_content
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -877,8 +1155,13 @@ async def test_async_invoke_model_async_iteration(
             modelId=MODEL_ID, body="{}"
         )
 
-        chunks = [chunk async for chunk in response["body"]]
+        assert trace.get_current_span() is trace.INVALID_SPAN
+        chunks = []
+        async for chunk in response["body"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            chunks.append(chunk)
         assert b"".join(chunks) == body_content
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1053,12 +1336,17 @@ async def test_async_invoke_model_stream_success(
                 modelId=MODEL_ID, body="{}"
             )
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert isinstance(
             response["body"], AsyncBedrockInvokeModelStreamWrapper
         )
-        chunks = [chunk async for chunk in response["body"]]
+        chunks = []
+        async for chunk in response["body"]:
+            assert trace.get_current_span() is trace.INVALID_SPAN
+            chunks.append(chunk)
         assert len(chunks) == len(INVOKE_MODEL_STREAM_EVENTS)
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1098,9 +1386,13 @@ async def test_async_invoke_model_stream_error(
             )
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(RuntimeError, match="Stream read failure"):
             async for _ in response["body"]:
                 pass
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1127,10 +1419,15 @@ async def test_async_invoke_model_stream_caller_error(
             )
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         with pytest.raises(ValueError, match="caller error"):
             async with response["body"] as stream:
                 async for _ in stream:
+                    assert trace.get_current_span() is trace.INVALID_SPAN
                     raise ValueError("caller error")
+
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1157,10 +1454,16 @@ async def test_async_invoke_model_stream_async_with_success(
             )
         )
 
+        assert trace.get_current_span() is trace.INVALID_SPAN
+
         async with response["body"] as stream:
-            chunks = [chunk async for chunk in stream]
+            chunks = []
+            async for chunk in stream:
+                assert trace.get_current_span() is trace.INVALID_SPAN
+                chunks.append(chunk)
             assert len(chunks) == len(INVOKE_MODEL_STREAM_EVENTS)
 
+    assert trace.get_current_span() is trace.INVALID_SPAN
     assert mock_stream.closed
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -1185,7 +1488,9 @@ async def test_async_invoke_model_stream_sync_close(
                 modelId=MODEL_ID, body="{}"
             )
         )
+        assert trace.get_current_span() is trace.INVALID_SPAN
         response["body"].close()
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     assert mock_stream.closed
     spans = span_exporter.get_finished_spans()
@@ -1441,10 +1746,274 @@ class _RecordingAsyncEventStream(_MockAsyncEventStream):
     def __init__(self, events: list[dict[str, Any]]) -> None:
         super().__init__(events)
         self.seen: list[int] = []
+        self.close_seen: list[int] = []
+
+    def close(self) -> None:
+        self.close_seen.append(_current_span_id())
+        super().close()
 
     async def __anext__(self) -> dict[str, Any]:
         self.seen.append(_current_span_id())
         return await super().__anext__()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_id", "span_prefix", "capture_enabled"),
+    [
+        (MODEL_ID, "chat", True),
+        (MODEL_ID, "chat", False),
+        (EMBEDDING_MODEL_ID, "embeddings", False),
+    ],
+)
+async def test_async_invoke_model_aenter_activates_invocation_span(
+    model_id: str,
+    span_prefix: str,
+    capture_enabled: bool,
+    async_bedrock_client,
+    span_exporter,
+    tracer_provider,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Transport entry runs under the invocation span and restores caller."""
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_enabled
+        else "instrument_no_content"
+    )
+    if span_prefix == "embeddings":
+        request_body = '{"inputText":"Embed entry"}'
+        body_content = b'{"embedding":[0.1,0.2,0.3],"inputTextTokenCount":3}'
+    else:
+        request_body = (
+            '{"anthropic_version":"bedrock-2023-05-31",'
+            '"messages":[{"role":"user","content":"Hi"}]}'
+        )
+        body_content = _anthropic_body("Async invoke context")
+
+    observed_enter: list[Any] = []
+    raw_response = _FakeHTTPResponse(body_content)
+
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": _ProbingStreamingBody(
+                raw_response,
+                len(body_content),
+                observed_enter=observed_enter,
+            ),
+        },
+        modelId=model_id,
+        body=request_body,
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=model_id, body=request_body
+        )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+            assert trace.get_current_span() is caller_span
+            async with response["body"] as body:
+                assert body is response["body"]
+                assert trace.get_current_span() is caller_span
+                assert await body.read() == body_content
+                assert trace.get_current_span() is caller_span
+            assert trace.get_current_span() is caller_span
+
+    inv_spans = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert len(inv_spans) == 1
+    inv_span = inv_spans[0]
+    assert inv_span.name == f"{span_prefix} {model_id}"
+    inv_span_id = inv_span.get_span_context().span_id
+    caller_span_id = caller_span.get_span_context().span_id
+    assert inv_span_id != caller_span_id
+    assert observed_enter
+    assert all(
+        span.get_span_context().span_id == inv_span_id
+        for span in observed_enter
+    )
+    if capture_enabled:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES in inv_span.attributes
+    else:
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in inv_span.attributes
+        assert (
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in inv_span.attributes
+        )
+    if span_prefix == "embeddings":
+        assert (
+            inv_span.attributes[
+                GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
+            ]
+            == 3
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_id", "span_prefix", "capture_enabled"),
+    [
+        (MODEL_ID, "chat", True),
+        (MODEL_ID, "chat", False),
+        (EMBEDDING_MODEL_ID, "embeddings", False),
+    ],
+)
+@pytest.mark.parametrize(
+    ("error_cls", "error_msg", "expected_error_type"),
+    [
+        (RuntimeError, "transport entry failed", "RuntimeError"),
+        (
+            asyncio.CancelledError,
+            "entry cancelled",
+            "asyncio.exceptions.CancelledError",
+        ),
+    ],
+)
+async def test_async_invoke_model_aenter_failure_and_cancellation(
+    model_id: str,
+    span_prefix: str,
+    capture_enabled: bool,
+    error_cls: type[BaseException],
+    error_msg: str,
+    expected_error_type: str,
+    async_bedrock_client,
+    span_exporter,
+    tracer_provider,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Entry failure or cancellation re-raises unchanged, restores caller, and fails one span."""
+    import gc
+
+    from opentelemetry.trace import StatusCode
+
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_enabled
+        else "instrument_no_content"
+    )
+    if span_prefix == "embeddings":
+        request_body = '{"inputText":"Embed entry failure"}'
+        body_content = b'{"embedding":[0.1,0.2],"inputTextTokenCount":3}'
+    else:
+        request_body = (
+            '{"anthropic_version":"bedrock-2023-05-31",'
+            '"messages":[{"role":"user","content":"Hi"}]}'
+        )
+        body_content = _anthropic_body("Async invoke entry failure")
+
+    enter_error = error_cls(error_msg)
+    observed_enter: list[Any] = []
+    raw_response = _FakeHTTPResponse(body_content)
+
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": _ProbingStreamingBody(
+                raw_response,
+                len(body_content),
+                observed_enter=observed_enter,
+                enter_error=enter_error,
+            ),
+        },
+        modelId=model_id,
+        body=request_body,
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=model_id, body=request_body
+        )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+            with pytest.raises(error_cls) as exc_info:
+                async with response["body"]:
+                    pytest.fail("__aenter__ should have raised")
+            assert exc_info.value is enter_error
+            assert trace.get_current_span() is caller_span
+            assert (
+                len(
+                    [
+                        s
+                        for s in span_exporter.get_finished_spans()
+                        if s.name != "caller"
+                    ]
+                )
+                == 1
+            )
+
+        del response
+        gc.collect()
+
+    inv_spans = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert len(inv_spans) == 1
+    inv_span = inv_spans[0]
+    assert inv_span.name == f"{span_prefix} {model_id}"
+    assert inv_span.status.status_code == StatusCode.ERROR
+    assert (
+        inv_span.attributes[ErrorAttributes.ERROR_TYPE] == expected_error_type
+    )
+    if not capture_enabled:
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in inv_span.attributes
+        assert (
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in inv_span.attributes
+        )
+    assert observed_enter
+    assert all(
+        span.get_span_context().span_id == inv_span.get_span_context().span_id
+        for span in observed_enter
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_converse_stream_in_task_activates_reads_and_close(
+    async_bedrock_client,
+    instrument_no_content,
+    span_exporter,
+    tracer_provider,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Event-stream reads and cleanup in another task activate chat span and restore task context."""
+    stream = _RecordingAsyncEventStream(CONVERSE_STREAM_EVENTS)
+    with _stub(
+        async_bedrock_client,
+        "converse_stream",
+        {"stream": stream},
+        modelId=NOVA_MODEL_ID,
+        messages=[],
+    ):
+        response = await async_bedrock_client.converse_stream(
+            modelId=NOVA_MODEL_ID, messages=[]
+        )
+
+        tracer = tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("caller") as caller_span:
+
+            async def consume_first_and_exit() -> None:
+                assert trace.get_current_span() is caller_span
+                async with response["stream"] as event_stream:
+                    assert trace.get_current_span() is caller_span
+                    async for _ in event_stream:
+                        assert trace.get_current_span() is caller_span
+                        break
+                assert trace.get_current_span() is caller_span
+
+            await asyncio.create_task(consume_first_and_exit())
+            assert trace.get_current_span() is caller_span
+
+    assert "Failed to detach context" not in caplog.text
+    chat_span = next(
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name == f"chat {NOVA_MODEL_ID}"
+    )
+    assert stream.seen == [chat_span.context.span_id]
+    assert stream.close_seen == [chat_span.context.span_id]
 
 
 @pytest.mark.asyncio
@@ -1472,16 +2041,6 @@ async def test_async_converse_stream_span_is_not_current_between_reads(
     (span,) = span_exporter.get_finished_spans()
     assert seen == [span.context.span_id]
     assert set(stream.seen) == {span.context.span_id}
-
-
-class _RecordingHTTPContent(_FakeHTTPContent):
-    def __init__(self, data: bytes) -> None:
-        super().__init__(data)
-        self.seen: list[int] = []
-
-    async def read(self, n: int = -1) -> bytes:
-        self.seen.append(_current_span_id())
-        return await super().read(n)
 
 
 @pytest.mark.asyncio
