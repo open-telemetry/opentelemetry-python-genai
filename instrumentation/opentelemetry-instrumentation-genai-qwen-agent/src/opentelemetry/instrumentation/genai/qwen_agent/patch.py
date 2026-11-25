@@ -9,9 +9,9 @@
   not wrapped separately — it calls ``run()`` internally, so a single
   ``invoke_agent`` span is produced by this wrapper.
 - ``Agent._call_tool()`` -> ``execute_tool`` spans.
-- ``Agent._call_llm()``, ``Agent._call_tool()``, and ``Memory._run()`` count
-  the logical model calls and executed tool calls made by the run, reported as
-  the ``gen_ai.invoke_agent.inference_calls`` and
+- ``Agent._call_llm()`` and ``Agent._call_tool()`` count the logical model
+  calls and executed tool calls made by the run, reported as the
+  ``gen_ai.invoke_agent.inference_calls`` and
   ``gen_ai.invoke_agent.tool_calls`` histograms when the invocation ends.
 
 LLM calls made by the agent are intentionally not instrumented here: the
@@ -22,10 +22,11 @@ duplicate LLM spans when both are enabled.
 
 from __future__ import annotations
 
-import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
+
+from qwen_agent.memory.memory import Memory
 
 from opentelemetry.context import get_value, set_value
 from opentelemetry.instrumentation.genai.qwen_agent.utils import (
@@ -46,13 +47,6 @@ from opentelemetry.util.genai.utils import (
 if TYPE_CHECKING:
     from qwen_agent.agent import Agent
 
-    class _ObjectProxy:
-        __wrapped__: Any
-
-        def __init__(self, wrapped: object) -> None: ...
-else:
-    from wrapt import ObjectProxy as _ObjectProxy
-
 _AGENT_RUN_CONTEXT_KEY = (
     "opentelemetry.instrumentation.genai.qwen_agent.current_agent_run"
 )
@@ -69,7 +63,6 @@ class _AgentRunContext:
 
     agent: Agent
     invocation: LocalAgentInvocation | None = None
-    in_call_tool: int = 0
 
 
 def _active_run_context(agent: Agent) -> _AgentRunContext | None:
@@ -87,60 +80,6 @@ def _active_invocation(agent: Agent) -> LocalAgentInvocation | None:
     """Return the invocation of the run currently executing for ``agent``."""
     run_context = _active_run_context(agent)
     return run_context.invocation if run_context is not None else None
-
-
-_MEMORY_PROXY_LOCK = threading.Lock()
-
-
-class _MemoryToolProxy(_ObjectProxy):
-    """Counts direct ``retrieval.call()`` invocations inside ``Memory._run()``."""
-
-    _self_memory: Agent
-    _self_active_runs: int
-
-    def __init__(self, tool: object, memory: Agent) -> None:
-        super().__init__(tool)
-        self._self_memory = memory
-        self._self_active_runs = 0
-
-    def call(self, *args: Any, **kwargs: Any) -> Any:
-        run_context = _active_run_context(self._self_memory)
-        if (
-            run_context is not None
-            and run_context.in_call_tool == 0
-            and run_context.invocation is not None
-            and run_context.invocation.tool_calls is not None
-        ):
-            run_context.invocation.tool_calls += 1
-        return self.__wrapped__.call(*args, **kwargs)
-
-
-def _acquire_memory_proxy(
-    memory: Agent, function_map: dict[str, object]
-) -> _MemoryToolProxy | None:
-    with _MEMORY_PROXY_LOCK:
-        retrieval = function_map.get("retrieval")
-        if retrieval is None:
-            return None
-        if isinstance(retrieval, _MemoryToolProxy):
-            retrieval._self_active_runs += 1
-            return retrieval
-        proxy = _MemoryToolProxy(retrieval, memory)
-        proxy._self_active_runs = 1
-        function_map["retrieval"] = proxy
-        return proxy
-
-
-def _release_memory_proxy(
-    function_map: dict[str, object], proxy: _MemoryToolProxy
-) -> None:
-    with _MEMORY_PROXY_LOCK:
-        proxy._self_active_runs -= 1
-        if (
-            proxy._self_active_runs <= 0
-            and function_map.get("retrieval") is proxy
-        ):
-            function_map["retrieval"] = proxy.__wrapped__
 
 
 class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
@@ -186,16 +125,19 @@ def wrap_agent_run(
     # Agent.run() is a generator function; calling it never raises.
     result = wrapped(*args, **kwargs)
     messages: Any = get_argument("messages", wrapped, args, kwargs, default=[])
-    run_context = _AgentRunContext(agent=instance)
-    invocation = create_agent_invocation(
-        handler,
-        instance,
-        messages,
-        context=set_value(_AGENT_RUN_CONTEXT_KEY, run_context),
-    )
-    run_context.invocation = invocation
-    invocation.inference_calls = 0
-    invocation.tool_calls = 0
+    if isinstance(instance, Memory):
+        invocation = create_agent_invocation(handler, instance, messages)
+    else:
+        run_context = _AgentRunContext(agent=instance)
+        invocation = create_agent_invocation(
+            handler,
+            instance,
+            messages,
+            context=set_value(_AGENT_RUN_CONTEXT_KEY, run_context),
+        )
+        run_context.invocation = invocation
+        invocation.inference_calls = 0
+        invocation.tool_calls = 0
     return _AgentRunStreamWrapper(
         result, invocation, handler.should_capture_content()
     )
@@ -213,6 +155,7 @@ def wrap_agent_call_llm(
     The wrapper counts the agent's logical model calls, not the retries the
     model client performs inside ``chat()``.
     """
+    del handler
     invocation = _active_invocation(instance)
     if invocation is not None and invocation.inference_calls is not None:
         invocation.inference_calls += 1
@@ -230,25 +173,17 @@ def wrap_agent_call_tool(
     bound = bind_arguments(wrapped, args, kwargs)
     tool_name = str(bound.get("tool_name") or "")
     tool_args: Any = bound.get("tool_args")
-    raw_function_map = getattr(instance, "function_map", None)
-    function_map = (
-        cast("dict[str, object]", raw_function_map)
-        if isinstance(raw_function_map, dict)
-        else None
-    )
-    has_tool = function_map is not None and tool_name in function_map
-    tool: object = (
-        function_map.get(tool_name) if function_map is not None else None
-    )
+    function_map = instance.function_map
+    has_tool = tool_name in function_map
+    tool = function_map.get(tool_name)
 
-    run_context = _active_run_context(instance)
+    invocation = _active_invocation(instance)
     if (
         has_tool
-        and run_context is not None
-        and run_context.invocation is not None
-        and run_context.invocation.tool_calls is not None
+        and invocation is not None
+        and invocation.tool_calls is not None
     ):
-        run_context.invocation.tool_calls += 1
+        invocation.tool_calls += 1
 
     tool_invocation = handler.tool(
         tool_name,
@@ -257,53 +192,14 @@ def wrap_agent_call_tool(
     )
     messages_arg: Any = kwargs.get("messages") or bound.get("messages")
     tool_invocation.tool_call_id = find_tool_call_id(messages_arg, tool_name)
-    description = getattr(tool, "description", None)
     tool_invocation.tool_description = (
-        description if isinstance(description, str) else None
+        tool.description if tool is not None else None
     )
     if tool_invocation.should_capture_content:
         tool_invocation.arguments = tool_arguments_to_any_value(tool_args)
 
     with tool_invocation:
-        if run_context is not None:
-            run_context.in_call_tool += 1
-        try:
-            result = wrapped(*args, **kwargs)
-        finally:
-            if run_context is not None:
-                run_context.in_call_tool -= 1
+        result = wrapped(*args, **kwargs)
         if tool_invocation.should_capture_content:
             tool_invocation.tool_result = object_to_any_value(result)
     return result
-
-
-def wrap_memory_run(
-    wrapped: Callable[..., Any],
-    instance: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    handler: TelemetryHandler,
-) -> Any:
-    """Wrapper for ``Memory._run()`` counting its direct ``retrieval`` call.
-
-    ``Memory._run()`` invokes ``self.function_map['retrieval'].call(...)``
-    directly rather than going through ``Agent._call_tool()``.
-    """
-    del handler
-    result = wrapped(*args, **kwargs)
-    raw_function_map = getattr(instance, "function_map", None)
-    if not isinstance(raw_function_map, dict):
-        return result
-    function_map = cast("dict[str, object]", raw_function_map)
-    if function_map.get("retrieval") is None:
-        return result
-
-    def _iter_memory_run() -> Iterator[Any]:
-        proxy = _acquire_memory_proxy(instance, function_map)
-        try:
-            yield from result
-        finally:
-            if proxy is not None:
-                _release_memory_proxy(function_map, proxy)
-
-    return _iter_memory_run()

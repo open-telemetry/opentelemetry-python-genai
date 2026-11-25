@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 from qwen_agent.agent import Agent
 from qwen_agent.llm.schema import Message
-from qwen_agent.memory.memory import Memory
 
 from opentelemetry.instrumentation.genai.qwen_agent import (
     QwenAgentInstrumentor,
@@ -65,13 +64,11 @@ def test_uninstrument_restores_wrapped_methods(
     try:
         for (name,) in wrapped_methods:
             assert hasattr(getattr(Agent, name), "__wrapped__")
-        assert hasattr(Memory._run, "__wrapped__")
     finally:
         instrumentor.uninstrument()
 
     for (name,) in wrapped_methods:
         assert not hasattr(getattr(Agent, name), "__wrapped__")
-    assert not hasattr(Memory._run, "__wrapped__")
 
 
 def test_uninstrument_stops_span_creation(

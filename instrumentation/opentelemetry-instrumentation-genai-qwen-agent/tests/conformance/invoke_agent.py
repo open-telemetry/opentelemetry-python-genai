@@ -106,16 +106,14 @@ class InvokeAgentScenario(Scenario):
             if "metric" in entry
         }
         # The outer Assistant takes three model turns (two of them request the
-        # tool) and calls the tool twice. Its Memory sub-agent makes no model
-        # or tool call of its own, so both of its counts are zero.
+        # tool) and calls the tool twice. Memory is not a model-calling agent
+        # execution, so call counts are not reported for it.
         expected = {
             "gen_ai.invoke_agent.inference_calls": {
                 "WeatherAgent": 3,
-                "Memory": 0,
             },
             "gen_ai.invoke_agent.tool_calls": {
                 "WeatherAgent": 2,
-                "Memory": 0,
             },
         }
         for name, per_agent in expected.items():
