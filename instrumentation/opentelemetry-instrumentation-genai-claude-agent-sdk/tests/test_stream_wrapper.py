@@ -10,7 +10,6 @@ runs in-process without the ``claude`` CLI.
 from __future__ import annotations
 
 import inspect
-import json
 from typing import Any
 
 import anyio
@@ -21,6 +20,7 @@ from claude_agent_sdk.types import ClaudeAgentOptions
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.util.genai._conversation_context import (
     with_conversation_id,
 )
@@ -418,7 +418,7 @@ def test_thinking_block_as_reasoning_part(span_exporter, capture) -> None:
     if not capture:
         assert "gen_ai.output.messages" not in span.attributes
         return
-    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    messages = get_content_attribute(span.attributes, "gen_ai.output.messages")
     assert messages[0]["parts"][0] == {
         "content": "Let me read the file first.",
         "type": "reasoning",
@@ -432,7 +432,7 @@ def test_input_prompt_capture(span_exporter, capture) -> None:
     if not capture:
         assert "gen_ai.input.messages" not in span.attributes
         return
-    messages = json.loads(span.attributes["gen_ai.input.messages"])
+    messages = get_content_attribute(span.attributes, "gen_ai.input.messages")
     assert messages[0]["role"] == "user"
     assert messages[0]["parts"] == [
         {"content": "Read /tmp/a.txt", "type": "text"}
@@ -446,7 +446,7 @@ def test_output_messages_capture(span_exporter, capture) -> None:
     if not capture:
         assert "gen_ai.output.messages" not in span.attributes
         return
-    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    messages = get_content_attribute(span.attributes, "gen_ai.output.messages")
     # One message per SDK message keeps the turn boundaries the model saw.
     assert [message["role"] for message in messages] == [
         "assistant",
