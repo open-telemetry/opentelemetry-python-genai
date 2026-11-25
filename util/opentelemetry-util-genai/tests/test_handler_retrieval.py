@@ -305,6 +305,46 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
             OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY",
         },
     )
+    def test_typed_documents_omit_non_finite_scores(self) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        for failed in (False, True):
+            for score in (float("nan"), float("inf"), float("-inf"), 0.0):
+                with self.subTest(failed=failed, score=score):
+                    self.span_exporter.clear()
+                    invocation = handler.retrieval()
+                    invocation.documents = [
+                        RetrievalDocument(id="doc", score=score),
+                        RetrievalDocument(score=score),
+                    ]
+                    if failed:
+                        invocation.fail(ValueError("retrieval failed"))
+                    else:
+                        invocation.stop()
+
+                    span = self._get_finished_spans()[0]
+                    documents = span.attributes[
+                        GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
+                    ]
+                    expected_score = {"score": 0.0} if score == 0.0 else {}
+                    expected = (
+                        {"id": "doc", **expected_score},
+                        expected_score,
+                    )
+                    self.assertEqual(documents, expected)
+                    if score == 0.0:
+                        for document in documents:
+                            self.assertIsInstance(document["score"], float)
+                    self.assertEqual(
+                        span.status.status_code,
+                        StatusCode.ERROR if failed else StatusCode.UNSET,
+                    )
+
+    @patch.dict(
+        os.environ,
+        {
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY",
+        },
+    )
     def test_documents_preserve_legacy_mappings_alongside_models(self) -> None:
         legacy = {
             "id": "legacy",

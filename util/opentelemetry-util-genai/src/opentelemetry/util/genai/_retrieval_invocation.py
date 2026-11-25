@@ -261,7 +261,19 @@ class RetrievalInvocation(GenAIInvocation):
             documents = []
             for document in self._data.retrieval_documents:
                 if isinstance(document, RetrievalDocument):
-                    documents.append(document)
+                    if (
+                        document.score is not None
+                        and object_to_any_value(document.score) is None
+                    ):
+                        documents.append(
+                            {
+                                key: document[key]
+                                for key in document
+                                if key != "score"
+                            }
+                        )
+                    else:
+                        documents.append(document)
                 else:
                     converted = object_to_any_value(document)
                     if converted is not None:
