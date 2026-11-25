@@ -300,6 +300,7 @@ def create_agent_invocation(
         if llm_instance is not None
         else None,
         agent_name=agent_name,
+        _attach_to_context=False,
     )
     invocation.agent_description = (
         getattr(agent_instance, "description", None) or None

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import ValuesView
 from typing import Any, cast
@@ -38,6 +37,7 @@ from llama_index.core.tools import (
 from llama_index.core.workflow.errors import WorkflowRuntimeError
 from openai import RateLimitError
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.llama_index._handler import (
     LlamaIndexSpanHandler,
     _agent_input,
@@ -296,19 +296,18 @@ async def test_agent_run_span(
         "Answers math questions."
     )
     assert isinstance(attrs[GenAIAttributes.GEN_AI_REQUEST_MODEL], str)
-    input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
-    assert input_messages == [
+    input_messages = attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    assert input_messages == (
         {
-            "parts": [{"content": "What is two plus two?", "type": "text"}],
+            "parts": ({"content": "What is two plus two?", "type": "text"},),
             "role": "user",
-            "name": None,
-        }
-    ]
-    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+        },
+    )
+    output_messages = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["role"] == "assistant"
-    assert json.loads(attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]) == [
-        {"content": "Be concise.", "type": "text"}
-    ]
+    assert attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"content": "Be concise.", "type": "text"},
+    )
     assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in attrs
 
 
@@ -367,15 +366,14 @@ async def test_agent_run_captures_chat_message_input(
     )
 
     span = _spans_named(span_exporter, "invoke_agent chat-message-agent")[0]
-    assert json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    ) == [
+    assert span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
         {
-            "parts": [{"content": "Hello from a ChatMessage", "type": "text"}],
+            "parts": (
+                {"content": "Hello from a ChatMessage", "type": "text"},
+            ),
             "role": "user",
-            "name": None,
-        }
-    ]
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -407,9 +405,7 @@ async def test_agent_span_skips_unnamed_tool_definition(
     span = _spans_named(span_exporter, "invoke_agent agent-with-unnamed-tool")[
         0
     ]
-    definitions = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
-    )
+    definitions = span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
     assert len(definitions) == 1
     assert definitions[0]["name"] == "echo"
 
@@ -539,18 +535,17 @@ async def test_react_agent_run_span(
         "Answers math questions with ReAct reasoning."
     )
     assert isinstance(attrs[GenAIAttributes.GEN_AI_REQUEST_MODEL], str)
-    assert json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
+    assert attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
         {
-            "parts": [{"content": "What is two plus two?", "type": "text"}],
+            "parts": ({"content": "What is two plus two?", "type": "text"},),
             "role": "user",
-            "name": None,
-        }
-    ]
-    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+        },
+    )
+    output_messages = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["role"] == "assistant"
-    assert output_messages[0]["parts"] == [
-        {"content": "Four.", "type": "text"}
-    ]
+    assert output_messages[0]["parts"] == (
+        {"content": "Four.", "type": "text"},
+    )
 
 
 @pytest.mark.asyncio
@@ -658,7 +653,10 @@ async def test_react_agent_malformed_response_reaches_max_iterations(
 
     with vcr.use_cassette("react_malformed.yaml"):
         with pytest.raises(WorkflowRuntimeError, match="Max iterations of 1"):
-            await agent.run(user_msg="What is two plus two?", max_iterations=1)
+            await agent.run(
+                user_msg="Reply with only the single word 'hello' and nothing else (do not include Thought: or Answer:).",
+                max_iterations=1,
+            )
 
     span = _spans_named(span_exporter, "invoke_agent malformed-react-agent")[0]
     assert span.status.status_code == StatusCode.ERROR
@@ -1028,12 +1026,12 @@ async def test_agent_workflow_captures_early_stopping_response(
     agent_span = _spans_named(
         span_exporter, "invoke_agent early-stopping-agent"
     )[0]
-    agent_output = json.loads(
-        agent_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
-    assert agent_output[0]["parts"] == [
-        {"type": "text", "content": "generated answer"}
+    agent_output = agent_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     ]
+    assert agent_output[0]["parts"] == (
+        {"type": "text", "content": "generated answer"},
+    )
 
 
 @pytest.mark.asyncio
@@ -1083,13 +1081,13 @@ async def test_agent_workflow_captures_first_arriving_return_direct_result(
     agent_span = _spans_named(
         span_exporter, "invoke_agent arrival-order-agent"
     )[0]
-    agent_output = json.loads(
-        agent_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
-    # Which return_direct result LlamaIndex picks depends on task scheduling.
-    assert agent_output[0]["parts"] == [
-        {"type": "text", "content": result.response.content}
+    agent_output = agent_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     ]
+    # Which return_direct result LlamaIndex picks depends on task scheduling.
+    assert agent_output[0]["parts"] == (
+        {"type": "text", "content": result.response.content},
+    )
 
 
 @pytest.mark.asyncio
@@ -1231,31 +1229,27 @@ async def test_agent_workflow_captures_content(
     agent_span = _spans_named(span_exporter, "invoke_agent content-agent")[0]
     workflow_attrs = dict(workflow_span.attributes or {})
     agent_attrs = dict(agent_span.attributes or {})
-    assert json.loads(
-        workflow_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    ) == [
+    assert workflow_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
         {
             "role": "user",
-            "parts": [{"type": "text", "content": "Run the workflow"}],
-            "name": None,
-        }
-    ]
-    assert json.loads(workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[
-        0
-    ]["parts"] == [{"type": "text", "content": "workflow complete"}]
-    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
-        {
-            "role": "user",
-            "parts": [{"type": "text", "content": "Run the workflow"}],
-            "name": None,
-        }
-    ]
-    assert json.loads(
-        agent_attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
-    ) == [{"type": "text", "content": "Answer briefly."}]
-    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[0][
+            "parts": ({"type": "text", "content": "Run the workflow"},),
+        },
+    )
+    assert workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES][0][
         "parts"
-    ] == [{"type": "text", "content": "workflow complete"}]
+    ] == ({"type": "text", "content": "workflow complete"},)
+    assert agent_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Run the workflow"},),
+        },
+    )
+    assert agent_attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "Answer briefly."},
+    )
+    assert agent_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES][0]["parts"] == (
+        {"type": "text", "content": "workflow complete"},
+    )
 
 
 @pytest.mark.asyncio
@@ -1290,6 +1284,80 @@ async def test_agent_workflow_error_marks_workflow_and_agent_spans(
     for span in (workflow_span, agent_span):
         assert span.status.status_code == StatusCode.ERROR
         assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+
+
+def test_nested_tool_spans_keep_parent_and_do_not_leak(
+    span_exporter, tracer_provider, instrument_llama_index
+) -> None:
+    inner = FunctionTool.from_defaults(lambda value: value, name="inner")
+    outer = FunctionTool.from_defaults(
+        lambda value: inner(value=value).raw_output, name="outer"
+    )
+
+    with tracer_provider.get_tracer("test").start_as_current_span(
+        "caller"
+    ) as caller:
+        assert outer(value=1).raw_output == 1
+        assert trace.get_current_span() is caller
+
+    caller_span = _spans_named(span_exporter, "caller")[0]
+    outer_span = _spans_named(span_exporter, "execute_tool outer")[0]
+    inner_span = _spans_named(span_exporter, "execute_tool inner")[0]
+    assert outer_span.parent is not None
+    assert outer_span.parent.span_id == caller_span.context.span_id
+    assert inner_span.parent is not None
+    assert inner_span.parent.span_id == outer_span.context.span_id
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_spans_are_current_only_inside_their_work(
+    span_exporter, instrument_llama_index
+) -> None:
+    current: dict[str, list[int]] = {"llm": [], "tool": []}
+
+    # Older llama-index versions run sync tools in an executor that drops
+    # contextvars.
+    async def echo(value: str) -> str:
+        current["tool"].append(
+            trace.get_current_span().get_span_context().span_id
+        )
+        return value
+
+    generate = _tool_then_answer("echo", "hello")
+
+    def response_generator(messages, **kwargs):
+        current["llm"].append(
+            trace.get_current_span().get_span_context().span_id
+        )
+        return generate(messages, **kwargs)
+
+    worker = FunctionAgent(
+        name="worker",
+        description="Answers using a tool.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True, response_generator=response_generator
+        ),
+        tools=[FunctionTool.from_defaults(async_fn=echo, name="echo")],
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[worker], root_agent="worker")
+
+    handler = workflow.run(user_msg="Start")
+    assert not trace.get_current_span().get_span_context().is_valid
+    await handler
+    assert not trace.get_current_span().get_span_context().is_valid
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    agent_span = _spans_named(span_exporter, "invoke_agent worker")[0]
+    tool_span = _spans_named(span_exporter, "execute_tool echo")[0]
+    assert agent_span.parent is not None
+    assert agent_span.parent.span_id == workflow_span.context.span_id
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == agent_span.context.span_id
+    assert current["llm"] == [agent_span.context.span_id] * 2
+    assert current["tool"] == [tool_span.context.span_id]
 
 
 @pytest.mark.asyncio
@@ -1386,10 +1454,8 @@ def test_sync_tool_span(
     assert attrs[GenAIAttributes.GEN_AI_TOOL_NAME] == "multiply"
     assert attrs[GenAIAttributes.GEN_AI_TOOL_TYPE] == "function"
     assert isinstance(attrs[GenAIAttributes.GEN_AI_TOOL_DESCRIPTION], str)
-    assert json.loads(attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS]) == {
-        "value": 4
-    }
-    assert attrs[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT] == "8"
+    assert attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS] == {"value": 4}
+    assert attrs[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT] == 8
 
 
 @pytest.mark.asyncio
@@ -1623,10 +1689,9 @@ async def test_agent_workflow_does_not_log_context_detach_failures(
 ) -> None:
     """Member-agent spans outlive the task that opened them.
 
-    ``TelemetryHandler`` attaches the span to the context that was current when
-    the invocation started, and that attachment can only be undone from the same
-    context. Finishing from a later step's task would make
-    ``opentelemetry.context.detach`` raise, which it logs with a traceback.
+    Finishing one from a later step's task must not try to detach a context
+    attached in another task, which ``opentelemetry.context.detach`` logs with a
+    traceback.
     """
 
     class _DetachFailures(logging.Handler):

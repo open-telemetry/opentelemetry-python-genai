@@ -16,16 +16,18 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
     _resolve_suppressed_content_and_hook,
 )
-from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.completion_hook import (
+    _NoOpCompletionHook,
+)
 from opentelemetry.util.genai.types import RetrievalDocument
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    gen_ai_json_dumps,
+    object_to_any_value,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -36,7 +38,7 @@ _GEN_AI_RETRIEVAL_TOP_K: Final = "gen_ai.retrieval.top_k"
 
 
 @dataclass
-class RetrievalData(_ContextData):
+class RetrievalData(ContextData):
     """Typed data passed from inner retrieval invocations to the outer invocation."""
 
     data_source_id: str | None = None
@@ -78,7 +80,6 @@ class RetrievalInvocation(GenAIInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         *,
         data_source_id: str | None = None,
         provider: str | None = None,
@@ -114,7 +115,7 @@ class RetrievalInvocation(GenAIInvocation):
             tracer,
             instruments,
             logger,
-            completion_hook,
+            _NoOpCompletionHook(),
             operation_name=_operation_name,
             span_name=f"{_operation_name} {data_source_id}"
             if data_source_id
@@ -192,7 +193,7 @@ class RetrievalInvocation(GenAIInvocation):
     ) -> None:
         self._data.retrieval_documents = value
 
-    def enrich_from_context(self, data: RetrievalData) -> None:
+    def _enrich_from_context(self, data: RetrievalData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
@@ -201,7 +202,7 @@ class RetrievalInvocation(GenAIInvocation):
         retrieval_query_text = self._data.retrieval_query_text
         retrieval_documents = self._data.retrieval_documents
 
-        self._data.merge(data, overwrite=False)
+        self._merge_context_data(self._data, data)
 
         if data.capture_content:
             self._data.retrieval_query_text = (
@@ -233,36 +234,7 @@ class RetrievalInvocation(GenAIInvocation):
         attrs.update(self.metric_attributes)
         return attrs
 
-    def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
-        if (
-            not self.span.is_recording()
-            or not self._should_capture_content_on_span
-        ):
-            return {}
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (
-                GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT,
-                self._data.retrieval_query_text,
-            ),
-            (
-                GenAI.GEN_AI_RETRIEVAL_DOCUMENTS,
-                gen_ai_json_dumps(self._data.retrieval_documents)
-                if self._data.retrieval_documents is not None
-                else None,
-            ),
-        )
-        return {k: v for k, v in optional_attrs if v is not None}
-
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-        ctx_data = get_value(
-            CLIENT_RETRIEVAL_CONTEXT_KEY, context=self._span_context
-        )
-        if isinstance(ctx_data, RetrievalData):
-            self.enrich_from_context(ctx_data)
-        self._data.attributes = self.attributes
-        self._data.metric_attributes = self.metric_attributes
+    def _get_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
             (GenAI.GEN_AI_DATA_SOURCE_ID, self._data.data_source_id),
             (GenAI.GEN_AI_PROVIDER_NAME, self._data.provider_name),
@@ -276,9 +248,39 @@ class RetrievalInvocation(GenAIInvocation):
                 else None,
             ),
         )
-        attributes: dict[str, AttributeValue] = {
-            k: v for k, v in optional_attrs if v is not None
-        }
+        return {k: v for k, v in optional_attrs if v is not None}
+
+    def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
+        if (
+            not self.span.is_recording()
+            or not self._should_capture_content_on_span
+        ):
+            return {}
+        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
+            (
+                GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT,
+                self._data.retrieval_query_text,
+            ),
+            (
+                GenAI.GEN_AI_RETRIEVAL_DOCUMENTS,
+                object_to_any_value(list(self._data.retrieval_documents))
+                if self._data.retrieval_documents is not None
+                else None,
+            ),
+        )
+        return {k: v for k, v in optional_attrs if v is not None}
+
+    def _apply_finish(self, error: Error | None = None) -> None:
+        if error is not None:
+            self._apply_error_attributes(error)
+        ctx_data = get_value(
+            CLIENT_RETRIEVAL_CONTEXT_KEY, context=self._span_context
+        )
+        if isinstance(ctx_data, RetrievalData):
+            self._enrich_from_context(ctx_data)
+        self._data.attributes = self.attributes
+        self._data.metric_attributes = self.metric_attributes
+        attributes = self._get_attributes()
         attributes.update(self._get_content_attributes_for_span())
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
@@ -297,7 +299,6 @@ class SuppressedRetrievalInvocation(RetrievalInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         *,
         data_source_id: str | None = None,
         provider: str | None = None,
@@ -313,15 +314,14 @@ class SuppressedRetrievalInvocation(RetrievalInvocation):
             self._capture_content_to_context,
             _upload_completion,
             effective_content_mode,
-            effective_completion_hook,
+            _,
         ) = _resolve_suppressed_content_and_hook(
-            ctx_data, content_capturing_mode, completion_hook
+            ctx_data, content_capturing_mode, None
         )
         super().__init__(
             tracer,
             instruments,
             logger,
-            effective_completion_hook,
             data_source_id=data_source_id,
             provider=provider,
             request_model=request_model,

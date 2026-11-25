@@ -7,3 +7,5 @@ numpy
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-dspy
+
+-r requirements.e2e.txt

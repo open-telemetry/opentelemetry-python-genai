@@ -22,6 +22,8 @@ from typing import (
 )
 
 from opentelemetry.semconv.attributes.error_attributes import ErrorTypeValues
+from opentelemetry.util.genai._inference_invocation import InferenceInvocation
+from opentelemetry.util.genai._invocation import GenAIInvocation
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
 from opentelemetry.util.genai.utils import object_to_any_value
 
@@ -60,12 +62,11 @@ class _StreamInvocation(Protocol):
     def activate(self) -> AbstractContextManager[None]: ...
 
 
-class _StreamTimingInvocation(Protocol):
-    def _on_stream_chunk(self, chunk_at: float) -> None: ...
-
-
-def _records_stream_telemetry(invocation: object) -> bool:
-    return bool(getattr(invocation, "_records_stream_telemetry", False))
+def _mark_streamed(invocation: _StreamInvocation | None) -> None:
+    # Chunk timing is defined for inference only; other invocation types can
+    # be passed to the wrappers for context scoping without emitting it.
+    if isinstance(invocation, InferenceInvocation):
+        invocation._request_stream = True
 
 
 class _StreamingInvocation(_StreamInvocation, Protocol):
@@ -103,24 +104,27 @@ class AbandonedStreamError(Exception):
         super().__init__(message)
 
 
+def _activation(
+    invocation: _StreamInvocation | None,
+) -> AbstractContextManager[None]:
+    """Make an unattached invocation current; leave the context alone otherwise.
+
+    Applies when the invocation was created with ``_attach_to_context=False``
+    or was suspended. Invocations that are still attached, or that reuse the
+    current span, leave the context alone.
+    """
+    if (
+        isinstance(invocation, GenAIInvocation)
+        and invocation._needs_activation
+    ):
+        return invocation.activate()
+    return nullcontext()
+
+
 class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     """Finalize-once bookkeeping and telemetry hooks shared by both wrappers."""
 
     _self_finalized: bool
-
-    def _execution_context(self) -> AbstractContextManager[None]:
-        """Scope stream reads and cleanup, restoring context before returning a chunk.
-
-        By default a suspended invocation is made current again for each read:
-        an instrumentation that hands the stream back to the caller calls
-        ``invocation.suspend()`` and gets the span restored around tool or
-        provider code without overriding this hook. Invocations that are still
-        attached, or that never attached, leave the context alone.
-        """
-        invocation = getattr(self, "_self_invocation", None)
-        if invocation is None or not getattr(invocation, "_suspended", False):
-            return nullcontext()
-        return invocation.activate()
 
     def _finalize_success(self) -> None:
         if self._self_finalized:
@@ -147,8 +151,7 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
         if getattr(self, "_self_finalized", True):
             return
         try:
-            with self._execution_context():
-                self._finalize_failure(AbandonedStreamError())
+            self._finalize_failure(AbandonedStreamError())
         except BaseException:  # pylint: disable=broad-exception-caught
             _logger.debug(
                 "GenAI stream finalization error for abandoned stream",
@@ -181,8 +184,8 @@ class SyncStreamWrapper(
     ``super().__init__(stream, invocation)`` and implement the three telemetry
     hooks: ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
     successful finalization, and ``_on_stream_error`` for failure finalization.
-    ``_execution_context`` scopes each read and cleanup; by default it makes a
-    suspended invocation current again and can be overridden.
+    ``_execution_context`` scopes each read and cleanup; by default it makes an
+    unattached invocation current and can be overridden.
 
     Users should consume subclasses as normal streams, for example with
     ``for chunk in wrapper`` or ``with wrapper``. The hook methods are called
@@ -197,13 +200,16 @@ class SyncStreamWrapper(
         super().__init__(stream)
         self._self_finalized = False
         self._self_invocation = invocation
-        if _records_stream_telemetry(invocation):
-            setattr(invocation, "_request_stream", True)
+        _mark_streamed(invocation)
         self._bind_stream(stream)
 
     # The SDK stream, held loosely typed: subclasses re-expose it through a
     # ``stream`` property carrying the SDK's own type.
     _self_stream: Any
+
+    def _execution_context(self) -> AbstractContextManager[None]:
+        """Scope stream reads and cleanup, restoring context before returning a chunk."""
+        return _activation(self._self_invocation)
 
     def _bind_stream(self, stream: _SyncStream[ChunkT]) -> None:
         self._self_stream = stream
@@ -234,6 +240,10 @@ class SyncStreamWrapper(
                 try:
                     self._self_stream.close()
                 except Exception:  # pylint: disable=broad-exception-caught
+                    # A stream that isn't a context manager (e.g. a generator)
+                    # would never be closed here without instrumentation.
+                    if hasattr(self._self_stream, "__exit__"):
+                        raise
                     _logger.debug(
                         "GenAI stream close error after user exception",
                         exc_info=True,
@@ -285,17 +295,13 @@ class SyncStreamWrapper(
                 self._finalize_failure(error)
                 raise
             invocation = self._self_invocation
-            chunk_at = (
-                timeit.default_timer()
-                if _records_stream_telemetry(invocation)
-                else None
-            )
+            if not isinstance(invocation, InferenceInvocation):
+                self._process_chunk(chunk)
+                return chunk
+            chunk_at = timeit.default_timer()
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if chunk_at is not None:
-                cast(_StreamTimingInvocation, invocation)._on_stream_chunk(
-                    chunk_at
-                )
+            invocation._on_stream_chunk(chunk_at)
             return chunk
 
 
@@ -312,8 +318,8 @@ class AsyncStreamWrapper(
     ``super().__init__(stream, invocation)`` and implement the three telemetry
     hooks: ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
     successful finalization, and ``_on_stream_error`` for failure finalization.
-    ``_execution_context`` scopes each read and cleanup; by default it makes a
-    suspended invocation current again and can be overridden.
+    ``_execution_context`` scopes each read and cleanup; by default it makes an
+    unattached invocation current and can be overridden.
 
     Users should consume subclasses as normal async streams, for example with
     ``async for chunk in wrapper`` or ``async with wrapper``. The hook methods
@@ -329,12 +335,15 @@ class AsyncStreamWrapper(
         super().__init__(stream)
         self._self_finalized = False
         self._self_invocation = invocation
-        if _records_stream_telemetry(invocation):
-            setattr(invocation, "_request_stream", True)
+        _mark_streamed(invocation)
         self._bind_stream(stream)
 
     # See ``SyncStreamWrapper._self_stream``.
     _self_stream: Any
+
+    def _execution_context(self) -> AbstractContextManager[None]:
+        """See ``SyncStreamWrapper._execution_context``."""
+        return _activation(self._self_invocation)
 
     def _bind_stream(self, stream: _AsyncStream[ChunkT]) -> None:
         self._self_stream = stream
@@ -363,6 +372,9 @@ class AsyncStreamWrapper(
                 try:
                     await self._close_stream()
                 except Exception:  # pylint: disable=broad-exception-caught
+                    # See SyncStreamWrapper.__exit__.
+                    if hasattr(self._self_stream, "__aexit__"):
+                        raise
                     _logger.debug(
                         "GenAI stream close error after user exception",
                         exc_info=True,
@@ -503,17 +515,13 @@ class AsyncStreamWrapper(
                 raise
 
             invocation = self._self_invocation
-            chunk_at = (
-                timeit.default_timer()
-                if _records_stream_telemetry(invocation)
-                else None
-            )
+            if not isinstance(invocation, InferenceInvocation):
+                self._process_chunk(chunk)
+                return chunk
+            chunk_at = timeit.default_timer()
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if chunk_at is not None:
-                cast(_StreamTimingInvocation, invocation)._on_stream_chunk(
-                    chunk_at
-                )
+            invocation._on_stream_chunk(chunk_at)
             return chunk
 
 
@@ -524,9 +532,7 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
     drained. This wrapper restores the caller's context before returning, and
     makes the tool span current only while tool code runs -- producing a chunk,
     closing, or finalizing -- so caller work between chunks is not parented
-    under the tool. This applies to invocations created attached (the default);
-    a tool invocation created with ``_attach_to_context=False`` is left alone
-    and its span is never made current by the wrapper. Per-chunk content is accumulated and set on
+    under the tool. Per-chunk content is accumulated and set on
     ``invocation.tool_result`` upon completion.
     """
 
@@ -537,15 +543,14 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
     ) -> None:
         super().__init__(stream, invocation)
         self._self_tool_invocation = invocation
-        invocation.suspend()
+        invocation._detach()
         self._self_chunks: list[Any] = []
 
     def __del__(self) -> None:
         try:
-            with self._execution_context():
-                self._finalize_failure(
-                    GeneratorExit("Stream garbage collected before completion")
-                )
+            self._finalize_failure(
+                GeneratorExit("Stream garbage collected before completion")
+            )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
@@ -583,15 +588,14 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
     ) -> None:
         super().__init__(stream, invocation)
         self._self_tool_invocation = invocation
-        invocation.suspend()
+        invocation._detach()
         self._self_chunks: list[Any] = []
 
     def __del__(self) -> None:
         try:
-            with self._execution_context():
-                self._finalize_failure(
-                    GeneratorExit("Stream garbage collected before completion")
-                )
+            self._finalize_failure(
+                GeneratorExit("Stream garbage collected before completion")
+            )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
@@ -758,20 +762,18 @@ class SyncStreamManagerWrapper(
                 )
             except BaseException as error:
                 if stream_wrapper is not None:
-                    stream_wrapper.__exit__(
-                        type(error), error, error.__traceback__
-                    )
+                    stream_wrapper._finalize_failure(error)
                 elif self._self_invocation is not None:
                     self._self_invocation.fail(error)
                 raise
             if stream_wrapper is not None:
-                if suppressed:
-                    # The manager swallowed the caller's exception, so the
-                    # stream ended successfully as far as telemetry is
-                    # concerned.
-                    stream_wrapper.__exit__(None, None, None)
+                # The manager already closed the stream. If it swallowed the
+                # caller's exception, the stream ended successfully as far as
+                # telemetry is concerned.
+                if exc_val is not None and not suppressed:
+                    stream_wrapper._finalize_failure(exc_val)
                 else:
-                    stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
+                    stream_wrapper._finalize_success()
             return suppressed
 
 
@@ -834,17 +836,15 @@ class AsyncStreamManagerWrapper(
                 )
             except BaseException as error:
                 if stream_wrapper is not None:
-                    await stream_wrapper.__aexit__(
-                        type(error), error, error.__traceback__
-                    )
+                    stream_wrapper._finalize_failure(error)
                 elif self._self_invocation is not None:
                     self._self_invocation.fail(error)
                 raise
             if stream_wrapper is not None:
-                if suppressed:
-                    await stream_wrapper.__aexit__(None, None, None)
+                if exc_val is not None and not suppressed:
+                    stream_wrapper._finalize_failure(exc_val)
                 else:
-                    await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
+                    stream_wrapper._finalize_success()
             return suppressed
 
 

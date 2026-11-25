@@ -6,15 +6,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 import ollama
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.trace import StatusCode
 
 from .conftest import CHAT_MODEL, HOST
@@ -36,7 +37,7 @@ async def test_async_chat_records_a_chat_span(
     assert attrs[GenAI.GEN_AI_OPERATION_NAME] == "chat"
     assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
     assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == response.eval_count
-    (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    (output,) = get_content_attribute(attrs, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert output["parts"] == [
         {"type": "text", "content": response.message.content}
     ]
@@ -58,7 +59,7 @@ async def test_async_chat_stream_records_the_drained_response(
     attrs = span.attributes
     assert attrs[GenAI.GEN_AI_REQUEST_STREAM] is True
     assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == chunks[-1].eval_count
-    (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    (output,) = get_content_attribute(attrs, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert output["parts"] == [
         {
             "type": "text",
@@ -110,6 +111,29 @@ async def test_async_chat_error_is_recorded_and_reraised(
         span.attributes[error_attributes.ERROR_TYPE]
         == "ollama._types.ResponseError"
     )
+
+
+@pytest.mark.asyncio
+async def test_async_chat_closed_mid_request_is_recorded(
+    instrument_no_content, span_exporter
+):
+    class _Suspend:
+        def __await__(self):
+            yield
+
+    async def _suspend(_request):
+        await _Suspend()
+
+    coroutine = ollama.AsyncClient(
+        host=HOST, event_hooks={"request": [_suspend]}
+    ).chat(model=CHAT_MODEL, messages=MESSAGES)
+    coroutine.send(None)
+    coroutine.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "GeneratorExit"
+    assert not trace.get_current_span().get_span_context().is_valid
 
 
 @pytest.mark.asyncio
@@ -171,3 +195,47 @@ async def test_async_chat_stream_caller_error_in_async_with_is_recorded(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[error_attributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_async_chat_stream_span_is_not_current_between_reads(
+    instrument_no_content, span_exporter, vcr
+):
+    seen: list[int] = []
+
+    async def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    with vcr.use_cassette(
+        "test_async_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = await ollama.AsyncClient(
+            host=HOST, event_hooks={"request": [hook]}
+        ).chat(model=CHAT_MODEL, messages=MESSAGES, stream=True)
+        assert not trace.get_current_span().get_span_context().is_valid
+        await asyncio.create_task(anext(stream))
+        assert not trace.get_current_span().get_span_context().is_valid
+        async for _ in stream:
+            assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+@pytest.mark.asyncio
+async def test_async_chat_span_is_current_only_during_the_request(
+    instrument_no_content, span_exporter, vcr
+):
+    seen: list[int] = []
+
+    async def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    with vcr.use_cassette("test_async_chat_records_a_chat_span.yaml"):
+        await ollama.AsyncClient(
+            host=HOST, event_hooks={"request": [hook]}
+        ).chat(model=CHAT_MODEL, messages=MESSAGES)
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]

@@ -13,11 +13,16 @@ import pytest
 from agno.agent import Agent
 from agno.models.response import ModelResponse
 from agno.team import Team
+from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
 from opentelemetry.semconv._incubating.attributes import (
+    error_attributes as ErrorAttributes,
+)
+from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.trace import INVALID_SPAN, get_current_span
 from opentelemetry.trace.status import StatusCode
 
 
@@ -76,7 +81,7 @@ def test_agent_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "chunk 1 chunk 2" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "chunk 1 chunk 2"
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
         == "mock-model"
@@ -237,7 +242,10 @@ def test_agent_arun_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async chunk 1 async chunk 2" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"]
+        == "async chunk 1 async chunk 2"
+    )
 
 
 def test_agent_arun_stream_content_capture_disabled(
@@ -380,7 +388,10 @@ def test_team_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "team chunk 1 team chunk 2" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"]
+        == "team chunk 1 team chunk 2"
+    )
 
 
 def test_team_arun_stream_spans(
@@ -430,7 +441,10 @@ def test_team_arun_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async team chunk 1 async team chunk 2" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"]
+        == "async team chunk 1 async team chunk 2"
+    )
 
 
 def test_workflow_run_stream_spans(
@@ -469,7 +483,7 @@ def test_workflow_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "step1 stream output" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "step1 stream output"
 
 
 def test_workflow_run_stream_caller_error(
@@ -572,7 +586,7 @@ def test_workflow_arun_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async step1 output" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "async step1 output"
 
 
 def test_workflow_arun_stream_caller_error(
@@ -688,8 +702,7 @@ def test_agent_run_stream_structured_pydantic_output(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    parsed_messages = json.loads(output_messages)
-    content_str = parsed_messages[0]["parts"][0]["content"]
+    content_str = output_messages[0]["parts"][0]["content"]
     assert json.loads(content_str) == {
         "title": "Inception",
         "year": 2010,
@@ -720,9 +733,13 @@ def test_agent_stream_tool_completed_event_preserves_final_content(
     output_messages = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages is not None
-    assert "final answer" in output_messages
-    assert "tool output" not in output_messages
+    assert output_messages == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "final answer"},),
+            "finish_reason": "stop",
+        },
+    )
 
 
 def test_agent_stream_no_llm_client_metrics(
@@ -772,8 +789,13 @@ def test_workflow_stream_step_completed_event_preserves_final_content(
     output_messages = span.attributes.get(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
-    assert output_messages is not None
-    assert "final workflow output" in output_messages
+    assert output_messages == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "final workflow output"},),
+            "finish_reason": "stop",
+        },
+    )
 
 
 def test_agent_continue_run_stream_spans(
@@ -822,7 +844,7 @@ def test_agent_continue_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "continued stream" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "continued stream"
 
 
 def test_agent_acontinue_run_stream_spans(
@@ -874,7 +896,9 @@ def test_agent_acontinue_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async continued stream" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"] == "async continued stream"
+    )
 
 
 def test_team_continue_run_stream_spans(
@@ -925,7 +949,7 @@ def test_team_continue_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "team cont stream" in output_messages
+    assert output_messages[0]["parts"][0]["content"] == "team cont stream"
 
 
 def test_team_acontinue_run_stream_spans(
@@ -979,7 +1003,9 @@ def test_team_acontinue_run_stream_spans(
         GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert "async team cont stream" in output_messages
+    assert (
+        output_messages[0]["parts"][0]["content"] == "async team cont stream"
+    )
 
 
 def test_workflow_continue_run_stream_spans(
@@ -1162,3 +1188,120 @@ def test_workflow_stream_empty_session_id_not_set() -> None:
     FakeChunk.session_id = "wf-sess-456"
     mixin._process_chunk(FakeChunk())
     assert mixin._self_workflow_invocation.conversation_id == "wf-sess-456"
+
+
+def _tool_call() -> FunctionCall:
+    def sample_tool(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    return FunctionCall(
+        function=Function.from_callable(sample_tool), arguments={"x": 1}
+    )
+
+
+def _assert_scoped(span_exporter, seen: list[int], parent_name: str) -> None:
+    spans = span_exporter.get_finished_spans()
+    (parent,) = [s for s in spans if s.name == parent_name]
+    tools = [s for s in spans if s.name == "execute_tool sample_tool"]
+    assert len(tools) == 2
+    assert seen == [parent.context.span_id] * 2
+    for tool in tools:
+        assert tool.parent.span_id == parent.context.span_id
+
+
+def test_agent_run_stream_is_current_only_while_read(
+    instrument_agno, span_exporter
+) -> None:
+    """Tool spans nest under invoke_agent; caller code between chunks doesn't."""
+    agent = Agent(name="scoped-agent", model=MockModel(id="mock-model"))
+    seen: list[int] = []
+
+    def fake_stream(*args, **kwargs):
+        for text in ("chunk 1", "chunk 2"):
+            seen.append(get_current_span().get_span_context().span_id)
+            _tool_call().execute()
+            yield ModelResponse(content=text)
+
+    with patch(
+        "agno.models.base.Model.response_stream", side_effect=fake_stream
+    ):
+        stream = agent.run("hello", stream=True)
+        assert get_current_span() is INVALID_SPAN
+        for _ in stream:
+            assert get_current_span() is INVALID_SPAN
+
+    _assert_scoped(span_exporter, seen, "invoke_agent scoped-agent")
+
+
+def test_agent_arun_stream_is_current_only_while_read(
+    instrument_agno, span_exporter
+) -> None:
+    agent = Agent(name="scoped-async-agent", model=MockModel(id="mock-model"))
+    seen: list[int] = []
+
+    async def fake_astream(*args, **kwargs):
+        for text in ("chunk 1", "chunk 2"):
+            seen.append(get_current_span().get_span_context().span_id)
+            await _tool_call().aexecute()
+            yield ModelResponse(content=text)
+
+    async def _run() -> None:
+        with patch(
+            "agno.models.base.Model.aresponse_stream", side_effect=fake_astream
+        ):
+            stream = agent.arun("hello", stream=True)
+            assert get_current_span() is INVALID_SPAN
+            async for _ in stream:
+                assert get_current_span() is INVALID_SPAN
+
+    asyncio.run(_run())
+
+    _assert_scoped(span_exporter, seen, "invoke_agent scoped-async-agent")
+
+
+def test_workflow_run_stream_is_current_only_while_read(
+    instrument_agno, span_exporter
+) -> None:
+    pytest.importorskip("agno.workflow.workflow")
+    from agno.workflow.workflow import Workflow
+
+    seen: list[int] = []
+
+    def step(step_input):
+        seen.append(get_current_span().get_span_context().span_id)
+        _tool_call().execute()
+        return "step output"
+
+    workflow = Workflow(name="scoped-workflow", steps=[step, step])
+    stream = workflow.run("hello", stream=True)
+    assert get_current_span() is INVALID_SPAN
+    for _ in stream:
+        assert get_current_span() is INVALID_SPAN
+
+    _assert_scoped(span_exporter, seen, "invoke_workflow scoped-workflow")
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+def test_tool_aexecute_closed_while_tool_is_pending_fails_the_span(
+    instrument_agno, span_exporter
+) -> None:
+    async def sample_tool(x: int) -> int:
+        """Double a number."""
+        await _Pending()
+        return x * 2
+
+    call = FunctionCall(
+        function=Function.from_callable(sample_tool), arguments={"x": 1}
+    )
+    coro = call.aexecute()
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"

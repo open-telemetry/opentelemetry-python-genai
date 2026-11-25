@@ -5,13 +5,13 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from unittest import mock
 
 import dspy
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
@@ -77,9 +77,8 @@ def test_sync_tool_execution(
     assert attrs.get(GenAI.GEN_AI_TOOL_DESCRIPTION) == "Add two numbers."
 
     args_attr = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
-    assert args_attr is not None
-    assert json.loads(str(args_attr)) == {"x": 3, "y": 4}
-    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == "7"
+    assert args_attr == {"x": 3, "y": 4}
+    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == 7
 
 
 def test_sync_tool_positional_and_mixed_args_extraction(
@@ -167,9 +166,8 @@ async def test_async_tool_execution(
     assert attrs.get(GenAI.GEN_AI_TOOL_DESCRIPTION) == "Multiply numbers."
 
     args_attr = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
-    assert args_attr is not None
-    assert json.loads(str(args_attr)) == {"a": 5, "b": 6}
-    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == "30"
+    assert args_attr == {"a": 5, "b": 6}
+    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == 30
 
 
 def test_sync_tool_error(
@@ -283,9 +281,8 @@ def test_tool_kwargs_not_mutated_by_caller(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     attrs = spans[0].attributes or {}
-    args_raw = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
-    assert args_raw is not None
-    args_dict = json.loads(str(args_raw))
+    args_dict = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
+    assert isinstance(args_dict, dict)
     assert args_dict.get("msg") == "world"
 
 
@@ -338,3 +335,67 @@ async def test_sentinel_tool_skips_span_creation_async(
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 0
+
+
+def test_nested_tool_spans_keep_parent_and_do_not_leak(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    inner = dspy.Tool(add, name="inner")
+
+    def outer_fn(x: int) -> int:
+        return inner(x=x, y=1)
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        outer = dspy.Tool(outer_fn, name="outer")
+        with tracer_provider.get_tracer("test").start_as_current_span(
+            "caller"
+        ) as caller:
+            assert outer(x=1) == 2
+            assert trace.get_current_span() is caller
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    caller_span = spans["caller"]
+    outer_span = spans["execute_tool outer"]
+    inner_span = spans["execute_tool inner"]
+    assert outer_span.parent is not None
+    assert outer_span.parent.span_id == caller_span.context.span_id
+    assert inner_span.parent is not None
+    assert inner_span.parent.span_id == outer_span.context.span_id
+
+
+@pytest.mark.anyio
+async def test_async_nested_tool_spans_keep_parent_and_do_not_leak(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    inner = dspy.Tool(async_multiply, name="inner")
+
+    async def outer_fn(a: int) -> int:
+        return await inner.acall(a=a, b=2)
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        outer = dspy.Tool(outer_fn, name="outer")
+        assert await outer.acall(a=3) == 6
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    outer_span = spans["execute_tool outer"]
+    inner_span = spans["execute_tool inner"]
+    assert outer_span.parent is None
+    assert inner_span.parent is not None
+    assert inner_span.parent.span_id == outer_span.context.span_id

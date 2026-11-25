@@ -1,0 +1,1 @@
+Stream wrappers no longer swallow errors from the wrapped stream's ``close()`` when the caller's ``with`` block raises, matching uninstrumented SDK streams.

@@ -160,7 +160,7 @@ class TestCase(CommonTestCaseBase):
     def test_generates_span(self) -> None:
         self.configure_valid_interaction()
         self.run_interaction(model="gemini-2.5-flash", input="Does this work?")
-        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_span_named("chat gemini-2.5-flash")
 
     @patch.dict(
         "os.environ",
@@ -174,26 +174,29 @@ class TestCase(CommonTestCaseBase):
             model="gemini-2.5-flash",
             input=["Hi", {"type": ["function_call"]}],
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hi","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": ({"content": "Hi", "type": "text"},),
+                },
+            ),
         )
         self.assertFalse(trace.get_current_span().get_span_context().is_valid)
 
     def test_model_reflected_into_span_name(self) -> None:
         self.configure_valid_interaction()
         self.run_interaction(model="gemini-1.5-flash", input="Does this work?")
-        self.otel.assert_has_span_named("interactions.create gemini-1.5-flash")
+        self.otel.assert_has_span_named("chat gemini-1.5-flash")
 
     def test_generated_span_has_minimal_genai_attributes(self) -> None:
         self.configure_valid_interaction()
         self.run_interaction(model="gemini-2.5-flash", input="Does this work?")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.provider.name"], "gemini")
-        self.assertEqual(
-            span.attributes["gen_ai.operation.name"], "interactions.create"
-        )
+        self.assertEqual(span.attributes["gen_ai.operation.name"], "chat")
         self.assertEqual(
             span.attributes["server.address"],
             "generativelanguage.googleapis.com",
@@ -205,7 +208,7 @@ class TestCase(CommonTestCaseBase):
             model="gemini-2.5-flash",
             input="Follow-up question",
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.response.id"], "interaction-123"
         )
@@ -227,8 +230,8 @@ class TestCase(CommonTestCaseBase):
             self.run_interaction(
                 model="gemini-2.5-flash", input="Does this work?"
             )
-        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_span_named("chat gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.otel.assert_has_event_named(
             "gen_ai.client.inference.operation.details"
         )
@@ -246,8 +249,8 @@ class TestCase(CommonTestCaseBase):
                 input="Does this work?",
                 stream=True,
             )
-        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_span_named("chat gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.otel.assert_has_event_named(
             "gen_ai.client.inference.operation.details"
         )
@@ -263,8 +266,8 @@ class TestCase(CommonTestCaseBase):
             self.run_interaction(
                 model="gemini-2.5-flash", input="Does this work?"
             )
-        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_span_named("chat gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.otel.assert_has_event_named(
             "gen_ai.client.inference.operation.details"
         )
@@ -288,8 +291,8 @@ class TestCase(CommonTestCaseBase):
                 input="Does this work?",
                 stream=True,
             )
-        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_span_named("chat gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.otel.assert_has_event_named(
             "gen_ai.client.inference.operation.details"
         )
@@ -309,11 +312,9 @@ class TestCase(CommonTestCaseBase):
         self.set_use_vertex(True)
         self.configure_valid_interaction()
         self.run_interaction(model="gemini-2.5-flash", input="Does this work?")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.provider.name"], "vertex_ai")
-        self.assertEqual(
-            span.attributes["gen_ai.operation.name"], "interactions.create"
-        )
+        self.assertEqual(span.attributes["gen_ai.operation.name"], "chat")
 
     def test_generated_span_counts_tokens(self) -> None:
         self.configure_valid_interaction(
@@ -321,7 +322,7 @@ class TestCase(CommonTestCaseBase):
             output_tokens=25,
         )
         self.run_interaction(model="gemini-2.5-flash", input="Some input")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 15)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 25)
 
@@ -342,7 +343,7 @@ class TestCase(CommonTestCaseBase):
             ],
         )
         self.run_interaction(model="gemini-2.5-flash", input="Some input")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 15)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 25)
         self.assertEqual(span.attributes["gen_ai.usage.text.input_tokens"], 10)
@@ -370,14 +371,31 @@ class TestCase(CommonTestCaseBase):
             model="gemini-2.5-flash",
             input="Hello interactions!",
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello interactions!","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": (
+                        {"content": "Hello interactions!", "type": "text"},
+                    ),
+                },
+            ),
         )
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Response from interactions!","type":"text"}],"finish_reason":null,"name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": (
+                        {
+                            "content": "Response from interactions!",
+                            "type": "text",
+                        },
+                    ),
+                },
+            ),
         )
 
     @patch.dict(
@@ -393,7 +411,7 @@ class TestCase(CommonTestCaseBase):
             model="gemini-2.5-flash",
             input="Hello interactions!",
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         for attribute in (
             GenAIAttributes.GEN_AI_INPUT_MESSAGES,
             GenAIAttributes.GEN_AI_OUTPUT_MESSAGES,
@@ -411,7 +429,7 @@ class TestCase(CommonTestCaseBase):
     def test_records_finish_reason_from_status(self) -> None:
         self.configure_valid_interaction(status="requires_action")
         self.run_interaction(model="gemini-2.5-flash", input="Use a tool")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.response.finish_reasons"], ("tool_calls",)
         )
@@ -425,10 +443,15 @@ class TestCase(CommonTestCaseBase):
             output_text="Calling a tool.", status="requires_action"
         )
         self.run_interaction(model="gemini-2.5-flash", input="Use a tool")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Calling a tool.","type":"text"}],"finish_reason":null,"name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"content": "Calling a tool.", "type": "text"},),
+                },
+            ),
         )
         self.assertEqual(
             span.attributes["gen_ai.response.finish_reasons"], ("tool_calls",)
@@ -438,7 +461,7 @@ class TestCase(CommonTestCaseBase):
         # A background interaction returns before the generation finishes.
         self.configure_valid_interaction(status="in_progress")
         self.run_interaction(model="gemini-2.5-flash", input="Run later")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertNotIn("gen_ai.response.finish_reasons", span.attributes)
 
     def test_agent_records_finish_reason_from_status(self) -> None:
@@ -465,8 +488,8 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(len(events), 2)
         self.assertEqual(events[1].interaction.id, "stream-id-1")
 
-        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_span_named("chat gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 5)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
         self.otel.assert_has_metrics_data_named(
@@ -525,7 +548,7 @@ class TestCase(CommonTestCaseBase):
         self.run_streaming_interaction(
             model="gemini-2.5-flash", input="Streaming test", stream=True
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertNotIn(
             GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, span.attributes
         )
@@ -543,10 +566,15 @@ class TestCase(CommonTestCaseBase):
         self.run_streaming_interaction(
             model="gemini-2.5-flash", input="Streaming test", stream=True
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Calling a tool.","type":"text"}],"finish_reason":null,"name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"content": "Calling a tool.", "type": "text"},),
+                },
+            ),
         )
         self.assertEqual(
             span.attributes["gen_ai.response.finish_reasons"], ("tool_calls",)
@@ -580,11 +608,16 @@ class TestCase(CommonTestCaseBase):
             input="Streaming test",
             stream=True,
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         # No completion event arrived, so there is no finish reason to report.
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Partial answer.","type":"text"}],"finish_reason":null,"name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"content": "Partial answer.", "type": "text"},),
+                },
+            ),
         )
 
     @patch.dict(
@@ -687,7 +720,7 @@ class TestCase(CommonTestCaseBase):
             input="Test tool",
             tools=[my_tool],
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertNotIn("gen_ai.tool.definitions", span.attributes)
 
     def test_interaction_with_mcp_server_tool_records_definitions(
@@ -705,10 +738,10 @@ class TestCase(CommonTestCaseBase):
                 }
             ],
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
-            '[{"name":"weather_server","type":"mcp_server"}]',
+            ({"name": "weather_server", "type": "mcp_server"},),
         )
 
     def test_interaction_with_dict_tools_records_tool_definitions(
@@ -726,10 +759,16 @@ class TestCase(CommonTestCaseBase):
                 }
             ],
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
-            '[{"name":"dict_tool","description":"Dict tool desc","parameters":null,"type":"function"}]',
+            (
+                {
+                    "name": "dict_tool",
+                    "description": "Dict tool desc",
+                    "type": "function",
+                },
+            ),
         )
 
     @patch.dict(
@@ -751,7 +790,7 @@ class TestCase(CommonTestCaseBase):
                 }
             ],
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertNotIn("gen_ai.tool.definitions", span.attributes)
 
     def test_interaction_with_builtin_tools_records_definitions(
@@ -763,8 +802,11 @@ class TestCase(CommonTestCaseBase):
             input="Test builtin tools",
             tools=[{"type": "google_search"}, {"type": "code_execution"}],
         )
-        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("chat gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
-            '[{"name":"google_search","type":"google_search"},{"name":"code_execution","type":"code_execution"}]',
+            (
+                {"name": "google_search", "type": "google_search"},
+                {"name": "code_execution", "type": "code_execution"},
+            ),
         )

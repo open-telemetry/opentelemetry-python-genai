@@ -113,13 +113,11 @@ class NonStreamingTestCase(TestCase):
             {
                 "name": "_mock_callable_tool",
                 "description": "Description of some tool.",
-                "parameters": None,
                 "type": "function",
             },
             {
                 "name": "mock_tool",
                 "description": "Description of mock tool.",
-                "parameters": None,
                 "type": "function",
             },
             {
@@ -233,7 +231,15 @@ class NonStreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": (
+                        {"content": "Hello", "type": "text"},
+                        {"content": "world", "type": "text"},
+                    ),
+                },
+            ),
         )
 
     def test_empty_tuple_contents_mimics_sdk_error(self):
@@ -252,7 +258,7 @@ class NonStreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS],
-            '[{"content":"Be polite","type":"text"}]',
+            ({"content": "Be polite", "type": "text"},),
         )
 
     def test_mixed_tuple_contents(self):
@@ -267,7 +273,15 @@ class NonStreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": (
+                        {"content": "Hello", "type": "text"},
+                        {"content": "world", "type": "text"},
+                    ),
+                },
+            ),
         )
 
     def test_generates_span(self):
@@ -594,7 +608,6 @@ class NonStreamingTestCase(TestCase):
                 {
                     "role": "user",
                     "parts": ({"content": "Some input", "type": "text"},),
-                    "name": None,
                 },
             ),
         )
@@ -607,7 +620,6 @@ class NonStreamingTestCase(TestCase):
                         {"content": "Some response content", "type": "text"},
                     ),
                     "finish_reason": "",
-                    "name": None,
                 },
             ),
         )
@@ -709,28 +721,41 @@ class NonStreamingTestCase(TestCase):
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Some input","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": ({"content": "Some input", "type": "text"},),
+                },
+            ),
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Some response content","type":"text"}],"finish_reason":"","name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": (
+                        {"content": "Some response content", "type": "text"},
+                    ),
+                    "finish_reason": "",
+                },
+            ),
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS],
-            '[{"content":"System instruction","type":"text"}]',
+            ({"content": "System instruction", "type": "text"},),
         )
         if _is_mcp_imported:
             self.assertIn(
                 span.attributes[GEN_AI_TOOL_DEFINITIONS],
                 [
-                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"Tool from session","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"}]',
-                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"}]',
+                    self.base_tools_definition + mcp_var
+                    for mcp_var in self.mcp_tools_with_content
                 ],
             )
         else:
             self.assertEqual(
                 span.attributes[GEN_AI_TOOL_DEFINITIONS],
-                '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"}]',
+                self.base_tools_definition,
             )
 
     @patch.dict(
@@ -748,7 +773,16 @@ class NonStreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Let me think.","type":"reasoning"},{"content":"It is sunny.","type":"text"}],"finish_reason":"","name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": (
+                        {"content": "Let me think.", "type": "reasoning"},
+                        {"content": "It is sunny.", "type": "text"},
+                    ),
+                    "finish_reason": "",
+                },
+            ),
         )
 
     def test_log_has_extra_genai_attributes(self):

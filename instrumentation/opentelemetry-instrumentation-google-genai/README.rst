@@ -21,6 +21,8 @@ Please treat the telemetry produced by these methods as experimental.
 The ``interactions`` API currently does not support automatic function calling, so no ``execute_tool`` spans
 are generated.
 
+``interactions.create`` emits a ``chat`` span for model calls and an ``invoke_agent`` span for agent calls.
+
 ``interactions.get`` emits a ``fetch_response`` span. A fetch performs no inference, so the token
 counts carried by the fetched interaction describe its original generation and are not recorded.
 
@@ -89,6 +91,19 @@ This controls whether the following content is captured on spans and/or events:
 - Output messages from the LLM.
 - System Instructions
 - The result of tool calls and the tool call parameters (other tool call details and tool definitions are always captured).
+
+Alternatively, content capture can be configured programmatically by passing a
+``ContentCapturingMode`` as ``content_capturing_mode`` to ``instrument()``.
+The supplied mode takes precedence over the environment variable. Omit it or
+pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import ContentCapturingMode
+
+    GoogleGenAiSdkInstrumentor().instrument(
+        content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
+    )
 
 
 Configuration recording

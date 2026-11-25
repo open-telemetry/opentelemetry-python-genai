@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,7 @@ def _make_invocation():
         stop=lambda: None,
         fail=lambda error: None,
         _on_stream_chunk=lambda chunk_at: None,
+        activate=nullcontext,
     )
 
 
@@ -204,11 +206,11 @@ def test_stream_wrapper_finalization_records_thinking_tokens(
     )
     invocation = handler.inference(
         provider="anthropic",
-        request_model="claude-sonnet-4-20250514",
+        request_model="claude-sonnet-5-5",
     )
     snapshot = SimpleNamespace(
         id="msg_stream",
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         stop_reason="end_turn",
         usage=SimpleNamespace(
             input_tokens=10,

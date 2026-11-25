@@ -7,13 +7,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 from urllib.parse import urlparse
 
 try:
     import httpx2 as _http_lib
 except ImportError:
     import httpx as _http_lib
+from anthropic import NotGiven, Omit
 from anthropic.types import MessageDeltaUsage
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -254,6 +255,15 @@ def set_invocation_response_attributes(
         invocation.output_messages = get_output_messages_from_message(message)
 
 
+_T = TypeVar("_T")
+
+_UNSET_TYPES = (NotGiven, Omit)
+
+
+def _none_if_unset(value: _T) -> _T | None:
+    return None if isinstance(value, _UNSET_TYPES) else value
+
+
 def extract_params(  # pylint: disable=too-many-locals
     *,
     max_tokens: int | None = None,
@@ -276,6 +286,13 @@ def extract_params(  # pylint: disable=too-many-locals
     timeout: float | _http_lib.Timeout | None = None,
     **_kwargs: object,
 ) -> MessageRequestParams:
+    max_tokens = _none_if_unset(max_tokens)
+    model = _none_if_unset(model)
+    stop_sequences = _none_if_unset(stop_sequences)
+    temperature = _none_if_unset(temperature)
+    top_k = _none_if_unset(top_k)
+    top_p = _none_if_unset(top_p)
+
     if isinstance(extra_body, Mapping):
         body = cast(Mapping[object, object], extra_body)
         body_temperature = body.get("temperature")

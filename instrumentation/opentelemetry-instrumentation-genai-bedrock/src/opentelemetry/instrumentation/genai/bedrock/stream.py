@@ -93,7 +93,7 @@ class _BedrockConverseStreamMixin:
     _self_input_tokens: int | None
     _self_output_tokens: int | None
     _self_cache_read_input_tokens: int | None
-    _self_cache_creation_input_tokens: int | None
+    _self_cache_write_input_tokens: int | None
     _self_text_blocks: dict[int, str]
     _self_reasoning_blocks: dict[int, str]
     _self_tool_blocks: dict[int, dict[str, Any]]
@@ -112,7 +112,7 @@ class _BedrockConverseStreamMixin:
         self._self_input_tokens = None
         self._self_output_tokens = None
         self._self_cache_read_input_tokens = None
-        self._self_cache_creation_input_tokens = None
+        self._self_cache_write_input_tokens = None
         self._self_text_blocks = {}
         self._self_reasoning_blocks = {}
         self._self_tool_blocks = {}
@@ -181,7 +181,7 @@ class _BedrockConverseStreamMixin:
                     usage["cacheReadInputTokens"]
                 )
             if "cacheWriteInputTokens" in usage:
-                self._self_cache_creation_input_tokens = _safe_int(
+                self._self_cache_write_input_tokens = _safe_int(
                     usage["cacheWriteInputTokens"]
                 )
 
@@ -209,14 +209,14 @@ class _BedrockConverseStreamMixin:
         self._self_invocation.input_tokens = _total_input_tokens(
             self._self_input_tokens,
             self._self_cache_read_input_tokens,
-            self._self_cache_creation_input_tokens,
+            self._self_cache_write_input_tokens,
         )
         self._self_invocation.output_tokens = self._self_output_tokens
         self._self_invocation.cache_read_input_tokens = (
             self._self_cache_read_input_tokens
         )
-        self._self_invocation.cache_creation_input_tokens = (
-            self._self_cache_creation_input_tokens
+        self._self_invocation.cache_write_input_tokens = (
+            self._self_cache_write_input_tokens
         )
 
         self._self_invocation.stop()
@@ -267,7 +267,7 @@ class _BedrockInvokeModelStreamMixin:
     _self_input_tokens: int | None
     _self_output_tokens: int | None
     _self_cache_read_input_tokens: int | None
-    _self_cache_creation_input_tokens: int | None
+    _self_cache_write_input_tokens: int | None
     _self_accumulated_text: list[str]
     _self_text_blocks: dict[int, str]
     _self_reasoning_blocks: dict[int, str]
@@ -287,7 +287,7 @@ class _BedrockInvokeModelStreamMixin:
         self._self_input_tokens = None
         self._self_output_tokens = None
         self._self_cache_read_input_tokens = None
-        self._self_cache_creation_input_tokens = None
+        self._self_cache_write_input_tokens = None
         self._self_accumulated_text = []
         self._self_text_blocks = {}
         self._self_reasoning_blocks = {}
@@ -347,7 +347,7 @@ class _BedrockInvokeModelStreamMixin:
                         "cache_creation_input_tokens" in usage
                         or "cacheWriteInputTokens" in usage
                     ):
-                        self._self_cache_creation_input_tokens = _safe_int(
+                        self._self_cache_write_input_tokens = _safe_int(
                             _first_not_none(
                                 usage.get("cache_creation_input_tokens"),
                                 usage.get("cacheWriteInputTokens"),
@@ -467,17 +467,20 @@ class _BedrockInvokeModelStreamMixin:
         if finish_reason:
             self._self_invocation.finish_reasons = [finish_reason]
 
-        if self._self_input_tokens is not None:
-            self._self_invocation.input_tokens = self._self_input_tokens
+        self._self_invocation.input_tokens = _total_input_tokens(
+            self._self_input_tokens,
+            self._self_cache_read_input_tokens,
+            self._self_cache_write_input_tokens,
+        )
         if self._self_output_tokens is not None:
             self._self_invocation.output_tokens = self._self_output_tokens
         if self._self_cache_read_input_tokens is not None:
             self._self_invocation.cache_read_input_tokens = (
                 self._self_cache_read_input_tokens
             )
-        if self._self_cache_creation_input_tokens is not None:
-            self._self_invocation.cache_creation_input_tokens = (
-                self._self_cache_creation_input_tokens
+        if self._self_cache_write_input_tokens is not None:
+            self._self_invocation.cache_write_input_tokens = (
+                self._self_cache_write_input_tokens
             )
 
         if self._self_capture_content:
@@ -624,28 +627,29 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         self._self_invocation.fail(exc)
 
     async def read(self, amt: int | None = None) -> bytes:
-        try:
-            chunk: bytes = await self.__wrapped__.read(amt)
-        except BaseException as exc:
-            self._finalize_error(exc)
-            raise
+        with self._self_invocation.activate():
+            try:
+                chunk: bytes = await self.__wrapped__.read(amt)
+            except BaseException as exc:
+                self._finalize_error(exc)
+                raise
 
-        if amt == 0:
+            if amt == 0:
+                return chunk
+
+            if chunk:
+                self._self_chunks.append(chunk)
+                self._self_bytes_read += len(chunk)
+
+            reached_content_length = (
+                self._self_content_length is not None
+                and self._self_content_length > 0
+                and self._self_bytes_read >= self._self_content_length
+            )
+            if amt is None or amt < 0 or not chunk or reached_content_length:
+                self._finalize(b"".join(self._self_chunks))
+
             return chunk
-
-        if chunk:
-            self._self_chunks.append(chunk)
-            self._self_bytes_read += len(chunk)
-
-        reached_content_length = (
-            self._self_content_length is not None
-            and self._self_content_length > 0
-            and self._self_bytes_read >= self._self_content_length
-        )
-        if amt is None or amt < 0 or not chunk or reached_content_length:
-            self._finalize(b"".join(self._self_chunks))
-
-        return chunk
 
     async def readinto(self, b: bytearray) -> int:
         # Reimplemented on top of read() because the SDK's readinto pulls from
@@ -684,26 +688,28 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         return self
 
     async def aclose(self) -> None:
-        try:
-            if hasattr(self.__wrapped__, "aclose"):
-                await self.__wrapped__.aclose()
-            elif hasattr(self.__wrapped__, "close"):
-                self.__wrapped__.close()
-        except BaseException as exc:
-            self._finalize_error(exc)
-            raise
-        if not self._self_finalized:
-            self._finalize(b"".join(self._self_chunks))
+        with self._self_invocation.activate():
+            try:
+                if hasattr(self.__wrapped__, "aclose"):
+                    await self.__wrapped__.aclose()
+                elif hasattr(self.__wrapped__, "close"):
+                    self.__wrapped__.close()
+            except BaseException as exc:
+                self._finalize_error(exc)
+                raise
+            if not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
 
     def close(self) -> None:
-        try:
-            if hasattr(self.__wrapped__, "close"):
-                self.__wrapped__.close()
-        except BaseException as exc:
-            self._finalize_error(exc)
-            raise
-        if not self._self_finalized:
-            self._finalize(b"".join(self._self_chunks))
+        with self._self_invocation.activate():
+            try:
+                if hasattr(self.__wrapped__, "close"):
+                    self.__wrapped__.close()
+            except BaseException as exc:
+                self._finalize_error(exc)
+                raise
+            if not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
 
     async def __aexit__(
         self,
@@ -711,20 +717,23 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         exc_val: BaseException | None,
         exc_tb: Any,
     ) -> None:
-        try:
-            if hasattr(self.__wrapped__, "__aexit__"):
-                await self.__wrapped__.__aexit__(exc_type, exc_val, exc_tb)
-            elif hasattr(self.__wrapped__, "aclose"):
-                await self.__wrapped__.aclose()
-            elif hasattr(self.__wrapped__, "close"):
-                self.__wrapped__.close()
-        except BaseException as close_exc:
-            self._finalize_error(exc_val if exc_val is not None else close_exc)
-            raise
-        if exc_val is not None:
-            self._finalize_error(exc_val)
-        elif not self._self_finalized:
-            self._finalize(b"".join(self._self_chunks))
+        with self._self_invocation.activate():
+            try:
+                if hasattr(self.__wrapped__, "__aexit__"):
+                    await self.__wrapped__.__aexit__(exc_type, exc_val, exc_tb)
+                elif hasattr(self.__wrapped__, "aclose"):
+                    await self.__wrapped__.aclose()
+                elif hasattr(self.__wrapped__, "close"):
+                    self.__wrapped__.close()
+            except BaseException as close_exc:
+                self._finalize_error(
+                    exc_val if exc_val is not None else close_exc
+                )
+                raise
+            if exc_val is not None:
+                self._finalize_error(exc_val)
+            elif not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
 
     def __del__(self) -> None:
         if getattr(self, "_self_finalized", True):
