@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any
@@ -17,7 +18,7 @@ try:
     import httpx2 as _http_lib
 except ImportError:
     import httpx as _http_lib
-from anthropic import NotFoundError
+from anthropic import Anthropic, AsyncAnthropic, NotFoundError
 from anthropic.types import (
     Message,
     RawMessageStartEvent,
@@ -296,7 +297,9 @@ async def _aevents(
         yield item
 
 
-def _invocation(tracer_provider, logger_provider, meter_provider) -> Any:
+def _invocation(
+    tracer_provider, logger_provider, meter_provider, completion_hook=None
+) -> Any:
     return TelemetryHandler(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
@@ -304,6 +307,7 @@ def _invocation(tracer_provider, logger_provider, meter_provider) -> Any:
         instrumentation_scope_name=(
             "opentelemetry.instrumentation.genai.anthropic"
         ),
+        completion_hook=completion_hook,
     ).inference("anthropic", request_model=_MODEL, _attach_to_context=False)
 
 
@@ -597,100 +601,6 @@ async def test_async_raw_body_close_without_read_activates(
     assert context.get_current() is before
     _assert_all_in_invocation(seen, invocation)
     assert len(span_exporter.get_finished_spans()) == 1
-
-
-# --- raw response, caller error ----------------------------------------------
-
-
-def _record_current_span_on_finish(
-    invocation: Any, seen: list[trace.SpanContext]
-) -> None:
-    apply_finish = invocation._apply_finish
-
-    def spy(error: Any = None) -> None:
-        seen.append(trace.get_current_span().get_span_context())
-        apply_finish(error)
-
-    invocation._apply_finish = spy
-
-
-def test_sync_raw_response_caller_error_fails_inside_invocation(
-    tracer_provider, logger_provider, meter_provider, span_exporter
-) -> None:
-    before = context.get_current()
-    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
-    finish_seen: list[trace.SpanContext] = []
-    _record_current_span_on_finish(invocation, finish_seen)
-    proxy = _body_proxy(invocation, _ObservedStream([]))
-
-    proxy._fail(RuntimeError("caller failed"))
-
-    assert context.get_current() is before
-    _assert_all_in_invocation(finish_seen, invocation)
-    (span,) = span_exporter.get_finished_spans()
-    assert span.status.status_code is trace.StatusCode.ERROR
-
-
-@pytest.mark.asyncio
-async def test_async_raw_response_caller_error_fails_inside_invocation(
-    tracer_provider, logger_provider, meter_provider, span_exporter
-) -> None:
-    before = context.get_current()
-    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
-    finish_seen: list[trace.SpanContext] = []
-    _record_current_span_on_finish(invocation, finish_seen)
-    proxy = _body_proxy(invocation, _ObservedAsyncStream([]))
-
-    proxy._fail(RuntimeError("caller failed"))
-    await proxy.http_response.aclose()
-
-    assert context.get_current() is before
-    _assert_all_in_invocation(finish_seen, invocation)
-    (span,) = span_exporter.get_finished_spans()
-    assert span.status.status_code is trace.StatusCode.ERROR
-
-
-def test_sync_raw_response_caller_error_after_parse_fails_inside_invocation(
-    tracer_provider, logger_provider, meter_provider, span_exporter
-) -> None:
-    before = context.get_current()
-    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
-    finish_seen: list[trace.SpanContext] = []
-    _record_current_span_on_finish(invocation, finish_seen)
-    proxy = _body_proxy(invocation, _ObservedStream([]))
-    proxy._self_span_open = False
-    proxy._self_stream_wrapper = MessagesStreamWrapper(
-        iter(()), invocation, False
-    )
-
-    proxy._fail(RuntimeError("caller failed"))
-
-    assert context.get_current() is before
-    _assert_all_in_invocation(finish_seen, invocation)
-    (span,) = span_exporter.get_finished_spans()
-    assert span.status.status_code is trace.StatusCode.ERROR
-
-
-@pytest.mark.asyncio
-async def test_async_raw_response_caller_error_after_parse_fails_inside_invocation(
-    tracer_provider, logger_provider, meter_provider, span_exporter
-) -> None:
-    before = context.get_current()
-    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
-    finish_seen: list[trace.SpanContext] = []
-    _record_current_span_on_finish(invocation, finish_seen)
-    proxy = _body_proxy(invocation, _ObservedAsyncStream([]))
-    proxy._self_span_open = False
-    proxy._self_stream_wrapper = AsyncMessagesStreamWrapper(
-        _aevents(invocation, _start_event(), None), invocation, False
-    )
-
-    proxy._fail(RuntimeError("caller failed"))
-
-    assert context.get_current() is before
-    _assert_all_in_invocation(finish_seen, invocation)
-    (span,) = span_exporter.get_finished_spans()
-    assert span.status.status_code is trace.StatusCode.ERROR
 
 
 # --- MessageStream helpers ---------------------------------------------------
@@ -1168,6 +1078,222 @@ async def test_async_messages_stream_helper_read_keeps_caller_span_current(
     )
 
 
+# --- helpers reading a public stream, observed per chunk ---------------------
+
+
+def _sse(event: str, data: dict[str, Any]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+_SSE_TEXT = "Hi"
+_SSE_CHUNKS = [
+    _sse(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": _start_event().message.model_dump(),
+        },
+    ),
+    _sse(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+    ),
+    _sse(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": _SSE_TEXT},
+        },
+    ),
+    _sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+    _sse(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 1},
+        },
+    ),
+    _sse("message_stop", {"type": "message_stop"}),
+]
+# Fail after ``message_start``, so the SDK snapshot already holds the message.
+_FAIL_AFTER = 1
+
+
+class _ObservedSSE(_http_lib.SyncByteStream):
+    """Serves the SSE body, recording the current span at every chunk read."""
+
+    def __init__(self, seen: list[trace.SpanContext], fail: bool) -> None:
+        self._seen = seen
+        self._fail = fail
+
+    def __iter__(self) -> Iterator[bytes]:
+        for index, chunk in enumerate(_SSE_CHUNKS):
+            self._seen.append(trace.get_current_span().get_span_context())
+            if self._fail and index == _FAIL_AFTER:
+                raise ConnectionError("connection dropped")
+            yield chunk
+
+
+class _AsyncObservedSSE(_http_lib.AsyncByteStream):
+    def __init__(self, seen: list[trace.SpanContext], fail: bool) -> None:
+        self._seen = seen
+        self._fail = fail
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for index, chunk in enumerate(_SSE_CHUNKS):
+            await asyncio.sleep(0)
+            self._seen.append(trace.get_current_span().get_span_context())
+            if self._fail and index == _FAIL_AFTER:
+                raise ConnectionError("connection dropped")
+            yield chunk
+
+
+def _sse_response(stream: Any) -> Any:
+    return _http_lib.Response(
+        200, headers={"content-type": "text/event-stream"}, stream=stream
+    )
+
+
+def _observed_client(seen: list[trace.SpanContext], fail: bool) -> Anthropic:
+    return Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        max_retries=0,
+        http_client=_http_lib.Client(
+            transport=_http_lib.MockTransport(
+                lambda request: _sse_response(_ObservedSSE(seen, fail))
+            )
+        ),
+    )
+
+
+def _async_observed_client(
+    seen: list[trace.SpanContext], fail: bool
+) -> AsyncAnthropic:
+    return AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        max_retries=0,
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(
+                lambda request: _sse_response(_AsyncObservedSSE(seen, fail))
+            )
+        ),
+    )
+
+
+def _drain_text(stream: Any) -> None:
+    for _ in stream.text_stream:
+        pass
+
+
+async def _adrain_text(stream: Any) -> None:
+    async for _ in stream.text_stream:
+        pass
+
+
+_SYNC_CONSUMERS = {
+    **{
+        name: (lambda stream, name=name: getattr(stream, name)())
+        for name in _HELPERS
+    },
+    "text_stream": _drain_text,
+}
+_ASYNC_CONSUMERS = {
+    **{
+        name: (lambda stream, name=name: getattr(stream, name)())
+        for name in _HELPERS
+    },
+    "text_stream": _adrain_text,
+}
+
+
+def _assert_reads_under_chat(
+    span_exporter, caller: Any, seen: list[trace.SpanContext]
+) -> Any:
+    (chat,) = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert chat.parent is not None
+    assert chat.parent.span_id == caller.get_span_context().span_id
+    assert seen
+    assert all(
+        span_context == chat.get_span_context() for span_context in seen
+    )
+    return chat
+
+
+def _assert_dropped_connection(chat: Any) -> None:
+    assert chat.status.status_code is trace.StatusCode.ERROR
+    assert chat.attributes is not None
+    assert chat.attributes["error.type"] == "ConnectionError"
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "msg_1"
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["drained", "dropped"])
+@pytest.mark.parametrize("consumer", list(_SYNC_CONSUMERS))
+def test_sync_messages_stream_helper_reads_run_under_the_chat_span(
+    tracer_provider, span_exporter, instrument_no_content, consumer, fail
+) -> None:
+    """Every chunk a helper reads from a public stream is read under ``chat``."""
+    seen: list[trace.SpanContext] = []
+    client = _observed_client(seen, fail)
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            if fail:
+                with pytest.raises(ConnectionError, match="dropped"):
+                    _SYNC_CONSUMERS[consumer](stream)
+            else:
+                _SYNC_CONSUMERS[consumer](stream)
+            assert _is_current(caller)
+    client.close()
+
+    chat = _assert_reads_under_chat(span_exporter, caller, seen)
+    if fail:
+        _assert_dropped_connection(chat)
+    else:
+        assert chat.status.status_code is not trace.StatusCode.ERROR
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True], ids=["drained", "dropped"])
+@pytest.mark.parametrize("consumer", list(_ASYNC_CONSUMERS))
+async def test_async_messages_stream_helper_reads_run_under_the_chat_span(
+    tracer_provider, span_exporter, instrument_no_content, consumer, fail
+) -> None:
+    seen: list[trace.SpanContext] = []
+    client = _async_observed_client(seen, fail)
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        async with client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            if fail:
+                with pytest.raises(ConnectionError, match="dropped"):
+                    await asyncio.create_task(
+                        _ASYNC_CONSUMERS[consumer](stream)
+                    )
+            else:
+                await asyncio.create_task(_ASYNC_CONSUMERS[consumer](stream))
+            assert _is_current(caller)
+    await client.close()
+
+    chat = _assert_reads_under_chat(span_exporter, caller, seen)
+    if fail:
+        _assert_dropped_connection(chat)
+    else:
+        assert chat.status.status_code is not trace.StatusCode.ERROR
+
+
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_sync_messages_stream_api_error")
 def test_sync_messages_stream_open_error_keeps_caller_span_current(
@@ -1328,9 +1454,11 @@ def test_sync_response_close_finalizes_inside_invocation(
     tracer_provider, logger_provider, meter_provider, span_exporter
 ) -> None:
     before = context.get_current()
-    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    hook = _ContextRecordingHook()
+    invocation = _invocation(
+        tracer_provider, logger_provider, meter_provider, hook
+    )
     seen: list[trace.SpanContext] = []
-    _record_current_span_on_finish(invocation, seen)
     stream = MessagesStreamWrapper(
         _StreamWithResponse(seen), invocation, False
     )
@@ -1338,8 +1466,8 @@ def test_sync_response_close_finalizes_inside_invocation(
     stream.response.close()
 
     assert context.get_current() is before
-    assert len(seen) == 2
-    _assert_all_in_invocation(seen, invocation)
+    assert len(seen) == 1
+    _assert_all_in_invocation(seen + hook.contexts, invocation)
     assert len(span_exporter.get_finished_spans()) == 1
 
 
@@ -1348,9 +1476,11 @@ async def test_async_response_aclose_finalizes_inside_invocation(
     tracer_provider, logger_provider, meter_provider, span_exporter
 ) -> None:
     before = context.get_current()
-    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    hook = _ContextRecordingHook()
+    invocation = _invocation(
+        tracer_provider, logger_provider, meter_provider, hook
+    )
     seen: list[trace.SpanContext] = []
-    _record_current_span_on_finish(invocation, seen)
     stream = AsyncMessagesStreamWrapper(
         _StreamWithResponse(seen), invocation, False
     )
@@ -1358,8 +1488,8 @@ async def test_async_response_aclose_finalizes_inside_invocation(
     await asyncio.create_task(stream.response.aclose())
 
     assert context.get_current() is before
-    assert len(seen) == 2
-    _assert_all_in_invocation(seen, invocation)
+    assert len(seen) == 1
+    _assert_all_in_invocation(seen + hook.contexts, invocation)
     assert len(span_exporter.get_finished_spans()) == 1
 
 
@@ -1429,9 +1559,10 @@ def test_sync_raw_response_parse_message_stops_inside_invocation(
     tracer_provider, logger_provider, meter_provider, span_exporter
 ) -> None:
     before = context.get_current()
-    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
-    finish_seen: list[trace.SpanContext] = []
-    _record_current_span_on_finish(invocation, finish_seen)
+    hook = _ContextRecordingHook()
+    invocation = _invocation(
+        tracer_provider, logger_provider, meter_provider, hook
+    )
     response = _http_lib.Response(
         200, stream=_ObservedStream([]), request=_REQUEST
     )
@@ -1441,7 +1572,7 @@ def test_sync_raw_response_parse_message_stops_inside_invocation(
 
     assert isinstance(message, Message)
     assert context.get_current() is before
-    _assert_all_in_invocation(finish_seen, invocation)
+    _assert_all_in_invocation(hook.contexts, invocation)
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
 
@@ -1451,9 +1582,10 @@ async def test_async_raw_response_parse_message_stops_inside_invocation(
     tracer_provider, logger_provider, meter_provider, span_exporter
 ) -> None:
     before = context.get_current()
-    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
-    finish_seen: list[trace.SpanContext] = []
-    _record_current_span_on_finish(invocation, finish_seen)
+    hook = _ContextRecordingHook()
+    invocation = _invocation(
+        tracer_provider, logger_provider, meter_provider, hook
+    )
     response = _http_lib.Response(
         200, stream=_ObservedAsyncStream([]), request=_REQUEST
     )
@@ -1463,7 +1595,7 @@ async def test_async_raw_response_parse_message_stops_inside_invocation(
 
     assert isinstance(message, Message)
     assert context.get_current() is before
-    _assert_all_in_invocation(finish_seen, invocation)
+    _assert_all_in_invocation(hook.contexts, invocation)
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
 
