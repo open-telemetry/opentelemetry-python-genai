@@ -2050,6 +2050,20 @@ class TestMessageModels(unittest.TestCase):
         self.assertEqual(part["id"], "")
         self.assertEqual(len(part), 3)
 
+    def test_content_model_class_vars_are_not_mapping_keys(self):
+        parts = (
+            ToolCallRequestPart(arguments={}, name="tool", id=None),
+            ToolCallResponsePart(response=None, id=None),
+        )
+        for part in parts:
+            for key in ("_SANITIZE", "_KEEP_NONE"):
+                with self.subTest(part=type(part).__name__, key=key):
+                    self.assertNotIn(key, list(part))
+                    self.assertNotIn(key, part)
+                    with self.assertRaises(KeyError):
+                        part[key]
+                    self.assertIsNone(part.get(key))
+
     def test_empty_content_mapping_is_truthy(self):
         model = RetrievalDocument()
         self.assertEqual(dict(model), {})

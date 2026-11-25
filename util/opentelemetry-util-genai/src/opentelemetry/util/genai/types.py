@@ -66,11 +66,9 @@ class _AnyValueMapping(Mapping[str, AnyValue]):
     _KEEP_NONE: ClassVar[frozenset[str]] = frozenset()
 
     def __getitem__(self, key: str) -> AnyValue:
-        if key not in self.__dataclass_fields__:
+        if key not in self._present_fields():
             raise KeyError(key)
         value = getattr(self, key)
-        if value is None and key not in self._KEEP_NONE:
-            raise KeyError(key)
         if key not in self._SANITIZE:
             return value
 
