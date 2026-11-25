@@ -39,8 +39,10 @@ from opentelemetry.instrumentation.genai.anthropic.wrappers import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.types import ContentCapturingMode
 
 _MODEL = "claude-sonnet-4-20250514"
 _MESSAGES = [{"role": "user", "content": "Say hello in one word."}]
@@ -1129,6 +1131,8 @@ _SSE_CHUNKS = [
 ]
 # Fail after ``message_start``, so the SDK snapshot already holds the message.
 _FAIL_AFTER = 1
+# Fail after the text delta, so the snapshot also holds the partial text.
+_FAIL_AFTER_TEXT = 3
 
 
 class _ObservedSSE(_http_lib.SyncByteStream):
@@ -1304,6 +1308,67 @@ async def test_async_messages_stream_helper_reads_run_under_the_chat_span(
         _assert_dropped_connection(chat)
     else:
         assert chat.status.status_code is not trace.StatusCode.ERROR
+
+
+@pytest.fixture
+def instrument_content_capture(
+    tracer_provider, logger_provider, meter_provider, content_capture
+) -> Any:
+    with instrument(
+        AnthropicInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture=content_capture.name,
+    ):
+        yield content_capture
+
+
+def _assert_partial_output(chat: Any, mode: ContentCapturingMode) -> None:
+    assert chat.attributes is not None
+    if mode is ContentCapturingMode.SPAN_ONLY:
+        (message,) = get_content_attribute(
+            chat.attributes, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        )
+        assert message["role"] == "assistant"
+        assert message["parts"] == [{"type": "text", "content": _SSE_TEXT}]
+    else:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in chat.attributes
+
+
+@pytest.mark.parametrize("consumer", list(_SYNC_CONSUMERS))
+def test_sync_messages_stream_helper_failure_after_text_keeps_partial_output(
+    span_exporter, instrument_content_capture, consumer
+) -> None:
+    client = _observed_client([], _FAIL_AFTER_TEXT)
+    with client.messages.stream(
+        model=_MODEL, max_tokens=100, messages=_MESSAGES
+    ) as stream:
+        with pytest.raises(ConnectionError, match="dropped"):
+            _SYNC_CONSUMERS[consumer](stream)
+    client.close()
+
+    (chat,) = span_exporter.get_finished_spans()
+    _assert_dropped_connection(chat)
+    _assert_partial_output(chat, instrument_content_capture)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumer", list(_ASYNC_CONSUMERS))
+async def test_async_messages_stream_helper_failure_after_text_keeps_partial_output(
+    span_exporter, instrument_content_capture, consumer
+) -> None:
+    client = _async_observed_client([], _FAIL_AFTER_TEXT)
+    async with client.messages.stream(
+        model=_MODEL, max_tokens=100, messages=_MESSAGES
+    ) as stream:
+        with pytest.raises(ConnectionError, match="dropped"):
+            await _ASYNC_CONSUMERS[consumer](stream)
+    await client.close()
+
+    (chat,) = span_exporter.get_finished_spans()
+    _assert_dropped_connection(chat)
+    _assert_partial_output(chat, instrument_content_capture)
 
 
 def test_sync_messages_stream_text_stream_close_before_read_closes_the_sdk_generator(
