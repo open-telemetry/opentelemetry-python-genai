@@ -5,26 +5,55 @@
 
 from __future__ import annotations
 
+import inspect
+import mimetypes
 import os
-from collections.abc import Callable, Iterable
+import sys
+import urllib.parse
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
+    from agno.media import Audio, File, Image, Video
+
+    # Renamed from agno.models.metrics.Metrics in Agno 3; TYPE_CHECKING keeps 2.x runtime-safe.
+    from agno.metrics import MessageMetrics
+    from agno.models.base import MessageData, Model
+    from agno.models.message import Message
+    from agno.models.response import ModelResponse
+
+    MediaItem = Image | Audio | Video | File
 
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
 )
+from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
+    InputMessage,
+    MessagePart,
+    Modality,
+    OutputMessage,
+    ReasoningPart,
     RetrievalDocument,
+    Role,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     ToolDefinition,
+    UriPart,
 )
 from opentelemetry.util.genai.utils import (
+    decode_base64,
     gen_ai_json_dumps,
     get_argument,
+    image_from_url,
     object_to_any_value,
+    tool_arguments_to_any_value,
 )
 
 
@@ -46,6 +75,169 @@ def safe_float(val: Any) -> float | None:
         return float(val)
     except (ValueError, TypeError):
         return None
+
+
+def extract_model_id(instance: Any) -> str | None:
+    """Extract request model identifier from an Agno model or embedder instance."""
+    model = (
+        getattr(instance, "id", None)
+        or getattr(instance, "model", None)
+        or getattr(instance, "name", None)
+    )
+    return str(model) if model is not None else None
+
+
+def populate_provider_data(
+    invocation: InferenceInvocation,
+    provider_data: Any,
+) -> None:
+    """Populate response_id and response_model_name from provider_data dict."""
+    if not isinstance(provider_data, Mapping):
+        return
+    typed_data = cast(Mapping[str, Any], provider_data)
+    resp_id = typed_data.get("id")
+    if resp_id is None or resp_id == "":
+        resp_id = typed_data.get("response_id")
+    if resp_id is not None and str(resp_id):
+        invocation.response_id = str(resp_id)
+    resp_model = typed_data.get("model")
+    if resp_model is not None and str(resp_model):
+        invocation.response_model_name = str(resp_model)
+
+
+_GOOGLE_PROVIDERS = (
+    GenAiProviderNameValues.GCP_GEMINI.value,
+    GenAiProviderNameValues.GCP_VERTEX_AI.value,
+)
+
+_UNCACHED_INPUT_PROVIDERS = (
+    GenAiProviderNameValues.ANTHROPIC.value,
+    GenAiProviderNameValues.AWS_BEDROCK.value,
+)
+
+_UNCACHED_INPUT_CLASSES = frozenset(
+    {"Claude", "Anthropic", "AnthropicClaude", "AwsBedrock", "Bedrock"}
+)
+
+_CUMULATIVE_STREAM_USAGE_CLASSES = frozenset({"Gemini", "Google"})
+
+_EXCLUDED_REASONING_OUTPUT_CLASSES = frozenset(
+    {"Gemini", "Google", "GeminiInteractions"}
+)
+
+# Adapters whose Agno usage parser reads OpenAI-schema totals (where
+# input_tokens already includes cached tokens and output_tokens already
+# includes reasoning tokens), even when routed to Anthropic/Bedrock/Google.
+_OPENAI_SCHEMA_USAGE_CLASSES = frozenset(
+    {
+        "OpenAIChat",
+        "OpenAIResponses",
+        "OpenResponses",
+        "OpenAILike",
+        "LiteLLM",
+        "LiteLLMOpenAI",
+        "OpenRouter",
+        "AzureAIFoundry",
+        "Groq",
+        "MistralChat",
+        "Perplexity",
+        "RampRouter",
+    }
+)
+
+
+def _has_mro_class(model: Model | None, class_names: frozenset[str]) -> bool:
+    if model is None:
+        return False
+    return any(cls.__name__ in class_names for cls in type(model).__mro__)
+
+
+def has_model_token_usage(metrics: MessageMetrics | None) -> bool:
+    """Return True if an Agno metrics object has any positive token usage counts."""
+    if metrics is None:
+        return False
+    return any(
+        val > 0
+        for val in (
+            metrics.input_tokens,
+            metrics.output_tokens,
+            metrics.total_tokens,
+            metrics.cache_read_tokens,
+            metrics.cache_write_tokens,
+            metrics.reasoning_tokens,
+            metrics.audio_input_tokens,
+            metrics.audio_output_tokens,
+        )
+    )
+
+
+def _uses_uncached_input_tokens(
+    invocation: InferenceInvocation,
+    model: Model | None = None,
+) -> bool:
+    if _has_mro_class(model, _UNCACHED_INPUT_CLASSES):
+        return True
+    if _has_mro_class(model, _OPENAI_SCHEMA_USAGE_CLASSES):
+        return False
+    return invocation.provider in _UNCACHED_INPUT_PROVIDERS
+
+
+def uses_cumulative_stream_usage(
+    invocation: InferenceInvocation,
+    model: Model | None = None,
+) -> bool:
+    """Return True for providers whose streaming chunks carry cumulative usage totals."""
+    if _has_mro_class(model, _CUMULATIVE_STREAM_USAGE_CLASSES):
+        return True
+    if _has_mro_class(model, _OPENAI_SCHEMA_USAGE_CLASSES):
+        return False
+    return invocation.provider in _GOOGLE_PROVIDERS
+
+
+def _excludes_reasoning_from_output_tokens(
+    invocation: InferenceInvocation,
+    model: Model | None = None,
+) -> bool:
+    if _has_mro_class(model, _EXCLUDED_REASONING_OUTPUT_CLASSES):
+        return True
+    if _has_mro_class(model, _OPENAI_SCHEMA_USAGE_CLASSES):
+        return False
+    return invocation.provider in _GOOGLE_PROVIDERS
+
+
+def record_model_token_usage(
+    invocation: InferenceInvocation,
+    metrics: MessageMetrics | None,
+    model: Model | None = None,
+) -> None:
+    """Populate token usage fields on an InferenceInvocation from Agno metrics."""
+    if metrics is None:
+        return
+    input_tokens = metrics.input_tokens
+    cache_read_tokens = metrics.cache_read_tokens
+    cache_write_tokens = metrics.cache_write_tokens
+    if cache_read_tokens > 0:
+        invocation.cache_read_input_tokens = cache_read_tokens
+    if cache_write_tokens > 0:
+        invocation.cache_write_input_tokens = cache_write_tokens
+
+    if _uses_uncached_input_tokens(invocation, model):
+        cache_read_count = max(0, cache_read_tokens)
+        cache_write_count = max(0, cache_write_tokens)
+        input_tokens += cache_read_count + cache_write_count
+    invocation.input_tokens = input_tokens
+
+    output_tokens = metrics.output_tokens
+    reasoning_tokens = metrics.reasoning_tokens
+    if reasoning_tokens > 0:
+        invocation.thinking_tokens = reasoning_tokens
+        if _excludes_reasoning_from_output_tokens(invocation, model):
+            output_tokens += reasoning_tokens
+    invocation.output_tokens = output_tokens
+    if metrics.audio_input_tokens > 0:
+        invocation.audio_input_tokens = metrics.audio_input_tokens
+    if metrics.audio_output_tokens > 0:
+        invocation.audio_output_tokens = metrics.audio_output_tokens
 
 
 def format_retrieval_document(doc: Document) -> RetrievalDocument:
@@ -242,6 +434,65 @@ def extract_session_id(
 
 _UNKNOWN_PROVIDER = "unknown"
 
+# Mapping of raw provider identifiers to GenAI semantic conventions standard values.
+_KNOWN_PROVIDERS: dict[str, str] = {
+    "openai": GenAiProviderNameValues.OPENAI.value,
+    "azure": GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "azure_openai": GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "azure-openai": GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "azure_ai": GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+    "azure_ai_inference": GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+    "azure-ai-inference": GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+    "aws": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "awsbedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "aws_bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "aws-bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "amazon_bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "bedrock_converse": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "anthropic": GenAiProviderNameValues.ANTHROPIC.value,
+    "cohere": GenAiProviderNameValues.COHERE.value,
+    "google": GenAiProviderNameValues.GCP_GEMINI.value,
+    "gemini": GenAiProviderNameValues.GCP_GEMINI.value,
+    "google_generativeai": GenAiProviderNameValues.GCP_GEMINI.value,
+    "vertex_ai": GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "vertex_ai_beta": GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "vertexai": GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "google_vertexai": GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "gcp_vertex_ai": GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "mistral": GenAiProviderNameValues.MISTRAL_AI.value,
+    "mistralai": GenAiProviderNameValues.MISTRAL_AI.value,
+    "mistral_ai": GenAiProviderNameValues.MISTRAL_AI.value,
+    "groq": GenAiProviderNameValues.GROQ.value,
+    "deepseek": GenAiProviderNameValues.DEEPSEEK.value,
+    "watsonx": GenAiProviderNameValues.IBM_WATSONX_AI.value,
+    "ibm_watsonx_ai": GenAiProviderNameValues.IBM_WATSONX_AI.value,
+    "perplexity": GenAiProviderNameValues.PERPLEXITY.value,
+    "xai": GenAiProviderNameValues.X_AI.value,
+    "x_ai": GenAiProviderNameValues.X_AI.value,
+    "ollama": "ollama",
+    "fireworks": "fireworks",
+    "together": "together",
+    "huggingface": "huggingface",
+    "langdb": "langdb",
+    "nebius": "nebius",
+    "vllm": "vllm",
+    "cerebras": "cerebras",
+    "cloudflare": "cloudflare",
+    "dashscope": "dashscope",
+    "deepinfra": "deepinfra",
+    "internlm": "internlm",
+    "llama_cpp": "llama_cpp",
+    "lmstudio": "lmstudio",
+    "minimax": "minimax",
+    "moonshot": "moonshot",
+    "openrouter": "openrouter",
+    "sambanova": "sambanova",
+    "azureaifoundry": GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+    "azure_ai_foundry": GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+    "azure-ai-foundry": GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+}
+
 # Mapping of known embedder class names to provider values.
 _CLASS_NAME_TO_PROVIDER: dict[str, str] = {
     "OpenAIEmbedder": GenAiProviderNameValues.OPENAI.value,
@@ -263,23 +514,1188 @@ _CLASS_NAME_TO_PROVIDER: dict[str, str] = {
 }
 
 
+def _uses_vertex_ai(instance: Model | Embedder) -> bool:
+    # Inspect an already-attached client without invoking lazy properties
+    # (e.g. GeminiEmbedder.client constructs genai.Client on access).
+    for attr in ("gemini_client", "client"):
+        raw: object = inspect.getattr_static(instance, attr, None)
+        if raw is not None and not hasattr(type(raw), "__get__"):
+            client_vertexai = getattr(raw, "vertexai", None)
+            if isinstance(client_vertexai, bool):
+                return client_vertexai
+
+    env_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in (
+        "true",
+        "1",
+    )
+    # Agno merges instance.client_params last before genai.Client(**params),
+    # overriding instance.vertexai and env defaults.
+    client_params = getattr(instance, "client_params", None)
+    if isinstance(client_params, Mapping):
+        typed_params = cast(Mapping[str, Any], client_params)
+        if "vertexai" in typed_params:
+            override = typed_params["vertexai"]
+            if override is not None:
+                return bool(override)
+            return env_vertexai
+
+    return bool(getattr(instance, "vertexai", False)) or env_vertexai
+
+
+def _resolve_google_provider(instance: Model | Embedder) -> str:
+    return (
+        GenAiProviderNameValues.GCP_VERTEX_AI.value
+        if _uses_vertex_ai(instance)
+        else GenAiProviderNameValues.GCP_GEMINI.value
+    )
+
+
+_LITELLM_CLASSES = frozenset({"LiteLLM", "LiteLLMOpenAI"})
+_LITELLM_ROUTING_NAMES = frozenset(
+    {"litellm", "litellm_proxy", "openai_compatible", "custom_openai"}
+)
+_MODEL_PREFIX_TO_PROVIDER: tuple[tuple[str, str], ...] = (
+    ("gpt-", GenAiProviderNameValues.OPENAI.value),
+    ("chatgpt-", GenAiProviderNameValues.OPENAI.value),
+    ("o1-", GenAiProviderNameValues.OPENAI.value),
+    ("o3-", GenAiProviderNameValues.OPENAI.value),
+    ("o4-", GenAiProviderNameValues.OPENAI.value),
+    ("text-embedding-", GenAiProviderNameValues.OPENAI.value),
+    ("dall-e-", GenAiProviderNameValues.OPENAI.value),
+    ("whisper-", GenAiProviderNameValues.OPENAI.value),
+    ("tts-", GenAiProviderNameValues.OPENAI.value),
+    ("claude-", GenAiProviderNameValues.ANTHROPIC.value),
+    ("mistral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("codestral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("pixtral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("ministral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("mixtral-", GenAiProviderNameValues.MISTRAL_AI.value),
+    ("command-", GenAiProviderNameValues.COHERE.value),
+    ("deepseek-", GenAiProviderNameValues.DEEPSEEK.value),
+    ("grok-", GenAiProviderNameValues.X_AI.value),
+    ("sonar-", GenAiProviderNameValues.PERPLEXITY.value),
+)
+_EXACT_MODEL_TO_PROVIDER: dict[str, str] = {
+    "o1": GenAiProviderNameValues.OPENAI.value,
+    "o3": GenAiProviderNameValues.OPENAI.value,
+    "o4": GenAiProviderNameValues.OPENAI.value,
+    "sonar": GenAiProviderNameValues.PERPLEXITY.value,
+}
+
+
+def _normalize_provider_name(
+    raw: str,
+    instance: Model | Embedder,
+    *,
+    known_only: bool = False,
+) -> str | None:
+    p_name = raw.strip().lower()
+    if not p_name or p_name in _LITELLM_ROUTING_NAMES:
+        return None
+    if p_name in ("google", "gemini", "google_genai"):
+        return _resolve_google_provider(instance)
+    p_clean = "".join(c for c in p_name if c.isalnum())
+    if (mapped := _KNOWN_PROVIDERS.get(p_name)) is not None:
+        return mapped
+    if (mapped := _KNOWN_PROVIDERS.get(p_clean)) is not None:
+        return mapped
+    return None if known_only else p_name
+
+
+def _resolve_litellm_provider(instance: Model | Embedder) -> str:
+    """Resolve the routed provider behind an Agno LiteLLM adapter, or ``unknown``."""
+    provider_attr = getattr(instance, "provider", None)
+    if isinstance(provider_attr, str) and provider_attr.strip():
+        resolved = _normalize_provider_name(provider_attr, instance)
+        if resolved is not None:
+            return resolved
+
+    req_params = getattr(instance, "request_params", None)
+    custom_provider: str | None = None
+    if isinstance(req_params, Mapping):
+        raw_custom = cast(Mapping[str, Any], req_params).get(
+            "custom_llm_provider"
+        )
+        if isinstance(raw_custom, str) and raw_custom.strip():
+            custom_provider = raw_custom.strip()
+            resolved = _normalize_provider_name(custom_provider, instance)
+            if resolved is not None:
+                return resolved
+
+    model_id = getattr(instance, "id", None)
+    if isinstance(model_id, str) and model_id.strip():
+        candidate = model_id.strip()
+        if candidate.lower().startswith("litellm_proxy/"):
+            candidate = candidate.split("/", 1)[1].strip()
+        if "/" in candidate:
+            prefix = candidate.split("/", 1)[0]
+            resolved = _normalize_provider_name(
+                prefix, instance, known_only=True
+            )
+            if resolved is not None:
+                return resolved
+
+        litellm_mod = sys.modules.get("litellm")
+        get_llm_provider = (
+            getattr(litellm_mod, "get_llm_provider", None)
+            if litellm_mod is not None
+            else None
+        )
+        if callable(get_llm_provider):
+            try:
+                provider_result: Any = get_llm_provider(
+                    model=candidate,
+                    custom_llm_provider=custom_provider,
+                )
+                if isinstance(provider_result, tuple):
+                    typed_result = cast(tuple[Any, ...], provider_result)
+                    if len(typed_result) >= 2 and isinstance(
+                        typed_result[1], str
+                    ):
+                        resolved = _normalize_provider_name(
+                            typed_result[1], instance
+                        )
+                        if resolved is not None:
+                            return resolved
+            except Exception:
+                pass
+
+        lower_id = candidate.lower()
+        if lower_id.startswith("gemini-"):
+            return _resolve_google_provider(instance)
+        if lower_id in _EXACT_MODEL_TO_PROVIDER:
+            return _EXACT_MODEL_TO_PROVIDER[lower_id]
+        for prefix, provider in _MODEL_PREFIX_TO_PROVIDER:
+            if lower_id.startswith(prefix):
+                return provider
+
+    return _UNKNOWN_PROVIDER
+
+
+def _resolve_provider(
+    instance: Model | Embedder,
+    *,
+    class_name_to_provider: dict[str, str],
+    google_classes: tuple[str, ...],
+    stop_classes: tuple[str, ...],
+    allow_provider_attr: bool = True,
+) -> str:
+    # 1. Check the class hierarchy (most derived first)
+    for cls in type(instance).__mro__:
+        cls_name = cls.__name__
+        cls_mod = getattr(cls, "__module__", "")
+        if cls_name == "Claude":
+            if cls_mod == "agno.models.aws.claude":
+                return GenAiProviderNameValues.AWS_BEDROCK.value
+            if cls_mod == "agno.models.vertexai.claude":
+                return GenAiProviderNameValues.GCP_VERTEX_AI.value
+            if cls_mod == "agno.models.azure.claude":
+                return GenAiProviderNameValues.AZURE_AI_INFERENCE.value
+        if cls_name in google_classes:
+            return _resolve_google_provider(instance)
+        if cls_name in _LITELLM_CLASSES:
+            return _resolve_litellm_provider(instance)
+        if cls_name in stop_classes:
+            if getattr(instance, "provider", None) == getattr(
+                cls, "provider", None
+            ):
+                return _UNKNOWN_PROVIDER
+            break
+        if cls_name in class_name_to_provider:
+            return class_name_to_provider[cls_name]
+
+    # 2. Explicit provider attribute on the instance
+    if allow_provider_attr:
+        provider_attr = getattr(instance, "provider", None)
+        if isinstance(provider_attr, str) and provider_attr.strip():
+            p_name = provider_attr.strip().lower()
+            if p_name in _LITELLM_ROUTING_NAMES:
+                return _resolve_litellm_provider(instance)
+            resolved = _normalize_provider_name(provider_attr, instance)
+            if resolved is not None:
+                return resolved
+
+    return _UNKNOWN_PROVIDER
+
+
 def resolve_embedder_provider(embedder: Embedder) -> str:
     """Resolve the ``gen_ai.provider.name`` value for an Agno embedder instance."""
-    for cls in type(embedder).__mro__:
-        name = cls.__name__
-        if name in ("GeminiEmbedder", "GoogleEmbedder"):
-            vertexai = (
-                getattr(embedder, "vertexai", False)
-                or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower()
-                == "true"
+    return _resolve_provider(
+        embedder,
+        class_name_to_provider=_CLASS_NAME_TO_PROVIDER,
+        google_classes=("GeminiEmbedder", "GoogleEmbedder"),
+        stop_classes=("OpenAILikeEmbedder", "Embedder"),
+        allow_provider_attr=False,
+    )
+
+
+# Mapping of known model class names to provider values.
+_MODEL_CLASS_NAME_TO_PROVIDER: dict[str, str] = {
+    "OpenAIChat": GenAiProviderNameValues.OPENAI.value,
+    "OpenAIResponses": GenAiProviderNameValues.OPENAI.value,
+    "OpenAI": GenAiProviderNameValues.OPENAI.value,
+    "Claude": GenAiProviderNameValues.ANTHROPIC.value,
+    "Anthropic": GenAiProviderNameValues.ANTHROPIC.value,
+    "AnthropicClaude": GenAiProviderNameValues.ANTHROPIC.value,
+    "VertexAI": GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "AwsBedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "Bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
+    "AzureOpenAI": GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "AzureOpenAIResponses": GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "AzureAIFoundry": GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+    "MistralChat": GenAiProviderNameValues.MISTRAL_AI.value,
+    "Mistral": GenAiProviderNameValues.MISTRAL_AI.value,
+    "Groq": GenAiProviderNameValues.GROQ.value,
+    "Cohere": GenAiProviderNameValues.COHERE.value,
+    "DeepSeek": GenAiProviderNameValues.DEEPSEEK.value,
+    "WatsonX": GenAiProviderNameValues.IBM_WATSONX_AI.value,
+    "Perplexity": GenAiProviderNameValues.PERPLEXITY.value,
+    "xAI": GenAiProviderNameValues.X_AI.value,
+    "Ollama": "ollama",
+    "Fireworks": "fireworks",
+    "Together": "together",
+    "VLLM": "vllm",
+    "HuggingFace": "huggingface",
+    "Cerebras": "cerebras",
+    "CerebrasOpenAI": "cerebras",
+    "OpenRouter": "openrouter",
+    "Nebius": "nebius",
+    "LangDB": "langdb",
+    "LMStudio": "lmstudio",
+    "DashScope": "dashscope",
+    "DeepInfra": "deepinfra",
+    "Sambanova": "sambanova",
+    "Cloudflare": "cloudflare",
+    "AIMLAPI": "aimlapi",
+    "MiniMax": "minimax",
+    "MoonShot": "moonshot",
+    "InternLM": "internlm",
+    "Siliconflow": "siliconflow",
+    "LlamaCpp": "llama_cpp",
+    "Llama": "meta",
+    "LlamaOpenAI": "meta",
+}
+
+
+def resolve_model_provider(model: Model) -> str:
+    """Resolve the ``gen_ai.provider.name`` value for an Agno model instance."""
+    return _resolve_provider(
+        model,
+        class_name_to_provider=_MODEL_CLASS_NAME_TO_PROVIDER,
+        google_classes=("Gemini", "Google", "GeminiInteractions"),
+        stop_classes=("OpenAILike", "OpenResponses", "Model"),
+    )
+
+
+def extract_model_finish_reasons(
+    assistant_message: Message | None = None,
+    stream_data: MessageData | None = None,
+) -> list[str]:
+    """Derive gen_ai.response.finish_reasons from assistant message or stream data."""
+    provider_data: Any = None
+    if assistant_message is not None:
+        provider_data = _get_property_value(assistant_message, "provider_data")
+    if not provider_data and stream_data is not None:
+        provider_data = stream_data.response_provider_data
+
+    if isinstance(provider_data, dict):
+        raw_reason = _get_property_value(
+            provider_data, "finish_reason"
+        ) or _get_property_value(provider_data, "stop_reason")
+        if raw_reason is not None:
+            r = str(raw_reason).lower()
+            if r in ("stop", "end_turn", "stop_sequence"):
+                return ["stop"]
+            if r in ("tool_calls", "tool_use", "function_call"):
+                return ["tool_call"]
+            if r in ("length", "max_tokens"):
+                return ["length"]
+            if r in ("content_filter", "safety"):
+                return ["content_filter"]
+            return [r]
+
+    return []
+
+
+_FORMAT_MIME_TYPES: dict[str, str] = {
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "ogg": "audio/ogg",
+    "flac": "audio/flac",
+    "m4a": "audio/mp4",
+    "aac": "audio/aac",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "gif": "image/gif",
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+    "mov": "video/quicktime",
+    "avi": "video/x-msvideo",
+    "pdf": "application/pdf",
+    "txt": "text/plain",
+    "csv": "text/csv",
+    "json": "application/json",
+    "xml": "text/xml",
+    "html": "text/html",
+    "md": "text/markdown",
+}
+
+
+def _mime_type_from_format(fmt: str, modality: Modality) -> str | None:
+    normalized = fmt.lower().lstrip(".")
+    if not normalized:
+        return None
+    if normalized in _FORMAT_MIME_TYPES:
+        return _FORMAT_MIME_TYPES[normalized]
+    guessed, _ = mimetypes.guess_type(f"file.{normalized}")
+    if guessed:
+        return guessed
+    if modality in (Modality.IMAGE, Modality.AUDIO, Modality.VIDEO):
+        return f"{modality.value}/{normalized}"
+    return f"application/{normalized}"
+
+
+def _infer_mime_type(media: MediaItem, modality: Modality) -> str | None:
+    if media.mime_type:
+        return str(media.mime_type)
+    if media.format:
+        return _mime_type_from_format(str(media.format), modality)
+    for path_attr in ("filepath", "filename", "url"):
+        path_val = getattr(media, path_attr, None)
+        if path_val and not str(path_val).startswith("data:"):
+            guessed, _ = mimetypes.guess_type(str(path_val))
+            if guessed:
+                return guessed
+    return None
+
+
+def _uses_base64_output_audio(model: Model | None) -> bool:
+    if model is None:
+        return False
+    return any(cls.__name__ == "OpenAIChat" for cls in type(model).__mro__)
+
+
+def _media_item_to_part(
+    media: MediaItem,
+    modality: Modality,
+    *,
+    decode_base64_bytes: bool = False,
+) -> MessagePart | None:
+    mime_type = _infer_mime_type(media, modality)
+
+    if media.content is not None:
+        if isinstance(media.content, bytes):
+            content_bytes = media.content
+            if decode_base64_bytes:
+                try:
+                    decoded = decode_base64(media.content.decode("ascii"))
+                    if decoded is not None:
+                        content_bytes = decoded
+                except UnicodeDecodeError:
+                    pass
+            return BlobPart(
+                mime_type=mime_type,
+                modality=modality,
+                content=content_bytes,
             )
-            return (
-                GenAiProviderNameValues.GCP_VERTEX_AI.value
-                if vertexai
-                else GenAiProviderNameValues.GCP_GEMINI.value
+        if isinstance(media.content, str):
+            content_bytes = (
+                decoded
+                if modality != Modality.DOCUMENT
+                and (decoded := decode_base64(media.content)) is not None
+                else media.content.encode("utf-8")
             )
-        if name in ("OpenAILikeEmbedder", "Embedder"):
-            break
-        if name in _CLASS_NAME_TO_PROVIDER:
-            return _CLASS_NAME_TO_PROVIDER[name]
-    return _UNKNOWN_PROVIDER
+            return BlobPart(
+                mime_type=mime_type,
+                modality=modality,
+                content=content_bytes,
+            )
+
+    url = media.url
+    media_ref = getattr(media, "media_reference", None)
+    if not url and media_ref is not None:
+        url = getattr(media_ref, "url", None)
+    if url:
+        url_str = str(url)
+        if url_str.startswith("data:"):
+            part = image_from_url(url_str, modality=modality)
+            if isinstance(part, BlobPart) and part.mime_type is None:
+                part.mime_type = mime_type
+            return part
+        return UriPart(
+            mime_type=mime_type,
+            modality=modality,
+            uri=url_str,
+        )
+
+    if media.filepath is not None:
+        return UriPart(
+            mime_type=mime_type,
+            modality=modality,
+            uri=str(media.filepath),
+        )
+
+    external = getattr(media, "external", None)
+    if external is not None:
+        ext_uri = _get_property_value(external, "uri") or _get_property_value(
+            external, "url"
+        )
+        if ext_uri:
+            return UriPart(
+                mime_type=mime_type,
+                modality=modality,
+                uri=str(ext_uri),
+            )
+        ext_id = _get_property_value(external, "id") or _get_property_value(
+            external, "name"
+        )
+        if ext_id:
+            return FilePart(
+                mime_type=mime_type,
+                modality=modality,
+                file_id=str(ext_id),
+            )
+
+    if media.id:
+        return FilePart(
+            mime_type=mime_type,
+            modality=modality,
+            file_id=str(media.id),
+        )
+
+    return None
+
+
+def _append_media_items(
+    parts: list[MessagePart],
+    items: Sequence[MediaItem] | MediaItem | None,
+    modality: Modality,
+    *,
+    decode_base64_bytes: bool = False,
+) -> None:
+    if items is None:
+        return
+    if isinstance(items, Sequence):
+        for item in items:
+            if (
+                part := _media_item_to_part(
+                    item, modality, decode_base64_bytes=decode_base64_bytes
+                )
+            ) is not None:
+                parts.append(part)
+    elif (
+        part := _media_item_to_part(
+            items, modality, decode_base64_bytes=decode_base64_bytes
+        )
+    ) is not None:
+        parts.append(part)
+
+
+def _extract_media_parts(
+    obj: Message | ModelResponse,
+    stream_data: MessageData | None = None,
+    *,
+    model: Model | None = None,
+    stream_images: Sequence[Image] | None = None,
+    stream_videos: Sequence[Video] | None = None,
+) -> list[MessagePart]:
+    parts: list[MessagePart] = []
+    _append_media_items(parts, obj.images, Modality.IMAGE)
+    if stream_images:
+        _append_media_items(parts, stream_images, Modality.IMAGE)
+    else:
+        image_output = getattr(obj, "image_output", None) or (
+            getattr(stream_data, "response_image", None)
+            if stream_data is not None
+            else None
+        )
+        _append_media_items(parts, image_output, Modality.IMAGE)
+
+    _append_media_items(parts, obj.audio, Modality.AUDIO)
+    _append_media_items(parts, getattr(obj, "audios", None), Modality.AUDIO)
+    audio_output = getattr(obj, "audio_output", None) or (
+        getattr(stream_data, "response_audio", None)
+        if stream_data is not None
+        else None
+    )
+    _append_media_items(
+        parts,
+        audio_output,
+        Modality.AUDIO,
+        decode_base64_bytes=_uses_base64_output_audio(model),
+    )
+
+    _append_media_items(parts, obj.videos, Modality.VIDEO)
+    if stream_videos:
+        _append_media_items(parts, stream_videos, Modality.VIDEO)
+    else:
+        video_output = getattr(obj, "video_output", None) or (
+            getattr(stream_data, "response_video", None)
+            if stream_data is not None
+            else None
+        )
+        _append_media_items(parts, video_output, Modality.VIDEO)
+
+    _append_media_items(parts, obj.files, Modality.DOCUMENT)
+    file_output = getattr(obj, "file_output", None) or (
+        getattr(stream_data, "response_file", None)
+        if stream_data is not None
+        else None
+    )
+    _append_media_items(parts, file_output, Modality.DOCUMENT)
+    return parts
+
+
+def has_stream_data_content(stream_data: MessageData | None) -> bool:
+    """Return True if MessageData has accumulated text, reasoning, tool calls, or media."""
+    if stream_data is None:
+        return False
+    return bool(
+        stream_data.response_content
+        or stream_data.response_reasoning_content
+        or stream_data.response_tool_calls
+        or stream_data.response_audio
+        or stream_data.response_image
+        or stream_data.response_video
+        or getattr(stream_data, "response_file", None)
+    )
+
+
+def has_model_output_content(obj: Message | ModelResponse | None) -> bool:
+    """Return True if a Message or ModelResponse contains text, tool calls, reasoning, or media."""
+    if obj is None:
+        return False
+    return bool(
+        obj.content
+        or obj.tool_calls
+        or obj.reasoning_content
+        or obj.images
+        or obj.audio
+        or obj.videos
+        or obj.files
+        or getattr(obj, "audios", None)
+        or getattr(obj, "image_output", None)
+        or getattr(obj, "audio_output", None)
+        or getattr(obj, "video_output", None)
+        or getattr(obj, "file_output", None)
+    )
+
+
+def _normalize_stream_tool_calls(
+    raw_tool_calls: Sequence[Any],
+    model: Model | None = None,
+) -> list[Any]:
+    tool_calls: list[Any] = list(raw_tool_calls)
+    if model is not None:
+        parse_fn = getattr(model, "parse_tool_calls", None)
+        if callable(parse_fn):
+            try:
+                parsed = parse_fn(tool_calls)
+                if isinstance(parsed, list):
+                    tool_calls = cast(list[Any], parsed)
+            except Exception:
+                pass
+    if any(not isinstance(tc, Mapping) for tc in tool_calls):
+        merged: list[dict[str, Any]] = []
+        for tc in tool_calls:
+            if isinstance(tc, Mapping):
+                merged.append(dict(cast(Mapping[str, Any], tc)))
+                continue
+            idx = safe_int(getattr(tc, "index", None)) or 0
+            tc_id = getattr(tc, "id", None)
+            tc_type = getattr(tc, "type", None)
+            fn = getattr(tc, "function", None)
+            fn_name = (
+                _get_property_value(fn, "name") if fn is not None else None
+            )
+            fn_args = (
+                _get_property_value(fn, "arguments")
+                if fn is not None
+                else None
+            )
+            if len(merged) <= idx:
+                merged.extend({} for _ in range(idx - len(merged) + 1))
+            entry = merged[idx]
+            if not entry:
+                entry["id"] = tc_id
+                entry["type"] = tc_type
+                entry["function"] = {
+                    "name": str(fn_name) if fn_name else "",
+                    "arguments": str(fn_args) if fn_args else "",
+                }
+            else:
+                if fn_name:
+                    entry["function"]["name"] += str(fn_name)
+                if fn_args:
+                    entry["function"]["arguments"] += str(fn_args)
+                if tc_id:
+                    entry["id"] = tc_id
+                if tc_type:
+                    entry["type"] = tc_type
+        return [e for e in merged if e]
+    return tool_calls
+
+
+def _extract_tool_call_parts(
+    tool_calls: Sequence[Any] | None,
+) -> list[MessagePart]:
+    parts: list[MessagePart] = []
+    if not tool_calls:
+        return parts
+    for tc in tool_calls:
+        tc_id = _get_property_value(tc, "call_id")
+        if tc_id is None or tc_id == "":
+            tc_id = _get_property_value(tc, "id")
+        fn = _get_property_value(tc, "function")
+        target = fn if fn is not None else tc
+        fn_name_val = _get_property_value(target, "name")
+        fn_name = str(fn_name_val) if fn_name_val else ""
+        fn_args = tool_arguments_to_any_value(
+            _get_property_value(target, "arguments")
+        )
+        parts.append(
+            ToolCallRequestPart(
+                id=str(tc_id) if tc_id is not None else None,
+                name=fn_name,
+                arguments=fn_args,
+            )
+        )
+    return parts
+
+
+def _bedrock_media_block_to_part(
+    block: Mapping[str, Any],
+    modality: Modality,
+) -> MessagePart | None:
+    fmt = block.get("format")
+    mime_type = (
+        _mime_type_from_format(fmt, modality) if isinstance(fmt, str) else None
+    )
+    if mime_type is None and modality == Modality.DOCUMENT:
+        name = block.get("name")
+        if isinstance(name, str) and name:
+            mime_type = mimetypes.guess_type(name)[0]
+    source = block.get("source")
+    if not isinstance(source, Mapping):
+        return None
+    typed_source = cast(Mapping[str, Any], source)
+    raw_bytes = typed_source.get("bytes")
+    if isinstance(raw_bytes, (bytes, bytearray)):
+        return BlobPart(
+            mime_type=mime_type,
+            modality=modality,
+            content=bytes(raw_bytes),
+        )
+    if (
+        isinstance(raw_bytes, str)
+        and (decoded := decode_base64(raw_bytes)) is not None
+    ):
+        return BlobPart(
+            mime_type=mime_type,
+            modality=modality,
+            content=decoded,
+        )
+    if modality == Modality.DOCUMENT:
+        src_text = typed_source.get("text")
+        if isinstance(src_text, str):
+            return BlobPart(
+                mime_type=mime_type or "text/plain",
+                modality=Modality.DOCUMENT,
+                content=src_text.encode("utf-8"),
+            )
+    s3_location = typed_source.get("s3Location")
+    if isinstance(s3_location, Mapping):
+        s3_uri = cast(Mapping[str, Any], s3_location).get("uri")
+        if isinstance(s3_uri, str) and s3_uri:
+            return UriPart(
+                mime_type=mime_type,
+                modality=modality,
+                uri=s3_uri,
+            )
+    return None
+
+
+def _bedrock_content_block_to_part(
+    item: Mapping[str, Any],
+) -> MessagePart | None:
+    for key, modality in (
+        ("image", Modality.IMAGE),
+        ("video", Modality.VIDEO),
+        ("audio", Modality.AUDIO),
+        ("document", Modality.DOCUMENT),
+    ):
+        media_block = item.get(key)
+        if isinstance(media_block, Mapping):
+            return _bedrock_media_block_to_part(
+                cast(Mapping[str, Any], media_block), modality
+            )
+
+    reasoning_block = item.get("reasoningContent")
+    if isinstance(reasoning_block, Mapping):
+        typed_reasoning = cast(Mapping[str, Any], reasoning_block)
+        reasoning_text = typed_reasoning.get("reasoningText")
+        if isinstance(reasoning_text, Mapping):
+            r_text = cast(Mapping[str, Any], reasoning_text).get("text")
+            if isinstance(r_text, str) and r_text:
+                return ReasoningPart(content=r_text)
+        direct_text = typed_reasoning.get("text")
+        if isinstance(direct_text, str) and direct_text:
+            return ReasoningPart(content=direct_text)
+        return None
+
+    tool_use = item.get("toolUse")
+    if isinstance(tool_use, Mapping):
+        typed_tu = cast(Mapping[str, Any], tool_use)
+        tc_id = typed_tu.get("toolUseId")
+        tc_name = typed_tu.get("name")
+        tc_input = typed_tu.get("input")
+        return ToolCallRequestPart(
+            id=str(tc_id) if tc_id is not None else None,
+            name=str(tc_name) if tc_name else "",
+            arguments=tool_arguments_to_any_value(tc_input),
+        )
+
+    tool_result = item.get("toolResult")
+    if isinstance(tool_result, Mapping):
+        typed_tr = cast(Mapping[str, Any], tool_result)
+        tr_id = typed_tr.get("toolUseId")
+        tr_content = typed_tr.get("content")
+        return ToolCallResponsePart(
+            id=str(tr_id) if tr_id is not None else None,
+            response=object_to_any_value(tr_content),
+        )
+
+    return None
+
+
+def _content_block_to_part(item: Any) -> MessagePart | None:
+    if isinstance(item, str):
+        return TextPart(content=item) if item else None
+
+    part_type = _get_property_value(item, "type")
+    text = _get_property_value(item, "text")
+    if part_type in ("text", "input_text", "output_text") or (
+        part_type is None and isinstance(text, str)
+    ):
+        if isinstance(text, str) and text:
+            return TextPart(content=text)
+        return None
+
+    if part_type is None:
+        if isinstance(item, Mapping):
+            return _bedrock_content_block_to_part(
+                cast(Mapping[str, Any], item)
+            )
+        return None
+
+    if part_type in ("thinking", "reasoning"):
+        reasoning = (
+            _get_property_value(item, "thinking")
+            or _get_property_value(item, "reasoning")
+            or text
+        )
+        if isinstance(reasoning, str) and reasoning:
+            return ReasoningPart(content=reasoning)
+        return None
+
+    if part_type == "refusal":
+        refusal = _get_property_value(item, "refusal")
+        if isinstance(refusal, str) and refusal:
+            return TextPart(content=refusal)
+        return None
+
+    if part_type in ("image_url", "input_image"):
+        image_url = _get_property_value(item, "image_url")
+        if not isinstance(image_url, str):
+            image_url = _get_property_value(image_url, "url")
+        if isinstance(image_url, str) and image_url:
+            return image_from_url(image_url)
+        file_id = _get_property_value(item, "file_id")
+        if isinstance(file_id, str) and file_id:
+            mime = _get_property_value(item, "mime_type")
+            return FilePart(
+                mime_type=mime if isinstance(mime, str) else None,
+                modality=Modality.IMAGE,
+                file_id=file_id,
+            )
+        return None
+
+    if part_type in ("video_url", "input_video", "video"):
+        video_url = _get_property_value(item, "video_url")
+        if not isinstance(video_url, str):
+            video_url = _get_property_value(video_url, "url")
+        if not isinstance(video_url, str):
+            video_url = _get_property_value(item, "url")
+        if isinstance(video_url, str) and video_url:
+            return image_from_url(video_url, modality=Modality.VIDEO)
+        file_id = _get_property_value(item, "file_id") or _get_property_value(
+            item, "id"
+        )
+        if isinstance(file_id, str) and file_id:
+            mime = _get_property_value(item, "mime_type")
+            return FilePart(
+                mime_type=mime if isinstance(mime, str) else None,
+                modality=Modality.VIDEO,
+                file_id=file_id,
+            )
+        return None
+
+    if part_type == "image":
+        source = _get_property_value(item, "source")
+        if isinstance(source, Mapping):
+            source_type = _get_property_value(source, "type")
+            if source_type == "base64":
+                data = _get_property_value(source, "data")
+                media_type = _get_property_value(source, "media_type")
+                if (
+                    isinstance(data, str)
+                    and (decoded := decode_base64(data)) is not None
+                ):
+                    return BlobPart(
+                        mime_type=media_type
+                        if isinstance(media_type, str)
+                        else None,
+                        modality=Modality.IMAGE,
+                        content=decoded,
+                    )
+                return None
+            if source_type == "url":
+                src_url = _get_property_value(source, "url")
+                if isinstance(src_url, str) and src_url:
+                    return image_from_url(src_url)
+                return None
+            if source_type == "file":
+                src_file_id = _get_property_value(source, "file_id")
+                media_type = _get_property_value(source, "media_type")
+                if isinstance(src_file_id, str) and src_file_id:
+                    return FilePart(
+                        mime_type=media_type
+                        if isinstance(media_type, str)
+                        else None,
+                        modality=Modality.IMAGE,
+                        file_id=src_file_id,
+                    )
+                return None
+        b64_data = _get_property_value(item, "base64") or _get_property_value(
+            item, "data"
+        )
+        mime = _get_property_value(item, "mime_type") or _get_property_value(
+            item, "media_type"
+        )
+        if (
+            isinstance(b64_data, str)
+            and (decoded := decode_base64(b64_data)) is not None
+        ):
+            return BlobPart(
+                mime_type=mime if isinstance(mime, str) else None,
+                modality=Modality.IMAGE,
+                content=decoded,
+            )
+        img_url = _get_property_value(item, "url")
+        if isinstance(img_url, str) and img_url:
+            return image_from_url(img_url)
+        img_file_id = _get_property_value(
+            item, "file_id"
+        ) or _get_property_value(item, "id")
+        if isinstance(img_file_id, str) and img_file_id:
+            return FilePart(
+                mime_type=mime if isinstance(mime, str) else None,
+                modality=Modality.IMAGE,
+                file_id=img_file_id,
+            )
+        return None
+
+    if part_type in ("input_audio", "audio"):
+        audio_obj = _get_property_value(item, "input_audio") or item
+        data = _get_property_value(audio_obj, "data")
+        if (
+            isinstance(data, str)
+            and (decoded := decode_base64(data)) is not None
+        ):
+            fmt = _get_property_value(audio_obj, "format")
+            mime = (
+                _FORMAT_MIME_TYPES.get(fmt.lower().lstrip("."))
+                if isinstance(fmt, str)
+                else None
+            )
+            return BlobPart(
+                mime_type=mime,
+                modality=Modality.AUDIO,
+                content=decoded,
+            )
+        audio_url = _get_property_value(audio_obj, "url")
+        if isinstance(audio_url, str) and audio_url:
+            return image_from_url(audio_url, modality=Modality.AUDIO)
+        return None
+
+    if part_type in ("file", "input_file", "document"):
+        file_obj = (
+            _get_property_value(item, "file")
+            or _get_property_value(item, "source")
+            or item
+        )
+        filename = _get_property_value(file_obj, "filename")
+        mime_type = _get_property_value(
+            file_obj, "mime_type"
+        ) or _get_property_value(file_obj, "media_type")
+        if not isinstance(mime_type, str):
+            mime_type = (
+                mimetypes.guess_type(filename)[0]
+                if isinstance(filename, str) and filename
+                else None
+            )
+        if _get_property_value(file_obj, "type") == "text":
+            text_data = _get_property_value(
+                file_obj, "data"
+            ) or _get_property_value(file_obj, "text")
+            if isinstance(text_data, str):
+                return BlobPart(
+                    mime_type=mime_type or "text/plain",
+                    modality=Modality.DOCUMENT,
+                    content=text_data.encode("utf-8"),
+                )
+            return None
+        file_id = _get_property_value(
+            file_obj, "file_id"
+        ) or _get_property_value(file_obj, "id")
+        if isinstance(file_id, str) and file_id:
+            return FilePart(
+                mime_type=mime_type,
+                modality=Modality.DOCUMENT,
+                file_id=file_id,
+            )
+        file_data = _get_property_value(
+            file_obj, "file_data"
+        ) or _get_property_value(file_obj, "data")
+        if isinstance(file_data, str) and file_data:
+            if file_data.startswith("data:"):
+                return image_from_url(file_data, modality=Modality.DOCUMENT)
+            if (decoded := decode_base64(file_data)) is not None:
+                return BlobPart(
+                    mime_type=mime_type,
+                    modality=Modality.DOCUMENT,
+                    content=decoded,
+                )
+        file_url = (
+            _get_property_value(file_obj, "url")
+            or _get_property_value(file_obj, "uri")
+            or _get_property_value(file_obj, "file_url")
+        )
+        if isinstance(file_url, str) and file_url:
+            if file_url.startswith("data:"):
+                part = image_from_url(file_url, modality=Modality.DOCUMENT)
+                if isinstance(part, BlobPart) and part.mime_type is None:
+                    part.mime_type = mime_type
+                return part
+            if mime_type is None:
+                try:
+                    mime_type = (
+                        mimetypes.guess_type(
+                            urllib.parse.urlparse(file_url).path
+                        )[0]
+                        or mimetypes.guess_type(file_url)[0]
+                    )
+                except ValueError:
+                    mime_type = None
+            return UriPart(
+                mime_type=mime_type,
+                modality=Modality.DOCUMENT,
+                uri=file_url,
+            )
+        return None
+
+    if part_type == "tool_use":
+        tc_id = _get_property_value(item, "id")
+        tc_name = _get_property_value(item, "name")
+        tc_input = _get_property_value(item, "input")
+        return ToolCallRequestPart(
+            id=str(tc_id) if tc_id is not None else None,
+            name=str(tc_name) if tc_name else "",
+            arguments=tool_arguments_to_any_value(tc_input),
+        )
+
+    if part_type == "tool_result":
+        tr_id = _get_property_value(
+            item, "tool_use_id"
+        ) or _get_property_value(item, "id")
+        tr_content = _get_property_value(item, "content")
+        return ToolCallResponsePart(
+            id=str(tr_id) if tr_id is not None else None,
+            response=object_to_any_value(tr_content),
+        )
+
+    return None
+
+
+def _content_to_parts(
+    content: Any,
+    *,
+    allow_empty_text: bool = False,
+) -> list[MessagePart]:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        if content or allow_empty_text:
+            return [TextPart(content=content)]
+        return []
+    if isinstance(content, Sequence) and not isinstance(
+        content, (bytes, bytearray)
+    ):
+        parts: list[MessagePart] = []
+        for item in cast(Sequence[Any], content):
+            if (part := _content_block_to_part(item)) is not None:
+                parts.append(part)
+        if not parts and allow_empty_text:
+            return [TextPart(content="")]
+        return parts
+    formatted = format_content(content)
+    if formatted or allow_empty_text:
+        return [TextPart(content=formatted)]
+    return []
+
+
+_ROLE_ALIASES: dict[str, str] = {
+    "model": Role.ASSISTANT.value,
+    "ai": Role.ASSISTANT.value,
+    "human": Role.USER.value,
+    "function": Role.TOOL.value,
+}
+
+
+def format_model_input_messages(
+    messages: Iterable[Message],
+) -> list[InputMessage]:
+    """Format an iterable of Agno Message objects into InputMessage list."""
+    result: list[InputMessage] = []
+    fc_id_to_call_id: dict[str, str] = {}
+    for msg in messages:
+        raw_role = str(msg.role).strip().lower() if msg.role else ""
+        normalized_role = (
+            _ROLE_ALIASES.get(raw_role, raw_role)
+            if raw_role
+            else Role.USER.value
+        )
+        name_str = str(msg.name) if msg.name is not None else None
+
+        parts: list[MessagePart] = []
+
+        # Tool response message
+        if normalized_role == Role.TOOL.value or msg.tool_call_id is not None:
+            raw_tool_call_id = (
+                str(msg.tool_call_id) if msg.tool_call_id is not None else None
+            )
+            resolved_tool_call_id = (
+                fc_id_to_call_id.get(raw_tool_call_id, raw_tool_call_id)
+                if raw_tool_call_id is not None
+                else None
+            )
+            parts.append(
+                ToolCallResponsePart(
+                    id=resolved_tool_call_id,
+                    response=object_to_any_value(msg.content),
+                )
+            )
+            parts.extend(_extract_media_parts(msg))
+            result.append(
+                InputMessage(role=Role.TOOL.value, parts=parts, name=name_str)
+            )
+            continue
+
+        # Reasoning content
+        if msg.reasoning_content:
+            parts.append(ReasoningPart(content=str(msg.reasoning_content)))
+
+        # Tool calls requested by assistant in history
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                raw_id = _get_property_value(tc, "id")
+                call_id = _get_property_value(tc, "call_id")
+                if (
+                    raw_id is not None
+                    and call_id is not None
+                    and str(raw_id)
+                    and str(call_id)
+                ):
+                    fc_id_to_call_id[str(raw_id)] = str(call_id)
+        parts.extend(_extract_tool_call_parts(msg.tool_calls))
+
+        media_parts = _extract_media_parts(msg)
+
+        # Main content
+        if msg.content is not None:
+            parts.extend(
+                _content_to_parts(
+                    msg.content,
+                    allow_empty_text=not parts and not media_parts,
+                )
+            )
+
+        parts.extend(media_parts)
+
+        if parts:
+            result.append(
+                InputMessage(role=normalized_role, parts=parts, name=name_str)
+            )
+
+    return result
+
+
+def format_model_output_message(
+    assistant_message: Message | ModelResponse,
+    stream_data: MessageData | None = None,
+    model: Model | None = None,
+    *,
+    stream_images: Sequence[Image] | None = None,
+    stream_videos: Sequence[Video] | None = None,
+) -> OutputMessage:
+    """Format an Agno assistant message into an OutputMessage."""
+    parts: list[MessagePart] = []
+
+    reasoning = (
+        stream_data.response_reasoning_content
+        if stream_data and stream_data.response_reasoning_content
+        else None
+    ) or assistant_message.reasoning_content
+    if reasoning:
+        parts.append(ReasoningPart(content=str(reasoning)))
+
+    content = (
+        stream_data.response_content
+        if stream_data and stream_data.response_content
+        else assistant_message.content
+    )
+    if content is not None:
+        parts.extend(_content_to_parts(content))
+
+    parts.extend(
+        _extract_media_parts(
+            assistant_message,
+            stream_data=stream_data,
+            model=model,
+            stream_images=stream_images,
+            stream_videos=stream_videos,
+        )
+    )
+    if assistant_message.tool_calls:
+        tool_calls: Sequence[Any] | None = assistant_message.tool_calls
+    elif stream_data and stream_data.response_tool_calls:
+        tool_calls = _normalize_stream_tool_calls(
+            stream_data.response_tool_calls, model=model
+        )
+    else:
+        tool_calls = None
+    parts.extend(_extract_tool_call_parts(tool_calls))
+
+    if not parts:
+        parts.append(TextPart(content=""))
+
+    name = getattr(assistant_message, "name", None)
+    name_str = str(name) if name is not None else None
+
+    return OutputMessage(
+        role=Role.ASSISTANT.value,
+        parts=parts,
+        name=name_str,
+    )

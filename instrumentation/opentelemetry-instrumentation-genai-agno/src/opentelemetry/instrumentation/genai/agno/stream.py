@@ -5,14 +5,38 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+import contextlib
+import inspect
+from collections.abc import Awaitable, Callable, Iterator
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agno.agent import RunOutput
+    from agno.media import Image, Video
+    from agno.metrics import MessageMetrics
+    from agno.models.base import MessageData, Model
+    from agno.models.message import Message
+    from agno.models.response import ModelResponse
+    from agno.run.workflow import WorkflowRunOutput
+    from agno.team import TeamRunOutput
+
+    AgnoRunOutput = RunOutput | TeamRunOutput | WorkflowRunOutput
 
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
+    extract_model_finish_reasons,
     format_content,
+    format_model_output_message,
+    has_model_output_content,
+    has_model_token_usage,
+    has_stream_data_content,
+    populate_provider_data,
+    record_model_token_usage,
+    uses_cumulative_stream_usage,
 )
 from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
     LocalAgentInvocation,
     WorkflowInvocation,
 )
@@ -319,3 +343,362 @@ class AsyncAgnoWorkflowStreamWrapper(
         self._self_completed_content = None
         self._self_finish_reason = "stop"
         self._self_on_close = on_close
+
+
+class _ModelStreamMixin:
+    _self_invocation: InferenceInvocation | None
+    _self_start_invocation: Callable[[], InferenceInvocation] | None
+    _self_refresh_endpoint: Callable[[InferenceInvocation], None] | None
+    _self_assistant_message: Message | None
+    _self_stream_data: MessageData | None
+    _self_model: Model | None
+    _self_stream_images: list[Image]
+    _self_stream_videos: list[Video]
+    _self_last_chunk_usage: MessageMetrics | None
+
+    def _init_model_stream_state(
+        self,
+        *,
+        assistant_message: Message | None,
+        stream_data: MessageData | None,
+        model: Model | None,
+        start_invocation: Callable[[], InferenceInvocation] | None,
+        refresh_endpoint: Callable[[InferenceInvocation], None] | None,
+    ) -> None:
+        self._self_start_invocation = start_invocation
+        self._self_refresh_endpoint = refresh_endpoint
+        self._self_assistant_message = assistant_message
+        self._self_stream_data = stream_data
+        self._self_model = model
+        self._self_stream_images = []
+        self._self_stream_videos = []
+        self._self_last_chunk_usage = None
+
+    def _ensure_invocation(self) -> InferenceInvocation:
+        if self._self_invocation is None:
+            assert self._self_start_invocation is not None
+            invocation = self._self_start_invocation()
+            invocation.request_stream = True
+            self._self_invocation = invocation
+        return self._self_invocation
+
+    def _refresh_invocation_endpoint(
+        self, invocation: InferenceInvocation
+    ) -> None:
+        if self._self_refresh_endpoint is not None:
+            self._self_refresh_endpoint(invocation)
+
+    def _record_chunk_usage(self, usage: MessageMetrics) -> None:
+        if has_model_token_usage(usage):
+            self._self_last_chunk_usage = usage
+
+    def _process_chunk(self, chunk: ModelResponse) -> None:
+        invocation = self._ensure_invocation()
+        self._refresh_invocation_endpoint(invocation)
+        populate_provider_data(invocation, chunk.provider_data)
+        if chunk.response_usage is not None:
+            self._record_chunk_usage(chunk.response_usage)
+        if invocation.should_capture_content:
+            if chunk.images:
+                self._self_stream_images.extend(chunk.images)
+            if chunk.videos:
+                self._self_stream_videos.extend(chunk.videos)
+
+    def _finalize_telemetry(self, error: BaseException | None = None) -> None:
+        invocation = self._ensure_invocation()
+        self._refresh_invocation_endpoint(invocation)
+        if self._self_assistant_message is not None:
+            populate_provider_data(
+                invocation,
+                getattr(self._self_assistant_message, "provider_data", None),
+            )
+        if self._self_stream_data is not None:
+            populate_provider_data(
+                invocation,
+                self._self_stream_data.response_provider_data,
+            )
+
+        metrics: MessageMetrics | None = None
+        if (
+            self._self_last_chunk_usage is not None
+            and uses_cumulative_stream_usage(invocation, self._self_model)
+        ):
+            metrics = self._self_last_chunk_usage
+        else:
+            assistant_metrics = (
+                self._self_assistant_message.metrics
+                if self._self_assistant_message is not None
+                else None
+            )
+            if has_model_token_usage(assistant_metrics):
+                metrics = assistant_metrics
+            elif self._self_stream_data is not None:
+                sd_metrics = self._self_stream_data.response_metrics
+                if has_model_token_usage(sd_metrics):
+                    metrics = sd_metrics
+        if metrics is not None:
+            record_model_token_usage(
+                invocation, metrics, model=self._self_model
+            )
+
+        finish_reasons = extract_model_finish_reasons(
+            self._self_assistant_message, self._self_stream_data
+        )
+        if finish_reasons:
+            invocation.finish_reasons = finish_reasons
+
+        if invocation.should_capture_content:
+            if self._self_assistant_message is not None and (
+                has_model_output_content(self._self_assistant_message)
+                or has_stream_data_content(self._self_stream_data)
+                or bool(self._self_stream_images or self._self_stream_videos)
+            ):
+                invocation.output_messages = [
+                    format_model_output_message(
+                        self._self_assistant_message,
+                        stream_data=self._self_stream_data,
+                        model=self._self_model,
+                        stream_images=self._self_stream_images,
+                        stream_videos=self._self_stream_videos,
+                    )
+                ]
+
+        if error is not None:
+            invocation.fail(error)
+        else:
+            invocation.stop()
+
+    def _on_stream_end(self) -> None:
+        self._finalize_telemetry()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._finalize_telemetry(error)
+
+
+class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
+    """Stream wrapper for synchronous Agno model responses."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation | None = None,
+        assistant_message: Message | None = None,
+        stream_data: MessageData | None = None,
+        model: Model | None = None,
+        *,
+        start_invocation: Callable[[], InferenceInvocation] | None = None,
+        refresh_endpoint: Callable[[InferenceInvocation], None] | None = None,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_model_stream_state(
+            assistant_message=assistant_message,
+            stream_data=stream_data,
+            model=model,
+            start_invocation=start_invocation,
+            refresh_endpoint=refresh_endpoint,
+        )
+        outer = _CURRENT_OUTER_STREAM.get()
+        if outer is not None:
+            outer._bind_inner(self)
+
+    @contextlib.contextmanager
+    def _execution_context(self) -> Iterator[None]:
+        token = _CURRENT_MODEL_STREAM.set(self)
+        try:
+            with super()._execution_context():
+                yield
+        finally:
+            _CURRENT_MODEL_STREAM.reset(token)
+
+    def _advance(self, read: Callable[[], Any]) -> Any:
+        self._ensure_invocation()
+        return super()._advance(read)
+
+
+def record_model_stream_usage(model: Model, usage: MessageMetrics) -> None:
+    """Record per-chunk provider usage on the active model stream wrapper."""
+    current = _CURRENT_MODEL_STREAM.get()
+    if current is not None and current._self_model is model:
+        current._record_chunk_usage(usage)
+
+
+def get_active_model_stream_invocation(
+    model: Any,
+) -> InferenceInvocation | None:
+    """Return the active stream InferenceInvocation for ``model``, if any."""
+    current = _CURRENT_MODEL_STREAM.get()
+    if current is not None and current._self_model is model:
+        return current._ensure_invocation()
+    return None
+
+
+def register_model_delegate_stream(model: Any, stream: Any) -> None:
+    """Register an async delegate stream on the active model stream wrapper."""
+    current = _CURRENT_MODEL_STREAM.get()
+    if (
+        isinstance(current, AsyncAgnoModelStreamWrapper)
+        and current._self_model is model
+    ):
+        current._register_delegate_stream(stream)
+
+
+class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
+    """Stream wrapper for asynchronous Agno model responses."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation | None = None,
+        assistant_message: Message | None = None,
+        stream_data: MessageData | None = None,
+        model: Model | None = None,
+        *,
+        start_invocation: Callable[[], InferenceInvocation] | None = None,
+        refresh_endpoint: Callable[[InferenceInvocation], None] | None = None,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_model_stream_state(
+            assistant_message=assistant_message,
+            stream_data=stream_data,
+            model=model,
+            start_invocation=start_invocation,
+            refresh_endpoint=refresh_endpoint,
+        )
+        self._self_delegate_streams: list[Any] = []
+        outer = _CURRENT_OUTER_ASTREAM.get()
+        if outer is not None:
+            outer._bind_inner(self)
+
+    def _register_delegate_stream(self, stream: Any) -> None:
+        if stream is not None and stream not in self._self_delegate_streams:
+            self._self_delegate_streams.append(stream)
+
+    @contextlib.contextmanager
+    def _execution_context(self) -> Iterator[None]:
+        token = _CURRENT_MODEL_STREAM.set(self)
+        try:
+            with super()._execution_context():
+                yield
+        finally:
+            _CURRENT_MODEL_STREAM.reset(token)
+
+    async def _advance(self, read: Callable[[], Awaitable[Any]]) -> Any:
+        self._ensure_invocation()
+        return await super()._advance(read)
+
+    async def _close_stream(self) -> None:
+        delegates = list(reversed(self._self_delegate_streams))
+        self._self_delegate_streams.clear()
+        try:
+            await super()._close_stream()
+        finally:
+            for delegate in delegates:
+                aclose = getattr(delegate, "aclose", None)
+                if callable(aclose):
+                    try:
+                        res = aclose()
+                        if inspect.isawaitable(res):
+                            await res
+                    except Exception:
+                        pass
+
+
+_CURRENT_MODEL_STREAM: ContextVar[_ModelStreamMixin | None] = ContextVar(
+    "_CURRENT_MODEL_STREAM", default=None
+)
+_CURRENT_OUTER_STREAM: ContextVar[AgnoOuterSyncStreamWrapper | None] = (
+    ContextVar("_CURRENT_OUTER_STREAM", default=None)
+)
+_CURRENT_OUTER_ASTREAM: ContextVar[AsyncAgnoOuterStreamWrapper | None] = (
+    ContextVar("_CURRENT_OUTER_ASTREAM", default=None)
+)
+
+
+class _OuterStreamMixin:
+    _self_inner_stream: Any
+
+    def _bind_inner(self, inner: Any) -> None:
+        self._self_inner_stream = inner
+
+    def _process_chunk(self, chunk: Any) -> None:
+        pass
+
+    def _on_stream_end(self) -> None:
+        inner = self._self_inner_stream
+        if inner is not None and not inner._self_finalized:
+            inner._finalize_success()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        inner = self._self_inner_stream
+        if inner is not None and not inner._self_finalized:
+            inner._finalize_failure(error)
+
+
+class AgnoOuterSyncStreamWrapper(_OuterStreamMixin, SyncStreamWrapper[Any]):
+    """Stream wrapper for Model.response_stream that propagates finalization to the inner stream wrapper."""
+
+    def __init__(self, stream: Any) -> None:
+        super().__init__(stream)
+        self._self_inner_stream = None
+
+    @contextlib.contextmanager
+    def _execution_context(self) -> Iterator[None]:
+        token = _CURRENT_OUTER_STREAM.set(self)
+        try:
+            yield
+        finally:
+            _CURRENT_OUTER_STREAM.reset(token)
+
+    def _on_stream_end(self) -> None:
+        inner = self._self_inner_stream
+        if inner is not None and not inner._self_finalized:
+            inner.close()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        inner = self._self_inner_stream
+        if inner is not None and not inner._self_finalized:
+            inner.__exit__(type(error), error, error.__traceback__)
+
+
+class AsyncAgnoOuterStreamWrapper(_OuterStreamMixin, AsyncStreamWrapper[Any]):
+    """Stream wrapper for Model.aresponse_stream that propagates finalization to the inner stream wrapper."""
+
+    def __init__(self, stream: Any) -> None:
+        super().__init__(stream)
+        self._self_inner_stream = None
+
+    @contextlib.contextmanager
+    def _execution_context(self) -> Iterator[None]:
+        token = _CURRENT_OUTER_ASTREAM.set(self)
+        try:
+            yield
+        finally:
+            _CURRENT_OUTER_ASTREAM.reset(token)
+
+    async def _advance(self, read: Callable[[], Awaitable[Any]]) -> Any:
+        try:
+            return await super()._advance(read)
+        except StopAsyncIteration:
+            if self._self_inner_stream is not None:
+                try:
+                    await self._self_inner_stream._close_stream()
+                except Exception:
+                    pass
+            raise
+        except BaseException:
+            if self._self_inner_stream is not None:
+                try:
+                    await self._self_inner_stream._close_stream()
+                except Exception:
+                    pass
+            raise
+
+    async def _close_stream(self) -> None:
+        try:
+            await super()._close_stream()
+        finally:
+            if self._self_inner_stream is not None:
+                try:
+                    await self._self_inner_stream._close_stream()
+                except Exception:
+                    pass

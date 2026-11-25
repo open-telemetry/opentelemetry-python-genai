@@ -21,6 +21,16 @@ from opentelemetry.test_util_genai.conformance import (
 )
 
 from .conformance.agent import AgentScenario
+from .conformance.chat import (
+    ChatAudioOutputScenario,
+    ChatGeminiScenario,
+    ChatGeminiStreamingScenario,
+    ChatMultimodalScenario,
+    ChatOpenAIResponsesScenario,
+    ChatScenario,
+    ChatStreamingScenario,
+    ChatToolCallingScenario,
+)
 from .conformance.embedding import EmbeddingScenario
 from .conformance.retrieval import RetrievalScenario
 from .conformance.workflow import WorkflowScenario
@@ -32,6 +42,14 @@ from .conformance.workflow_streaming import WorkflowStreamingScenario
     "scenario",
     [
         pytest.param(AgentScenario()),
+        pytest.param(ChatScenario()),
+        pytest.param(ChatOpenAIResponsesScenario()),
+        pytest.param(ChatGeminiScenario()),
+        pytest.param(ChatGeminiStreamingScenario()),
+        pytest.param(ChatStreamingScenario()),
+        pytest.param(ChatToolCallingScenario()),
+        pytest.param(ChatMultimodalScenario()),
+        pytest.param(ChatAudioOutputScenario()),
         pytest.param(EmbeddingScenario()),
         pytest.param(RetrievalScenario()),
         pytest.param(WorkflowScenario()),
