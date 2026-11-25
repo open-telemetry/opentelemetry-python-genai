@@ -50,7 +50,7 @@ Check out the `manual example <examples/manual>`_ for more details.
 Instrumenting all clients
 *************************
 
-When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create`` and ``interactions.get`` operations.
+When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create``, ``interactions.get``, and ``aio.live.connect`` operations.
 You can also optionally capture prompts and responses as log events.
 
 Make sure to configure OpenTelemetry tracing, logging, and metrics to capture all telemetry emitted by the instrumentation.
@@ -104,6 +104,17 @@ pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
     GoogleGenAiSdkInstrumentor().instrument(
         content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
     )
+
+Truncating binary payloads (e.g. audio / image blobs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Inline binary media (such as realtime PCM output audio or inline images) is only buffered and recorded when content capture is enabled, and is stored on ``BlobPart.content`` as raw ``bytes``. For Gemini Live (``aio.live.connect``), ``realtime_inference`` spans do not emit a ``gen_ai.client.inference.operation.details`` log event and the ``gen_ai.client.realtime_session.started`` / ``ended`` events carry no message payload, so Live message and audio content is recorded only in ``SPAN_ONLY`` or ``SPAN_AND_EVENT`` mode or when a ``CompletionHook`` is configured. Streamed input audio chunks are not buffered (user speech transcripts are recorded when input transcription is enabled); pending non-audio input media and streamed output audio are bounded in memory per turn so always-on sessions cannot grow memory unboundedly.
+
+When content capture is enabled, ``BlobPart.content`` is passed to the OpenTelemetry SDK as raw ``bytes`` inside structured ``AnyValue`` maps/lists on both spans and log events. You can cap the size of each binary payload (and string field) without corrupting the surrounding message structure by configuring ``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT``, ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` / ``SpanLimits(max_span_attribute_length=...)``, or ``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`` / ``LoggerProvider(log_record_limits=LogRecordLimits(max_log_record_attribute_length=...))``.
+
+.. note::
+
+   Truncating ``bytes`` and ``bytearray`` attribute values requires `open-telemetry/opentelemetry-python#5855 <https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased version of ``opentelemetry-api``).
 
 
 Configuration recording
