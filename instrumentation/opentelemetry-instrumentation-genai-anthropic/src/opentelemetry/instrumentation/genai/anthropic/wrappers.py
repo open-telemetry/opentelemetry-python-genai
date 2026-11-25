@@ -249,14 +249,20 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
         if self._self_message_telemetry_finalized:
             return
         self._adopt_sdk_snapshot()
-        message = self._self_message
-        if message is not None:
-            capture_content = self._self_capture_content and bool(
-                message.content
-            )
-            _set_response_attributes(
-                self._self_invocation, message, capture_content
-            )
+        incomplete_response = self._is_incomplete_response()
+        _set_response_attributes(
+            self._self_invocation,
+            self._self_message,
+            self._self_capture_content and not incomplete_response,
+        )
+        if incomplete_response:
+            self._self_invocation.finish_reasons = ["error"]
+            if (
+                self._self_capture_content
+                and (output_messages := self._partial_output_messages())
+                is not None
+            ):
+                self._self_invocation.output_messages = output_messages
         self._self_invocation.fail(exc)
         self._self_message_telemetry_finalized = True
 

@@ -1307,9 +1307,17 @@ def test_sync_messages_stream_interrupted_mid_iteration(
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
-    assert (
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
-    )
+    if fail_after:
+        # A snapshot was adopted before the error, so the response counts as
+        # an incomplete early exit, the same as a caller-closed stream.
+        assert span.attributes[
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        ] == ("error",)
+    else:
+        assert (
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+            not in span.attributes
+        )
     if fail_after:
         assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
         assert isinstance(
@@ -1325,6 +1333,7 @@ def test_sync_messages_stream_interrupted_mid_iteration(
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "content": "Hello!"}],
+                "finish_reason": "error",
             }
         ]
     else:
@@ -2010,8 +2019,10 @@ def test_sync_messages_create_stream_propagation_error(
     assert isinstance(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
     )
-    assert (
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    # A snapshot was adopted before the error, so the response counts as an
+    # incomplete early exit, the same as a caller-closed stream.
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
     )
     if capture_content:
         assert _load_span_messages(
@@ -2020,6 +2031,7 @@ def test_sync_messages_create_stream_propagation_error(
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "content": "Hello!"}],
+                "finish_reason": "error",
             }
         ]
     else:
@@ -3412,8 +3424,10 @@ def test_sync_messages_stream_text_stream_user_exception(
     assert isinstance(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
     )
-    assert (
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    # A snapshot was adopted before the error, so the response counts as an
+    # incomplete early exit, the same as a caller-closed stream.
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
     )
     if capture_content:
         assert _load_span_messages(
@@ -3422,6 +3436,7 @@ def test_sync_messages_stream_text_stream_user_exception(
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "content": "Hello!"}],
+                "finish_reason": "error",
             }
         ]
     else:
