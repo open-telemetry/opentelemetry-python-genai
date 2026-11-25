@@ -72,7 +72,6 @@ from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._realtime_invocation import (
     emit_realtime_session_ended_event,
     emit_realtime_session_started_event,
-    should_capture_realtime_content,
 )
 from opentelemetry.util.genai._retrieval_invocation import (
     SuppressedRetrievalInvocation,
@@ -207,18 +206,6 @@ class TelemetryHandler:
         when a real completion hook is configured (not a no-op).
         """
         return self._capture_content
-
-    def should_capture_realtime_content(self) -> bool:
-        """Returns True when content should be captured for a realtime inference turn.
-
-        Unlike :meth:`should_capture_content`, this accounts for realtime
-        inference's span-only content capture behavior (``EVENT_ONLY`` without
-        an active completion hook does not capture content).
-        """
-        return should_capture_realtime_content(
-            self._content_capturing_mode,
-            self._completion_hook,
-        )
 
     def retrieval(
         self,

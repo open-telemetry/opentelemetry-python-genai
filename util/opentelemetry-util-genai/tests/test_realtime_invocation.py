@@ -553,7 +553,6 @@ def test_realtime_inference_completion_hook_and_content_capture():
         content_capturing_mode=ContentCapturingMode.NO_CONTENT,
     )
 
-    assert handler.should_capture_realtime_content() is True
     with handler.realtime_inference(
         "gcp.gemini",
         request_model="gemini-2.5-flash",
@@ -741,7 +740,7 @@ def test_realtime_inference_failure_default_and_custom_resolver():
     ["NO_CONTENT", "SPAN_ONLY", "EVENT_ONLY", "SPAN_AND_EVENT"],
 )
 @pytest.mark.parametrize("hook_kind", ["none", "active", "safe_noop"])
-def test_should_capture_realtime_content_matches_invocation_policy(
+def test_realtime_invocation_should_capture_content_policy(
     mode: str, hook_kind: str
 ):
     class _RecordingHook(CompletionHook):
@@ -763,7 +762,6 @@ def test_should_capture_realtime_content_matches_invocation_policy(
         expected = mode in ("SPAN_ONLY", "SPAN_AND_EVENT") or (
             hook_kind == "active"
         )
-        assert handler.should_capture_realtime_content() is expected
         with handler.realtime_inference("gcp.gemini") as inv:
             assert inv.should_capture_content is expected
         with handler.user_speech(

@@ -62,22 +62,6 @@ _REALTIME_SESSION_ENDED_EVENT_NAME: Final = (
 _GEN_AI_REALTIME_SESSION_ID: Final = "gen_ai.realtime_session.id"
 
 
-def should_capture_realtime_content(
-    content_capturing_mode: ContentCapturingMode,
-    completion_hook: CompletionHook,
-) -> bool:
-    """Return True when realtime_inference content should be captured.
-
-    Mirrors the capture policy of :class:`RealtimeInferenceInvocation` before
-    a generation turn starts so instrumentations can decide whether to buffer
-    incoming media or messages without reading private handler internals.
-    """
-    return content_capturing_mode in (
-        ContentCapturingMode.SPAN_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    ) or _is_active_completion_hook(completion_hook)
-
-
 @dataclass
 class _RealtimeInferenceData:
     """Typed data container for realtime inference invocations."""
