@@ -295,12 +295,12 @@ async def test_live_voice_turn_spans_events_and_metrics(
     input_msgs = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
-    assert input_msgs[0]["parts"][0]["type"] == "blob"
-    assert input_msgs[0]["parts"][0]["modality"] == "audio"
-    assert input_msgs[0]["parts"][1] == {
-        "type": "transcription",
-        "content": "Say hello in three words.",
-    }
+    assert input_msgs[0]["parts"] == (
+        {
+            "type": "transcription",
+            "content": "Say hello in three words.",
+        },
+    )
 
     output_msgs = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
@@ -1161,7 +1161,6 @@ async def test_live_no_content_capture_skips_payload_buffering_and_session_http_
                         mime_type="audio/pcm;rate=16000",
                     )
                 )
-                assert not tracker._pending_audio_chunks
                 assert tracker._pending_input_messages == []
 
                 if not _HAS_SERVER_VAD:
@@ -1309,18 +1308,21 @@ async def test_live_barge_in_overlapping_speech_and_transcription(
 
     in1 = span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in1) == 1
-    assert in1[0]["parts"][1] == {
-        "type": "transcription",
-        "content": "Tell me about Paris.",
-    }
+    assert in1[0]["parts"] == (
+        {
+            "type": "transcription",
+            "content": "Tell me about Paris.",
+        },
+    )
 
     in2 = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in2) == 1
-    assert in2[0]["parts"][0]["type"] == "blob"
-    assert in2[0]["parts"][1] == {
-        "type": "transcription",
-        "content": "Stop, tell me about Rome instead.",
-    }
+    assert in2[0]["parts"] == (
+        {
+            "type": "transcription",
+            "content": "Stop, tell me about Rome instead.",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -1594,18 +1596,15 @@ async def test_live_fallback_session_id_and_continuous_audio_coalescing(
             == session_id
         )
 
-    # Turn 1 had no prior input messages; all mic audio sent during Turn 1 belongs
-    # to Turn 2 as a single coalesced user InputMessage.
+    # Turn 1 had no prior input messages; streamed input audio chunks are not
+    # buffered, while Turn 2's input transcription is still recorded.
     assert GenAI.GEN_AI_INPUT_MESSAGES not in span1.attributes
     turn2_in = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(turn2_in) == 1
     assert turn2_in[0]["role"] == "user"
-    assert [p["type"] for p in turn2_in[0]["parts"]] == [
-        "blob",
-        "transcription",
-    ]
-    assert turn2_in[0]["parts"][0]["content"] == b"\x01\x02\x03\x04\x05\x06"
-    assert turn2_in[0]["parts"][1]["content"] == "Follow up question"
+    assert turn2_in[0]["parts"] == (
+        {"type": "transcription", "content": "Follow up question"},
+    )
 
 
 @pytest.mark.asyncio
@@ -1892,13 +1891,17 @@ async def test_live_public_client_barge_in_interruption_and_receive_error(
         "interrupted",
     )
     in1 = span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
-    assert in1[0]["parts"][1]["content"] == "Tell me about Paris."
+    assert in1[0]["parts"] == (
+        {"type": "transcription", "content": "Tell me about Paris."},
+    )
 
     assert span2.status.status_code == StatusCode.ERROR
     assert span2.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
     assert span2.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("error",)
     in2 = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
-    assert in2[0]["parts"][1]["content"] == "Stop, tell me about Rome."
+    assert in2[0]["parts"] == (
+        {"type": "transcription", "content": "Stop, tell me about Rome."},
+    )
 
     logs = log_exporter.get_finished_logs()
     ended = next(
@@ -2370,41 +2373,49 @@ async def test_live_bounded_media_buffering_during_prolonged_silence(
             async with client.aio.live.connect(
                 model="gemini-2.5-flash-native-audio-preview-12-2025",
             ) as session:
-                # Prolonged silence: repeated audio chunks and idle video
-                # frames must not grow pending media past cap.
+                # Prolonged silence: streamed input audio is not buffered and
+                # repeated idle video frames must not grow pending media past cap.
                 for chunk in (b"AAAA", b"BBBB", b"CCCC", b"DDDD"):
                     await session.send_realtime_input(
                         audio=genai_types.Blob(
                             data=chunk, mime_type="audio/pcm;rate=16000"
                         )
                     )
-                await session.send_realtime_input(
-                    video=genai_types.Blob(
-                        data=b"VVVVVVVV", mime_type="image/jpeg"
+                for frame in (b"VVVVVVVV", b"WWWWWWWW", b"XXXXXXXX"):
+                    await session.send_realtime_input(
+                        video=genai_types.Blob(
+                            data=frame, mime_type="image/jpeg"
+                        )
                     )
-                )
-                # Final spoken utterance immediately preceding generation.
-                await session.send_realtime_input(
-                    audio=genai_types.Blob(
-                        data=b"01234567", mime_type="audio/pcm;rate=16000"
-                    )
-                )
-                await session.send_realtime_input(
-                    audio=genai_types.Blob(
-                        data=b"89abcdef", mime_type="audio/pcm;rate=16000"
-                    )
-                )
                 async for _ in session.receive():
                     pass
 
     (span,) = span_exporter.get_finished_spans()
     in_msgs = span.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
-    assert len(in_msgs) == 1
-    in_blob = in_msgs[0]["parts"][0]
-    assert in_blob["type"] == "blob"
-    assert in_blob["modality"] == "audio"
-    assert len(in_blob["content"]) <= 16
-    assert in_blob["content"] == b"0123456789abcdef"
+    assert in_msgs == (
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "video",
+                    "mime_type": "image/jpeg",
+                    "content": b"WWWWWWWW",
+                },
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "video",
+                    "mime_type": "image/jpeg",
+                    "content": b"XXXXXXXX",
+                },
+            ),
+        },
+    )
 
     out_msgs = span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES]
     assert len(out_msgs) == 1
@@ -3309,7 +3320,6 @@ async def test_live_prewrite_suspended_send_failure_not_committed_on_inbound_fra
                     await audio_task
 
                 tracker = created_trackers[0]
-                assert not tracker._pending_audio_chunks
                 assert tracker._pending_input_messages == []
 
     (span_b,) = span_exporter.get_finished_spans()
@@ -3446,11 +3456,6 @@ async def test_live_completion_hook_capture_and_independent_of_outer_inference(
     assert len(call["inputs"]) == 1
     assert call["inputs"][0].role == "user"
     assert call["inputs"][0].parts == [
-        BlobPart(
-            mime_type="audio/pcm;rate=16000",
-            modality=Modality.AUDIO,
-            content=b"\x01\x02\x03\x04",
-        ),
         TranscriptionPart(content="Hi Gemini"),
     ]
     assert len(call["outputs"]) == 1
@@ -3621,19 +3626,7 @@ async def test_live_user_speech_emitted_only_with_explicit_speech_boundaries(
     assert [
         s.attributes[GenAI.GEN_AI_OPERATION_NAME] for s in no_vad_spans
     ] == ["realtime_inference"]
-    assert no_vad_spans[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
-        {
-            "role": "user",
-            "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"\x01\x02\x03\x04",
-                },
-            ),
-        },
-    )
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in no_vad_spans[0].attributes
 
     # With explicit client activity_start/activity_end or server VAD signals,
     # user_speech spans are emitted without any opt-in environment variable.
@@ -3962,40 +3955,40 @@ async def test_live_deferred_sends_preserve_send_order_on_reverse_completion(
         },
     )
 
-    # Part B: Two audio chunks in one turn completing in reverse order while
-    # generation starts and completes -> coalesced audio must be AAAA + BBBB.
+    # Part B: Two video frames in one turn completing in reverse order while
+    # generation starts and completes -> preserved in send order [AAAA, BBBB].
     span_exporter.clear()
-    audio1_written = asyncio.Event()
-    audio2_written = asyncio.Event()
-    release_audio1 = asyncio.Event()
-    audio_send_index = 0
+    media1_written = asyncio.Event()
+    media2_written = asyncio.Event()
+    release_media1 = asyncio.Event()
+    media_send_index = 0
 
-    class _ReverseOrderAudioWebSocket(_FakeWebSocket):
+    class _ReverseOrderMediaWebSocket(_FakeWebSocket):
         async def send(self, payload: str | bytes) -> None:
-            nonlocal audio_send_index
+            nonlocal media_send_index
             await super().send(payload)
             frame = self.sent_frames[-1]
             if "realtimeInput" in frame or "realtime_input" in frame:
-                audio_send_index += 1
-                if audio_send_index == 1:
-                    audio1_written.set()
-                    await asyncio.wait_for(release_audio1.wait(), timeout=5.0)
-                elif audio_send_index == 2:
-                    audio2_written.set()
+                media_send_index += 1
+                if media_send_index == 1:
+                    media1_written.set()
+                    await asyncio.wait_for(release_media1.wait(), timeout=5.0)
+                elif media_send_index == 2:
+                    media2_written.set()
 
         async def recv(self, decode: bool = True) -> bytes | str:
             if len(self._frames) == 1:
-                await asyncio.wait_for(audio2_written.wait(), timeout=5.0)
+                await asyncio.wait_for(media2_written.wait(), timeout=5.0)
             return await super().recv(decode=decode)
 
-    ws_audio = _ReverseOrderAudioWebSocket(
+    ws_media = _ReverseOrderMediaWebSocket(
         [
             {"setupComplete": {}},
             {
                 "serverContent": {
                     "modelTurn": {
                         "role": "model",
-                        "parts": [{"text": "Ordered audio answer"}],
+                        "parts": [{"text": "Ordered media answer"}],
                     },
                     "turnComplete": True,
                 }
@@ -4004,7 +3997,7 @@ async def test_live_deferred_sends_preserve_send_order_on_reverse_completion(
     )
 
     with patch(
-        "google.genai.live.ws_connect", _make_fake_ws_connect(ws_audio)
+        "google.genai.live.ws_connect", _make_fake_ws_connect(ws_media)
     ):
         with instrument(
             GoogleGenAiSdkInstrumentor(),
@@ -4017,38 +4010,49 @@ async def test_live_deferred_sends_preserve_send_order_on_reverse_completion(
             async with client.aio.live.connect(
                 model="gemini-2.5-flash-native-audio-preview-12-2025",
             ) as session:
-                audio1_task = asyncio.create_task(
+                media1_task = asyncio.create_task(
                     session.send_realtime_input(
-                        audio=genai_types.Blob(
-                            data=b"AAAA", mime_type="audio/pcm;rate=16000"
+                        video=genai_types.Blob(
+                            data=b"AAAA", mime_type="image/jpeg"
                         )
                     )
                 )
-                await asyncio.wait_for(audio1_written.wait(), timeout=5.0)
+                await asyncio.wait_for(media1_written.wait(), timeout=5.0)
 
-                # Chunk 2 finishes BEFORE chunk 1 finishes draining.
+                # Frame 2 finishes BEFORE frame 1 finishes draining.
                 await session.send_realtime_input(
-                    audio=genai_types.Blob(
-                        data=b"BBBB", mime_type="audio/pcm;rate=16000"
+                    video=genai_types.Blob(
+                        data=b"BBBB", mime_type="image/jpeg"
                     )
                 )
 
                 async for _ in session.receive():
                     pass
 
-                release_audio1.set()
-                await audio1_task
+                release_media1.set()
+                await media1_task
 
-    (audio_span,) = span_exporter.get_finished_spans()
-    assert audio_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
+    (media_span,) = span_exporter.get_finished_spans()
+    assert media_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
         {
             "role": "user",
             "parts": (
                 {
                     "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"AAAABBBB",
+                    "modality": "video",
+                    "mime_type": "image/jpeg",
+                    "content": b"AAAA",
+                },
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                {
+                    "type": "blob",
+                    "modality": "video",
+                    "mime_type": "image/jpeg",
+                    "content": b"BBBB",
                 },
             ),
         },
@@ -4462,24 +4466,21 @@ async def test_live_continuous_audio_streaming_preserves_current_turn_transcript
 
     in1 = span1.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in1) == 1
-    assert in1[0]["parts"][0] == {
-        "type": "blob",
-        "modality": "audio",
-        "mime_type": "audio/pcm;rate=16000",
-        "content": b"\x01\x02" * 8,
-    }
-    assert in1[0]["parts"][1] == {
-        "type": "transcription",
-        "content": "Hello world!",
-    }
+    assert in1[0]["parts"] == (
+        {
+            "type": "transcription",
+            "content": "Hello world!",
+        },
+    )
 
     in2 = span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
     assert len(in2) == 1
-    assert in2[0]["parts"][0]["type"] == "blob"
-    assert in2[0]["parts"][1] == {
-        "type": "transcription",
-        "content": "Next question",
-    }
+    assert in2[0]["parts"] == (
+        {
+            "type": "transcription",
+            "content": "Next question",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -5231,129 +5232,6 @@ async def test_live_legacy_empty_send_completes_turn(
 
 
 @pytest.mark.asyncio
-async def test_live_bound_generation_audio_drain_keeps_bounded_chunks_until_finalization(
-    span_exporter,
-    tracer_provider,
-    logger_provider,
-    meter_provider,
-):
-    from google import genai
-
-    chunk1_written = asyncio.Event()
-    release_chunks = asyncio.Event()
-    audio_index = 0
-
-    class _DrainingChunksWebSocket(_FakeWebSocket):
-        async def send(self, payload: str | bytes) -> None:
-            nonlocal audio_index
-            await super().send(payload)
-            frame = self.sent_frames[-1]
-            if "realtimeInput" in frame or "realtime_input" in frame:
-                audio_index += 1
-                if audio_index == 1:
-                    chunk1_written.set()
-                    await asyncio.wait_for(release_chunks.wait(), timeout=5.0)
-
-    fake_ws = _DrainingChunksWebSocket(
-        [
-            {"setupComplete": {}},
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": "Chunk 1 of reply"}],
-                    },
-                }
-            },
-            {
-                "serverContent": {
-                    "modelTurn": {
-                        "role": "model",
-                        "parts": [{"text": " done"}],
-                    },
-                    "turnComplete": True,
-                }
-            },
-        ]
-    )
-
-    created_trackers: list[live_module._LiveSessionTracker] = []
-    orig_tracker_init = live_module._LiveSessionTracker.__init__
-
-    def _capture_tracker(self, *args, **kwargs):
-        orig_tracker_init(self, *args, **kwargs)
-        created_trackers.append(self)
-
-    with (
-        patch.object(live_module, "_MAX_BUFFERED_MEDIA_BYTES", 12),
-        patch("google.genai.live.ws_connect", _make_fake_ws_connect(fake_ws)),
-        patch.object(
-            live_module._LiveSessionTracker, "__init__", _capture_tracker
-        ),
-    ):
-        with instrument(
-            GoogleGenAiSdkInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="SPAN_AND_EVENT",
-        ):
-            client = genai.Client(api_key="test-key", vertexai=False)
-            async with client.aio.live.connect(
-                model="gemini-2.5-flash-native-audio-preview-12-2025",
-            ) as session:
-                chunk1_task = asyncio.create_task(
-                    session.send_realtime_input(
-                        audio=genai_types.Blob(
-                            data=b"AAAA", mime_type="audio/pcm;rate=16000"
-                        )
-                    )
-                )
-                await asyncio.wait_for(chunk1_written.wait(), timeout=5.0)
-                for payload in (b"BBBB", b"CCCC", b"DDDD"):
-                    await session.send_realtime_input(
-                        audio=genai_types.Blob(
-                            data=payload, mime_type="audio/pcm;rate=16000"
-                        )
-                    )
-
-                # Start generation while chunk 1 is draining so the turn binds.
-                await session._receive()
-                release_chunks.set()
-                await chunk1_task
-
-                # Before finalization, audio remains in bounded chunks on the
-                # active generation rather than concatenated into input_messages.
-                active_gen = created_trackers[0]._active_gen
-                assert active_gen is not None
-                assert active_gen.input_messages == []
-                assert list(active_gen.input_audio_chunks) == [
-                    b"BBBB",
-                    b"CCCC",
-                    b"DDDD",
-                ]
-                assert active_gen.input_audio_bytes == 12
-
-                # Finalize generation -> single join produces trailing 12 bytes.
-                await session._receive()
-
-    (span,) = span_exporter.get_finished_spans()
-    assert span.attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
-        {
-            "role": "user",
-            "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"BBBBCCCCDDDD",
-                },
-            ),
-        },
-    )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("use_manual_vad", [False, True])
 async def test_live_budget_eviction_preserves_sealed_turn_boundaries_for_buffered_replies(
     use_manual_vad: bool,
@@ -5409,8 +5287,8 @@ async def test_live_budget_eviction_preserves_sealed_turn_boundaries_for_buffere
                             activity_start=genai_types.ActivityStart()
                         )
                     await session.send_realtime_input(
-                        audio=genai_types.Blob(
-                            data=payload, mime_type="audio/pcm;rate=16000"
+                        video=genai_types.Blob(
+                            data=payload, mime_type="image/jpeg"
                         )
                     )
                     if use_manual_vad:
@@ -5451,8 +5329,8 @@ async def test_live_budget_eviction_preserves_sealed_turn_boundaries_for_buffere
             "parts": (
                 {
                     "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
+                    "modality": "video",
+                    "mime_type": "image/jpeg",
                     "content": b"2222222222222222",
                 },
             ),
@@ -5788,9 +5666,9 @@ async def test_live_deferred_media_commits_enforce_single_generation_byte_budget
             "parts": (
                 {
                     "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"22222222",
+                    "modality": "video",
+                    "mime_type": "image/jpeg",
+                    "content": b"WWWWWWWW",
                 },
             ),
         },
@@ -7114,12 +6992,6 @@ async def test_live_interrupted_before_first_output_retires_queued_input_without
         {
             "role": "user",
             "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"BBBB",
-                },
                 {"type": "transcription", "content": "Kept audio speech"},
             ),
         },
@@ -7434,12 +7306,6 @@ async def test_live_two_queued_audio_turns_preserve_distinct_transcripts_in_orde
         {
             "role": "user",
             "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"1111",
-                },
                 {"type": "transcription", "content": "First audio question"},
             ),
         },
@@ -7448,12 +7314,6 @@ async def test_live_two_queued_audio_turns_preserve_distinct_transcripts_in_orde
         {
             "role": "user",
             "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"2222",
-                },
                 {"type": "transcription", "content": "Second audio question"},
             ),
         },
@@ -7566,29 +7426,13 @@ async def test_live_two_queued_audio_turns_preserve_distinct_transcripts_in_orde
     assert spans_b[0].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
         {
             "role": "user",
-            "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"3333",
-                },
-                {"type": "transcription", "content": "VAD turn 1"},
-            ),
+            "parts": ({"type": "transcription", "content": "VAD turn 1"},),
         },
     )
     assert spans_b[1].attributes[GenAI.GEN_AI_INPUT_MESSAGES] == (
         {
             "role": "user",
-            "parts": (
-                {
-                    "type": "blob",
-                    "modality": "audio",
-                    "mime_type": "audio/pcm;rate=16000",
-                    "content": b"4444",
-                },
-                {"type": "transcription", "content": "VAD turn 2"},
-            ),
+            "parts": ({"type": "transcription", "content": "VAD turn 2"},),
         },
     )
 

@@ -446,8 +446,6 @@ class _PendingToolCallBatch:
 class _SnapshotEffects:
     """Side-effect intents captured while snapshotting a confirmed send."""
 
-    flush_before_audio: bool = False
-    flush_after_audio: bool = False
     mark_new_user_utterance: bool = False
     start_user_speech: bool = False
     stop_user_speech: bool = False
@@ -495,10 +493,6 @@ class _StagedSend:
 class _OutboundTurn:
     """Buffers outbound inputs and ordered in-flight sends for one logical turn."""
 
-    pending_audio_chunks: deque[bytes] = field(default_factory=deque)
-    pending_audio_bytes: int = 0
-    pending_audio_mime_type: str | None = None
-    pending_audio_seq: int = 0
     input_entries: list[tuple[int, InputMessage]] = field(default_factory=list)
     input_transcript_deltas: list[str] = field(default_factory=list)
     accepting_input_transcription: bool = True
@@ -674,10 +668,6 @@ class _ActiveGeneration:
     invocation: RealtimeInferenceInvocation
     input_entries: list[tuple[int, InputMessage]] = field(default_factory=list)
     input_media_bytes: int = 0
-    input_audio_chunks: deque[bytes] = field(default_factory=deque)
-    input_audio_bytes: int = 0
-    input_audio_mime_type: str | None = None
-    input_audio_seq: int = 0
     system_instruction: list[SystemInstructionPart] = field(
         default_factory=list
     )
@@ -722,7 +712,7 @@ class _ActiveGeneration:
 
     def _enforce_input_media_budget(self) -> None:
         max_bytes = _MAX_BUFFERED_MEDIA_BYTES
-        excess = self.input_media_bytes + self.input_audio_bytes - max_bytes
+        excess = self.input_media_bytes - max_bytes
         if excess <= 0:
             return
 
@@ -739,14 +729,8 @@ class _ActiveGeneration:
                     and isinstance(part.content, bytes)
                 ):
                     part_len = len(part.content)
-                    if part.modality == Modality.AUDIO and part_len > excess:
-                        part.content = part.content[excess:]
-                        self.input_media_bytes -= excess
-                        excess = 0
-                        new_parts.append(part)
-                    else:
-                        self.input_media_bytes -= part_len
-                        excess -= part_len
+                    self.input_media_bytes -= part_len
+                    excess -= part_len
                 else:
                     new_parts.append(part)
             if new_parts:
@@ -755,131 +739,23 @@ class _ActiveGeneration:
             else:
                 self.input_entries.pop(msg_idx)
 
-        while excess > 0 and self.input_audio_chunks:
-            oldest = self.input_audio_chunks[0]
-            if len(oldest) <= excess:
-                self.input_audio_chunks.popleft()
-                self.input_audio_bytes -= len(oldest)
-                excess -= len(oldest)
-            else:
-                self.input_audio_chunks[0] = oldest[excess:]
-                self.input_audio_bytes -= excess
-                excess = 0
-
-        if not self.input_audio_chunks:
-            self.input_audio_mime_type = None
-            self.input_audio_seq = 0
-
-    def append_input_audio(
-        self, chunk: bytes, mime_type: str, *, seq: int = 0
-    ) -> None:
-        if not chunk:
-            return
-        if (
-            self.input_audio_chunks
-            and self.input_audio_mime_type
-            and mime_type != self.input_audio_mime_type
-        ):
-            self.flush_input_audio()
-        if (
-            not self.input_audio_chunks
-            and self.input_entries
-            and seq > 0
-            and seq < self.input_entries[-1][0]
-        ):
-            max_bytes = _MAX_BUFFERED_MEDIA_BYTES
-            trimmed = chunk[-max_bytes:] if len(chunk) > max_bytes else chunk
-            self._insert_input_entry(
-                seq,
-                InputMessage(
-                    role="user",
-                    parts=[
-                        BlobPart(
-                            mime_type=mime_type,
-                            modality=Modality.AUDIO,
-                            content=trimmed,
-                        )
-                    ],
-                ),
-            )
-            self.input_media_bytes += len(trimmed)
-            self._enforce_input_media_budget()
-            return
-        max_bytes = _MAX_BUFFERED_MEDIA_BYTES
-        if not self.input_audio_chunks:
-            self.input_audio_seq = seq
-        if len(chunk) >= max_bytes:
-            trimmed = chunk[-max_bytes:]
-            self.input_audio_chunks.clear()
-            self.input_audio_chunks.append(trimmed)
-            self.input_audio_bytes = len(trimmed)
-        else:
-            self.input_audio_chunks.append(chunk)
-            self.input_audio_bytes += len(chunk)
-        self.input_audio_mime_type = mime_type
-        self._enforce_input_media_budget()
-
-    def flush_input_audio(self) -> None:
-        if not self.input_audio_chunks:
-            return
-        combined = b"".join(self.input_audio_chunks)
-        audio_seq = self.input_audio_seq
-        self.input_audio_chunks.clear()
-        self.input_audio_bytes = 0
-        mime_type = self.input_audio_mime_type or "audio/pcm"
-        self.input_audio_mime_type = None
-        self.input_audio_seq = 0
-        if len(combined) > _MAX_BUFFERED_MEDIA_BYTES:
-            combined = combined[-_MAX_BUFFERED_MEDIA_BYTES:]
-        self._insert_input_entry(
-            audio_seq,
-            InputMessage(
-                role="user",
-                parts=[
-                    BlobPart(
-                        mime_type=mime_type,
-                        modality=Modality.AUDIO,
-                        content=combined,
-                    )
-                ],
-            ),
-        )
-        self.input_media_bytes += len(combined)
-        self._enforce_input_media_budget()
-
     def append_input_entries(
         self, entries: Sequence[tuple[int, InputMessage]]
     ) -> None:
         max_bytes = _MAX_BUFFERED_MEDIA_BYTES
         for seq, msg in entries:
-            if (
-                msg.role == "user"
-                and len(msg.parts) == 1
-                and isinstance(part := msg.parts[0], BlobPart)
-                and part.modality == Modality.AUDIO
-                and isinstance(part.content, bytes)
-            ):
-                self.append_input_audio(
-                    part.content, part.mime_type or "audio/pcm", seq=seq
-                )
-            else:
-                self.flush_input_audio()
-                added_bytes = 0
-                for part in msg.parts:
-                    if isinstance(part, BlobPart) and isinstance(
-                        part.content, bytes
-                    ):
-                        if len(part.content) > max_bytes:
-                            part.content = (
-                                part.content[-max_bytes:]
-                                if part.modality == Modality.AUDIO
-                                else part.content[:max_bytes]
-                            )
-                        added_bytes += len(part.content)
-                self._insert_input_entry(seq, msg)
-                if added_bytes:
-                    self.input_media_bytes += added_bytes
-                    self._enforce_input_media_budget()
+            added_bytes = 0
+            for part in msg.parts:
+                if isinstance(part, BlobPart) and isinstance(
+                    part.content, bytes
+                ):
+                    if len(part.content) > max_bytes:
+                        part.content = part.content[:max_bytes]
+                    added_bytes += len(part.content)
+            self._insert_input_entry(seq, msg)
+            if added_bytes:
+                self.input_media_bytes += added_bytes
+                self._enforce_input_media_budget()
 
     def append_input_transcription(self, input_transcript: str) -> None:
         user_msg: InputMessage | None = None
@@ -1024,13 +900,6 @@ class _LiveSessionTracker:
             self._ensure_config_content_extracted()
 
     @property
-    def _pending_audio_chunks(self) -> deque[bytes]:
-        chunks: deque[bytes] = deque()
-        for turn in self._outbound_turns:
-            chunks.extend(turn.pending_audio_chunks)
-        return chunks
-
-    @property
     def _pending_input_messages(self) -> list[InputMessage]:
         messages: list[InputMessage] = []
         for turn in self._outbound_turns:
@@ -1151,10 +1020,6 @@ class _LiveSessionTracker:
                     )
                 )
             source.input_entries.clear()
-            source.pending_audio_chunks.clear()
-            source.pending_audio_bytes = 0
-            source.pending_audio_mime_type = None
-            source.pending_audio_seq = 0
             source.media_bytes = 0
             source.input_transcript_deltas.clear()
             source.staged_sends.clear()
@@ -1162,57 +1027,12 @@ class _LiveSessionTracker:
             if source in self._outbound_turns:
                 self._outbound_turns.remove(source)
             return
-        has_interleaved_audio = bool(
-            (target.pending_audio_chunks and source.input_entries)
-            or (source.pending_audio_chunks and target.input_entries)
-            or (
-                target.pending_audio_chunks
-                and source.pending_audio_chunks
-                and target.pending_audio_mime_type
-                and source.pending_audio_mime_type
-                and source.pending_audio_mime_type
-                != target.pending_audio_mime_type
-            )
-        )
-        if has_interleaved_audio:
-            if target.pending_audio_chunks:
-                self._flush_pending_audio(turn=target, capture_content=True)
-            if source.pending_audio_chunks:
-                self._flush_pending_audio(turn=source, capture_content=True)
         if source.input_entries:
             target.input_entries = sorted(
                 [*target.input_entries, *source.input_entries],
                 key=lambda item: item[0],
             )
             target.media_bytes += source.media_bytes
-        if source.pending_audio_chunks:
-            if not target.pending_audio_chunks or (
-                source.pending_audio_seq > 0
-                and (
-                    target.pending_audio_seq == 0
-                    or source.pending_audio_seq < target.pending_audio_seq
-                )
-            ):
-                if (
-                    target.pending_audio_chunks
-                    and source.pending_audio_seq < target.pending_audio_seq
-                ):
-                    target.pending_audio_chunks = deque(
-                        [
-                            *source.pending_audio_chunks,
-                            *target.pending_audio_chunks,
-                        ]
-                    )
-                else:
-                    target.pending_audio_chunks.extend(
-                        source.pending_audio_chunks
-                    )
-                target.pending_audio_seq = source.pending_audio_seq
-            else:
-                target.pending_audio_chunks.extend(source.pending_audio_chunks)
-            target.pending_audio_bytes += source.pending_audio_bytes
-            if not target.pending_audio_mime_type:
-                target.pending_audio_mime_type = source.pending_audio_mime_type
         if source.input_transcript_deltas:
             target.input_transcript_deltas.extend(
                 source.input_transcript_deltas
@@ -1262,10 +1082,6 @@ class _LiveSessionTracker:
             if batch not in target.tool_batches:
                 target.tool_batches.append(batch)
         source.input_entries.clear()
-        source.pending_audio_chunks.clear()
-        source.pending_audio_bytes = 0
-        source.pending_audio_mime_type = None
-        source.pending_audio_seq = 0
         source.media_bytes = 0
         source.input_transcript_deltas.clear()
         source.staged_sends.clear()
@@ -1299,7 +1115,7 @@ class _LiveSessionTracker:
             return self._capture_content_override
         if self._active_gen is not None:
             return self._active_gen.invocation.should_capture_content
-        return self._telemetry_handler.should_capture_realtime_content()
+        return self._telemetry_handler.should_capture_content()
 
     def register_inflight_send(self, staged: _StagedSend) -> None:
         if (
@@ -1461,7 +1277,6 @@ class _LiveSessionTracker:
             has_prior_input = (
                 turn.has_confirmed_input_payload
                 or bool(turn.input_entries)
-                or bool(turn.pending_audio_chunks)
                 or bool(turn.input_transcript_deltas)
                 or any(
                     other.has_input_payload and other.status != "aborted"
@@ -1543,7 +1358,7 @@ class _LiveSessionTracker:
         if staged.snapshot_turn is not None:
             return
         staged_capture = staged.context.run(
-            self._telemetry_handler.should_capture_realtime_content
+            self._telemetry_handler.should_capture_content
         )
         scratch_turn = _OutboundTurn(capture_content=staged_capture)
         effects = _SnapshotEffects()
@@ -1588,28 +1403,10 @@ class _LiveSessionTracker:
                 self._mark_new_user_utterance()
         if snap.capture_content:
             turn.capture_content = True
-        if effects.flush_before_audio:
-            self._flush_pending_audio(turn=turn)
         if snap.input_entries:
-            self._flush_pending_audio(turn=turn)
             for seq, msg in snap.input_entries:
                 turn.add_input_entry(seq, msg)
             turn.media_bytes += snap.media_bytes
-        if snap.pending_audio_chunks:
-            mime_type = snap.pending_audio_mime_type or "audio/pcm"
-            if (
-                turn.pending_audio_chunks
-                and turn.pending_audio_mime_type
-                and mime_type != turn.pending_audio_mime_type
-            ):
-                self._flush_pending_audio(turn=turn)
-            if not turn.pending_audio_chunks:
-                turn.pending_audio_seq = snap.pending_audio_seq or staged.seq
-                turn.pending_audio_mime_type = mime_type
-            turn.pending_audio_chunks.extend(snap.pending_audio_chunks)
-            turn.pending_audio_bytes += snap.pending_audio_bytes
-        if effects.flush_after_audio:
-            self._flush_pending_audio(turn=turn)
         if (
             snap.system_instruction is not None
             and snap.system_instruction_rev >= turn.system_instruction_rev
@@ -1655,13 +1452,6 @@ class _LiveSessionTracker:
         if target_gen.invocation.should_capture_content:
             if snap.input_entries:
                 target_gen.append_input_entries(snap.input_entries)
-            if snap.pending_audio_chunks:
-                mime_type = snap.pending_audio_mime_type or "audio/pcm"
-                audio_seq = snap.pending_audio_seq or staged.seq
-                for chunk in snap.pending_audio_chunks:
-                    target_gen.append_input_audio(
-                        chunk, mime_type, seq=audio_seq
-                    )
             self._apply_context_update_to_generation(target_gen, snap)
         self._apply_session_context_update(snap)
         self._release_pending_context_update(staged, source=snap)
@@ -1709,7 +1499,6 @@ class _LiveSessionTracker:
             and turn.pending_merge_count == 0
             and not turn.has_confirmed_input_payload
             and not turn.input_entries
-            and not turn.pending_audio_chunks
             and not turn.input_transcript_deltas
             and turn.system_instruction is None
             and turn.tool_definitions is None
@@ -1970,17 +1759,13 @@ class _LiveSessionTracker:
             return
         max_bytes = _MAX_BUFFERED_MEDIA_BYTES
         excess = (
-            sum(
-                turn.media_bytes + turn.pending_audio_bytes
-                for turn in self._outbound_turns
-            )
-            - max_bytes
+            sum(turn.media_bytes for turn in self._outbound_turns) - max_bytes
         )
         if excess <= 0:
             return
 
         # Evict oldest buffered media across queued turns from oldest to newest
-        # so the most recent audio/media preceding the next generation is kept.
+        # so the most recent media preceding the next generation is kept.
         turn_idx = 0
         while excess > 0 and turn_idx < len(self._outbound_turns):
             turn = self._outbound_turns[turn_idx]
@@ -1995,17 +1780,8 @@ class _LiveSessionTracker:
                         and isinstance(part.content, bytes)
                     ):
                         part_len = len(part.content)
-                        if (
-                            part.modality == Modality.AUDIO
-                            and part_len > excess
-                        ):
-                            part.content = part.content[excess:]
-                            turn.media_bytes -= excess
-                            excess = 0
-                            new_parts.append(part)
-                        else:
-                            turn.media_bytes -= part_len
-                            excess -= part_len
+                        turn.media_bytes -= part_len
+                        excess -= part_len
                     else:
                         new_parts.append(part)
                 if new_parts:
@@ -2014,24 +1790,8 @@ class _LiveSessionTracker:
                 else:
                     turn.input_entries.pop(msg_idx)
 
-            while excess > 0 and turn.pending_audio_chunks:
-                oldest = turn.pending_audio_chunks[0]
-                if len(oldest) <= excess:
-                    turn.pending_audio_chunks.popleft()
-                    turn.pending_audio_bytes -= len(oldest)
-                    excess -= len(oldest)
-                else:
-                    turn.pending_audio_chunks[0] = oldest[excess:]
-                    turn.pending_audio_bytes -= excess
-                    excess = 0
-
-            if not turn.pending_audio_chunks:
-                turn.pending_audio_mime_type = None
-                turn.pending_audio_seq = 0
-
             if (
                 not turn.input_entries
-                and not turn.pending_audio_chunks
                 and not turn.input_transcript_deltas
                 and not turn.staged_sends
                 and not turn.sealed
@@ -2059,71 +1819,11 @@ class _LiveSessionTracker:
                     part.content, bytes
                 ):
                     if len(part.content) > max_bytes:
-                        part.content = (
-                            part.content[-max_bytes:]
-                            if part.modality == Modality.AUDIO
-                            else part.content[:max_bytes]
-                        )
+                        part.content = part.content[:max_bytes]
                     added_bytes += len(part.content)
         if added_bytes:
             turn.media_bytes += added_bytes
             self._enforce_pending_media_budget()
-
-    def _flush_pending_audio(
-        self,
-        *,
-        turn: _OutboundTurn | None = None,
-        capture_content: bool | None = None,
-    ) -> None:
-        if self._snapshot_effects is not None and self._write_turn is not None:
-            if turn is None or turn is self._write_turn:
-                if (
-                    not self._write_turn.input_entries
-                    and not self._write_turn.pending_audio_chunks
-                ):
-                    self._snapshot_effects.flush_before_audio = True
-                    return
-                if turn is None:
-                    self._snapshot_effects.flush_after_audio = True
-                    return
-        if turn is None:
-            if self._write_turn is not None:
-                turn = self._write_turn
-            elif self._outbound_turns and not self._outbound_turns[-1].sealed:
-                turn = self._outbound_turns[-1]
-            else:
-                return
-        if not turn.pending_audio_chunks:
-            return
-        should_capture = (
-            (turn.capture_content or self._should_capture_content())
-            if capture_content is None
-            else capture_content
-        )
-        if should_capture:
-            combined = b"".join(turn.pending_audio_chunks)
-            mime_type = turn.pending_audio_mime_type or "audio/pcm"
-            if len(combined) > _MAX_BUFFERED_MEDIA_BYTES:
-                combined = combined[-_MAX_BUFFERED_MEDIA_BYTES:]
-            turn.add_input_entry(
-                turn.pending_audio_seq,
-                InputMessage(
-                    role="user",
-                    parts=[
-                        BlobPart(
-                            mime_type=mime_type,
-                            modality=Modality.AUDIO,
-                            content=combined,
-                        )
-                    ],
-                ),
-            )
-            turn.media_bytes += len(combined)
-        turn.pending_audio_chunks.clear()
-        turn.pending_audio_bytes = 0
-        turn.pending_audio_mime_type = None
-        turn.pending_audio_seq = 0
-        self._enforce_pending_media_budget()
 
     def _start_user_speech(self) -> None:
         if self._snapshot_effects is not None:
@@ -2168,33 +1868,11 @@ class _LiveSessionTracker:
         )
         if extracted is None:
             return
-        turn = self._target_turn()
         data_bytes, mime_type = extracted
         lower_mime = mime_type.lower()
         if not force_non_audio and "audio" in lower_mime:
-            if not data_bytes:
-                return
-            if (
-                turn.pending_audio_chunks
-                and turn.pending_audio_mime_type
-                and mime_type != turn.pending_audio_mime_type
-            ):
-                self._flush_pending_audio(turn=turn)
-            if not turn.pending_audio_chunks:
-                turn.pending_audio_seq = self._current_send_seq
-            if len(data_bytes) >= _MAX_BUFFERED_MEDIA_BYTES:
-                trimmed = data_bytes[-_MAX_BUFFERED_MEDIA_BYTES:]
-                turn.pending_audio_chunks.clear()
-                turn.pending_audio_chunks.append(trimmed)
-                turn.pending_audio_bytes = len(trimmed)
-            else:
-                turn.pending_audio_chunks.append(data_bytes)
-                turn.pending_audio_bytes += len(data_bytes)
-            if not turn.pending_audio_mime_type:
-                turn.pending_audio_mime_type = mime_type
-            self._enforce_pending_media_budget()
             return
-        self._flush_pending_audio(turn=turn)
+        turn = self._target_turn()
         if len(data_bytes) > _MAX_BUFFERED_MEDIA_BYTES:
             data_bytes = data_bytes[:_MAX_BUFFERED_MEDIA_BYTES]
         modality = (
@@ -2233,43 +1911,34 @@ class _LiveSessionTracker:
 
         capture_content = self._should_capture_content()
 
-        if audio is not None:
-            if capture_content:
-                self._record_blob_input(
-                    cast(BlobOrDict | Mapping[str, object], audio),
-                    default_mime="audio/pcm",
-                )
-        elif media is not None:
-            if capture_content:
-                self._record_blob_input(
-                    cast(BlobOrDict | Mapping[str, object], media),
-                    default_mime="audio/pcm",
-                )
-        elif video is not None:
-            self._flush_pending_audio()
-            if capture_content:
-                self._record_blob_input(
-                    cast(BlobOrDict | Mapping[str, object], video),
-                    default_mime="image/jpeg",
-                    force_non_audio=True,
-                )
-        elif text is not None:
-            self._flush_pending_audio()
-            if capture_content:
-                self._target_turn().add_input_entry(
-                    self._current_send_seq,
-                    InputMessage(
-                        role="user",
-                        parts=[TextPart(content=str(text))],
-                    ),
-                )
+        if audio is None:
+            if media is not None:
+                if capture_content:
+                    self._record_blob_input(
+                        cast(BlobOrDict | Mapping[str, object], media),
+                        default_mime="audio/pcm",
+                    )
+            elif video is not None:
+                if capture_content:
+                    self._record_blob_input(
+                        cast(BlobOrDict | Mapping[str, object], video),
+                        default_mime="image/jpeg",
+                        force_non_audio=True,
+                    )
+            elif text is not None:
+                if capture_content:
+                    self._target_turn().add_input_entry(
+                        self._current_send_seq,
+                        InputMessage(
+                            role="user",
+                            parts=[TextPart(content=str(text))],
+                        ),
+                    )
 
         if kwargs.get("audio_stream_end"):
             self._mark_new_user_utterance()
-            self._flush_pending_audio()
         if kwargs.get("activity_end") is not None:
             self._mark_new_user_utterance()
-            self._flush_pending_audio()
             self._stop_user_speech()
 
     def on_send_client_content(
@@ -2282,7 +1951,6 @@ class _LiveSessionTracker:
         | None,
         turn_complete: bool = True,
     ) -> None:
-        self._flush_pending_audio()
         if turns is not None:
             self._mark_new_user_utterance()
         if turns is not None and self._should_capture_content():
@@ -2353,7 +2021,6 @@ class _LiveSessionTracker:
             and self._active_gen.awaiting_tool_response
         ):
             return
-        self._flush_pending_audio()
         if not self._should_capture_content():
             return
         tool_msg = _build_tool_response_input_message(function_responses)
@@ -2399,7 +2066,6 @@ class _LiveSessionTracker:
     ) -> None:
         if not input_val:
             self._mark_new_user_utterance()
-            self._flush_pending_audio()
             return
 
         if isinstance(input_val, genai_types.LiveClientRealtimeInput) or (
@@ -2519,21 +2185,11 @@ class _LiveSessionTracker:
         if capture_content:
             if turn.input_entries:
                 active_gen.append_input_entries(turn.input_entries)
-            if turn.pending_audio_chunks:
-                mime_type = turn.pending_audio_mime_type or "audio/pcm"
-                for chunk in turn.pending_audio_chunks:
-                    active_gen.append_input_audio(
-                        chunk, mime_type, seq=turn.pending_audio_seq
-                    )
             if turn.input_transcript_deltas:
                 active_gen.input_transcript_deltas.extend(
                     turn.input_transcript_deltas
                 )
         turn.input_entries.clear()
-        turn.pending_audio_chunks.clear()
-        turn.pending_audio_bytes = 0
-        turn.pending_audio_mime_type = None
-        turn.pending_audio_seq = 0
         turn.media_bytes = 0
         turn.input_transcript_deltas.clear()
 
@@ -2564,7 +2220,6 @@ class _LiveSessionTracker:
             if (
                 turn.has_confirmed_input_payload
                 or turn.input_entries
-                or turn.pending_audio_chunks
                 or turn.input_transcript_deltas
             ):
                 claimed_any_input = True
@@ -2590,7 +2245,6 @@ class _LiveSessionTracker:
             self._apply_session_context_update(turn)
             if (
                 turn.input_entries
-                or turn.pending_audio_chunks
                 or turn.input_transcript_deltas
                 or turn.has_confirmed_input_payload
                 or any(
@@ -2600,10 +2254,6 @@ class _LiveSessionTracker:
             ):
                 retired_any_input = True
             turn.input_entries.clear()
-            turn.pending_audio_chunks.clear()
-            turn.pending_audio_bytes = 0
-            turn.pending_audio_mime_type = None
-            turn.pending_audio_seq = 0
             turn.media_bytes = 0
             turn.input_transcript_deltas.clear()
             if turn.staged_sends or turn.sealed:
@@ -2684,9 +2334,6 @@ class _LiveSessionTracker:
         invocation = active_gen.invocation
         invocation.realtime_session_id = self.realtime_session_id
         capture_content = invocation.should_capture_content
-
-        if capture_content:
-            active_gen.flush_input_audio()
 
         # Attach any server-reported input audio transcription to the user message.
         if active_gen.input_transcript_deltas and capture_content:
@@ -2863,11 +2510,9 @@ class _LiveSessionTracker:
                     )
                 ):
                     open_turn = self._outbound_turns[-1]
-                    self._flush_pending_audio(turn=open_turn)
                     if (
                         open_turn.has_confirmed_input_payload
                         or open_turn.input_entries
-                        or open_turn.pending_audio_chunks
                         or open_turn.input_transcript_deltas
                         or any(
                             other.has_input_payload
@@ -2905,12 +2550,12 @@ class _LiveSessionTracker:
                 ) is not None:
                     if (
                         target_turn.capture_content
-                        or self._telemetry_handler.should_capture_realtime_content()
+                        or self._telemetry_handler.should_capture_content()
                     ):
                         target_turn.input_transcript_deltas.append(
                             str(input_tx.text)
                         )
-                elif self._telemetry_handler.should_capture_realtime_content():
+                elif self._telemetry_handler.should_capture_content():
                     self._pending_input_transcript_deltas.append(
                         str(input_tx.text)
                     )

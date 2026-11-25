@@ -251,11 +251,7 @@ class LiveScenario(Scenario):
             _attr(inf_span, "gen_ai.usage.text.cache_read.input_tokens") == 4
         )
         assert _part_types(_attr(inf_span, "gen_ai.input.messages")) == [
-            "blob",
             "transcription",
-        ]
-        assert _blob_modalities(_attr(inf_span, "gen_ai.input.messages")) == [
-            "audio"
         ]
         assert _part_types(_attr(inf_span, "gen_ai.output.messages")) == [
             "reasoning",
