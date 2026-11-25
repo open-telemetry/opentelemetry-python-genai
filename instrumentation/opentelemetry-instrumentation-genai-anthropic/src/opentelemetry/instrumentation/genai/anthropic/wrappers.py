@@ -6,7 +6,14 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Generator,
+    Iterator,
+)
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -128,42 +135,20 @@ _DRAINING_HELPERS = frozenset(
 )
 
 
-def _close_text_source(text_stream: object) -> None:
+def _close_text_source(text_stream: Iterator[str]) -> None:
     """Close the SDK generator behind a scoped ``text_stream``.
 
     Closing the adapter the caller iterates does not reach the generator the
-    SDK handed out, so its frame -- and whatever the read left suspended in it
-    -- would stay alive. A close that fails is logged rather than raised: the
-    caller is abandoning the stream, and a ``GeneratorExit`` in flight must not
-    be displaced by the cleanup's own error.
+    SDK handed out, so its frame would otherwise stay suspended.
     """
-    close = getattr(text_stream, "close", None)
-    if not callable(close):
-        return
-    try:
-        close()
-    except Exception:  # pylint: disable=broad-exception-caught
-        _logger.debug("error closing the SDK text stream", exc_info=True)
+    if isinstance(text_stream, Generator):
+        text_stream.close()
 
 
-async def _aclose_text_source(text_stream: object) -> None:
-    """Async counterpart of ``_close_text_source``.
-
-    Async generators spell it ``aclose``; an SDK exposing an awaitable
-    ``close`` instead (or a synchronous one) is handled the same way the
-    stream wrapper handles its own close.
-    """
-    close = getattr(text_stream, "aclose", None)
-    if close is None:
-        close = getattr(text_stream, "close", None)
-    if not callable(close):
-        return
-    try:
-        result = close()
-        if inspect.isawaitable(result):
-            await result
-    except Exception:  # pylint: disable=broad-exception-caught
-        _logger.debug("error closing the SDK text stream", exc_info=True)
+async def _aclose_text_source(text_stream: AsyncIterator[str]) -> None:
+    """Async counterpart of ``_close_text_source``."""
+    if isinstance(text_stream, AsyncGenerator):
+        await text_stream.aclose()
 
 
 class _StreamWrapperWithStream(Protocol):
@@ -425,7 +410,11 @@ class MessagesStreamWrapper(
             # that to the SDK's generator under the invocation's context so it
             # is released here instead of staying suspended.
             with self._execution_context():
-                _close_text_source(text_stream)
+                try:
+                    _close_text_source(text_stream)
+                except BaseException as error:
+                    self._finalize_failure(error)
+                    raise
 
     def _scoped_helper(self, helper: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(helper)
@@ -538,7 +527,11 @@ class AsyncMessagesStreamWrapper(
         finally:
             # See ``MessagesStreamWrapper._read_text_stream``.
             with self._execution_context():
-                await _aclose_text_source(text_stream)
+                try:
+                    await _aclose_text_source(text_stream)
+                except BaseException as error:
+                    self._finalize_failure(error)
+                    raise
 
     def _scoped_helper(
         self, helper: Callable[..., Awaitable[Any]]

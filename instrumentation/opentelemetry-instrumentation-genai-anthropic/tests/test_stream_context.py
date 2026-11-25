@@ -953,6 +953,74 @@ async def test_async_text_stream_early_close_closes_the_sdk_generator(
     assert "error.type" not in (span.attributes or {})
 
 
+class _FailingCloseTextStream(_ClosableTextStream):
+    def _texts(self) -> Iterator[str]:
+        try:
+            yield "hello"
+            yield " world"
+        finally:
+            raise RuntimeError("sdk close failed")
+
+
+class _AsyncFailingCloseTextStream(_AsyncClosableTextStream):
+    async def _texts(self) -> AsyncIterator[str]:
+        try:
+            yield "hello"
+            yield " world"
+        finally:
+            raise RuntimeError("sdk close failed")
+
+
+def test_sync_text_stream_close_error_propagates(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    # Closing the SDK's own generator raises the same error uninstrumented.
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    stream = MessagesStreamWrapper(
+        _FailingCloseTextStream(invocation, []), invocation, False
+    )
+
+    texts = stream.text_stream
+    assert next(texts) == "hello"
+    with pytest.raises(RuntimeError, match="sdk close failed"):
+        texts.close()
+
+    assert context.get_current() is before
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is trace.StatusCode.ERROR
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "RuntimeError"
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "msg_1"
+    stream.close()
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_text_stream_close_error_propagates(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    stream = AsyncMessagesStreamWrapper(
+        _AsyncFailingCloseTextStream(invocation, []), invocation, False
+    )
+
+    texts = stream.text_stream
+    assert await anext(texts) == "hello"
+    with pytest.raises(RuntimeError, match="sdk close failed"):
+        await texts.aclose()
+
+    assert context.get_current() is before
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is trace.StatusCode.ERROR
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "RuntimeError"
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "msg_1"
+    await stream.close()
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
 def test_stream_helpers_not_advertised_on_plain_streams(
     tracer_provider, logger_provider, meter_provider
 ) -> None:
