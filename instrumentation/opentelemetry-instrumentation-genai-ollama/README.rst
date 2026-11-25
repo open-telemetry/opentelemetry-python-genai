@@ -65,6 +65,9 @@ Configuration
 Message content capture is controlled by
 ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``. Supported values are
 ``no_content``, ``span_only``, ``event_only``, and ``span_and_event``.
+When content capture is disabled and no completion hook requests it,
+streaming telemetry does not accumulate message text, reasoning, or tool
+arguments.
 
 Alternatively, content capture can be configured programmatically by passing a
 ``ContentCapturingMode`` as ``content_capturing_mode`` to ``instrument()``.
