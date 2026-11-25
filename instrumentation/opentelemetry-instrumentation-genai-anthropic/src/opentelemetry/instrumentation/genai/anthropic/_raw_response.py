@@ -36,6 +36,7 @@ from .wrappers import (
     AsyncMessagesStreamWrapper,
     MessagesStreamWrapper,
     MessageWrapper,
+    _ObjectProxy,
 )
 
 if TYPE_CHECKING:
@@ -45,16 +46,6 @@ if TYPE_CHECKING:
 
     from opentelemetry.util.genai.invocation import InferenceInvocation
 
-    # wrapt's ``ObjectProxy`` is untyped; model just the constructor and the
-    # wrapped-object attribute we use so the proxy subclass is fully typed
-    # under pyright.
-    class _ObjectProxy:
-        __wrapped__: Any
-
-        def __init__(self, wrapped: object) -> None: ...
-
-else:
-    from wrapt import ObjectProxy as _ObjectProxy
 
 _logger = logging.getLogger(__name__)
 

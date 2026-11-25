@@ -14,6 +14,7 @@ from collections.abc import (
     Generator,
     Iterator,
 )
+from contextlib import AbstractContextManager
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -94,6 +95,17 @@ if TYPE_CHECKING:
     from opentelemetry.util.genai.invocation import InferenceInvocation
     from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
+    # wrapt's ``ObjectProxy`` is untyped; model just the constructor and the
+    # wrapped-object attribute we use so the proxy subclass is fully typed
+    # under pyright.
+    class _ObjectProxy:
+        __wrapped__: Any
+
+        def __init__(self, wrapped: object) -> None: ...
+
+else:
+    from wrapt import ObjectProxy as _ObjectProxy
+
 
 ResponseFormatT = TypeVar("ResponseFormatT")
 accumulate_event = cast("Callable[..., Message] | None", _sdk_accumulate_event)
@@ -136,11 +148,7 @@ _DRAINING_HELPERS = frozenset(
 
 
 def _close_text_source(text_stream: Iterator[str]) -> None:
-    """Close the SDK generator behind a scoped ``text_stream``.
-
-    Closing the adapter the caller iterates does not reach the generator the
-    SDK handed out, so its frame would otherwise stay suspended.
-    """
+    """Close the SDK generator behind a scoped ``text_stream``."""
     if isinstance(text_stream, Generator):
         text_stream.close()
 
@@ -149,6 +157,86 @@ async def _aclose_text_source(text_stream: AsyncIterator[str]) -> None:
     """Async counterpart of ``_close_text_source``."""
     if isinstance(text_stream, AsyncGenerator):
         await text_stream.aclose()
+
+
+class _TextStreamScope(Protocol):
+    def _execution_context(self) -> AbstractContextManager[None]: ...
+
+    def _finalize_failure(self, error: BaseException) -> None: ...
+
+
+class _ScopedTextStream(_ObjectProxy):
+    """The SDK's ``text_stream`` generator, read and closed under the invocation.
+
+    A generator adapter can't stand in for it: closing one before its first
+    read never runs its body, so the SDK generator would stay open.
+    """
+
+    __wrapped__: Iterator[str]
+
+    def __init__(
+        self, wrapped: Iterator[str], scope: _TextStreamScope
+    ) -> None:
+        super().__init__(wrapped)
+        self._self_scope = scope
+
+    def __iter__(self) -> Iterator[str]:
+        return self
+
+    def __next__(self) -> str:
+        with self._self_scope._execution_context():
+            try:
+                return next(self.__wrapped__)
+            except StopIteration:
+                pass
+            except BaseException as error:
+                # Finalize through the wrapper before ``activate()`` fails the
+                # invocation, so the SDK snapshot is still recorded.
+                self._self_scope._finalize_failure(error)
+                raise
+        raise StopIteration
+
+    def close(self) -> None:
+        with self._self_scope._execution_context():
+            try:
+                _close_text_source(self.__wrapped__)
+            except BaseException as error:
+                self._self_scope._finalize_failure(error)
+                raise
+
+
+class _AsyncScopedTextStream(_ObjectProxy):
+    """Async counterpart of ``_ScopedTextStream``."""
+
+    __wrapped__: AsyncIterator[str]
+
+    def __init__(
+        self, wrapped: AsyncIterator[str], scope: _TextStreamScope
+    ) -> None:
+        super().__init__(wrapped)
+        self._self_scope = scope
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self
+
+    async def __anext__(self) -> str:
+        with self._self_scope._execution_context():
+            try:
+                return await anext(self.__wrapped__)
+            except StopAsyncIteration:
+                pass
+            except BaseException as error:
+                self._self_scope._finalize_failure(error)
+                raise
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        with self._self_scope._execution_context():
+            try:
+                await _aclose_text_source(self.__wrapped__)
+            except BaseException as error:
+                self._self_scope._finalize_failure(error)
+                raise
 
 
 class _StreamWrapperWithStream(Protocol):
@@ -367,7 +455,7 @@ class MessagesStreamWrapper(
         # The SDK hands out the same text generator every time, so the scoped
         # copy of it is memoized against the generator it was built from.
         self._self_text_stream_source: object = None
-        self._self_text_stream: Iterator[str] | None = None
+        self._self_text_stream: _ScopedTextStream | None = None
 
     if not TYPE_CHECKING:
 
@@ -385,36 +473,8 @@ class MessagesStreamWrapper(
         # once and hand the same wrapper back.
         if self._self_text_stream_source is not text_stream:
             self._self_text_stream_source = text_stream
-            self._self_text_stream = self._read_text_stream(text_stream)
+            self._self_text_stream = _ScopedTextStream(text_stream, self)
         return cast("Iterator[str]", self._self_text_stream)
-
-    def _read_text_stream(self, text_stream: Iterator[str]) -> Iterator[str]:
-        # Scope each read, restoring the caller's context before the text is
-        # handed back, like the wrapper's own iteration does.
-        try:
-            while True:
-                with self._execution_context():
-                    try:
-                        text = next(text_stream)
-                    except StopIteration:
-                        return
-                    except BaseException as error:
-                        # Finalize through the wrapper before ``activate()``
-                        # fails the invocation, so the SDK snapshot is still
-                        # recorded.
-                        self._finalize_failure(error)
-                        raise
-                yield text
-        finally:
-            # The caller can close the adapter early, after one chunk; forward
-            # that to the SDK's generator under the invocation's context so it
-            # is released here instead of staying suspended.
-            with self._execution_context():
-                try:
-                    _close_text_source(text_stream)
-                except BaseException as error:
-                    self._finalize_failure(error)
-                    raise
 
     def _scoped_helper(
         self, name: str, helper: Callable[..., Any]
@@ -504,7 +564,7 @@ class AsyncMessagesStreamWrapper(
         self._self_beta_accumulation_disabled = False
         # See ``MessagesStreamWrapper.__init__``.
         self._self_text_stream_source: object = None
-        self._self_text_stream: AsyncIterator[str] | None = None
+        self._self_text_stream: _AsyncScopedTextStream | None = None
 
     if not TYPE_CHECKING:
 
@@ -522,31 +582,8 @@ class AsyncMessagesStreamWrapper(
         # See ``MessagesStreamWrapper._scoped_text_stream``.
         if self._self_text_stream_source is not text_stream:
             self._self_text_stream_source = text_stream
-            self._self_text_stream = self._read_text_stream(text_stream)
+            self._self_text_stream = _AsyncScopedTextStream(text_stream, self)
         return cast("AsyncIterator[str]", self._self_text_stream)
-
-    async def _read_text_stream(
-        self, text_stream: AsyncIterator[str]
-    ) -> AsyncIterator[str]:
-        try:
-            while True:
-                with self._execution_context():
-                    try:
-                        text = await anext(text_stream)
-                    except StopAsyncIteration:
-                        return
-                    except BaseException as error:
-                        self._finalize_failure(error)
-                        raise
-                yield text
-        finally:
-            # See ``MessagesStreamWrapper._read_text_stream``.
-            with self._execution_context():
-                try:
-                    await _aclose_text_source(text_stream)
-                except BaseException as error:
-                    self._finalize_failure(error)
-                    raise
 
     def _scoped_helper(
         self, name: str, helper: Callable[..., Awaitable[Any]]

@@ -1134,28 +1134,32 @@ _FAIL_AFTER = 1
 class _ObservedSSE(_http_lib.SyncByteStream):
     """Serves the SSE body, recording the current span at every chunk read."""
 
-    def __init__(self, seen: list[trace.SpanContext], fail: bool) -> None:
+    def __init__(
+        self, seen: list[trace.SpanContext], fail_at: int | None
+    ) -> None:
         self._seen = seen
-        self._fail = fail
+        self._fail_at = fail_at
 
     def __iter__(self) -> Iterator[bytes]:
         for index, chunk in enumerate(_SSE_CHUNKS):
             self._seen.append(trace.get_current_span().get_span_context())
-            if self._fail and index == _FAIL_AFTER:
+            if index == self._fail_at:
                 raise ConnectionError("connection dropped")
             yield chunk
 
 
 class _AsyncObservedSSE(_http_lib.AsyncByteStream):
-    def __init__(self, seen: list[trace.SpanContext], fail: bool) -> None:
+    def __init__(
+        self, seen: list[trace.SpanContext], fail_at: int | None
+    ) -> None:
         self._seen = seen
-        self._fail = fail
+        self._fail_at = fail_at
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for index, chunk in enumerate(_SSE_CHUNKS):
             await asyncio.sleep(0)
             self._seen.append(trace.get_current_span().get_span_context())
-            if self._fail and index == _FAIL_AFTER:
+            if index == self._fail_at:
                 raise ConnectionError("connection dropped")
             yield chunk
 
@@ -1166,21 +1170,23 @@ def _sse_response(stream: Any) -> Any:
     )
 
 
-def _observed_client(seen: list[trace.SpanContext], fail: bool) -> Anthropic:
+def _observed_client(
+    seen: list[trace.SpanContext], fail_at: int | None = None
+) -> Anthropic:
     return Anthropic(
         api_key="test_anthropic_api_key",
         base_url="http://anthropic.test",
         max_retries=0,
         http_client=_http_lib.Client(
             transport=_http_lib.MockTransport(
-                lambda request: _sse_response(_ObservedSSE(seen, fail))
+                lambda request: _sse_response(_ObservedSSE(seen, fail_at))
             )
         ),
     )
 
 
 def _async_observed_client(
-    seen: list[trace.SpanContext], fail: bool
+    seen: list[trace.SpanContext], fail_at: int | None = None
 ) -> AsyncAnthropic:
     return AsyncAnthropic(
         api_key="test_anthropic_api_key",
@@ -1188,7 +1194,7 @@ def _async_observed_client(
         max_retries=0,
         http_client=_http_lib.AsyncClient(
             transport=_http_lib.MockTransport(
-                lambda request: _sse_response(_AsyncObservedSSE(seen, fail))
+                lambda request: _sse_response(_AsyncObservedSSE(seen, fail_at))
             )
         ),
     )
@@ -1249,7 +1255,7 @@ def test_sync_messages_stream_helper_reads_run_under_the_chat_span(
 ) -> None:
     """Every chunk a helper reads from a public stream is read under ``chat``."""
     seen: list[trace.SpanContext] = []
-    client = _observed_client(seen, fail)
+    client = _observed_client(seen, _FAIL_AFTER if fail else None)
     tracer = tracer_provider.get_tracer(__name__)
     with tracer.start_as_current_span("caller") as caller:
         with client.messages.stream(
@@ -1277,7 +1283,7 @@ async def test_async_messages_stream_helper_reads_run_under_the_chat_span(
     tracer_provider, span_exporter, instrument_no_content, consumer, fail
 ) -> None:
     seen: list[trace.SpanContext] = []
-    client = _async_observed_client(seen, fail)
+    client = _async_observed_client(seen, _FAIL_AFTER if fail else None)
     tracer = tracer_provider.get_tracer(__name__)
     with tracer.start_as_current_span("caller") as caller:
         async with client.messages.stream(
@@ -1298,6 +1304,41 @@ async def test_async_messages_stream_helper_reads_run_under_the_chat_span(
         _assert_dropped_connection(chat)
     else:
         assert chat.status.status_code is not trace.StatusCode.ERROR
+
+
+def test_sync_messages_stream_text_stream_close_before_read_closes_the_sdk_generator(
+    tracer_provider, instrument_no_content
+) -> None:
+    client = _observed_client([])
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            source = stream.__wrapped__.text_stream
+            stream.text_stream.close()
+
+            assert inspect.getgeneratorstate(source) == inspect.GEN_CLOSED
+            assert _is_current(caller)
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_text_stream_close_before_read_closes_the_sdk_generator(
+    tracer_provider, instrument_no_content
+) -> None:
+    client = _async_observed_client([])
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        async with client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            source = stream.__wrapped__.text_stream
+            await stream.text_stream.aclose()
+
+            assert source.ag_frame is None
+            assert _is_current(caller)
+    await client.close()
 
 
 @pytest.mark.vcr()
