@@ -270,7 +270,7 @@ async def test_two_hops_produce_one_span_with_summed_usage(
         assert result.id == "v1_hop_2"
 
     span = _only_span(span_exporter)
-    assert span.name == "interactions.create gemini-2.5-flash"
+    assert span.name == "chat gemini-2.5-flash"
     assert span.status.status_code == StatusCode.UNSET
     attributes = span.attributes
     assert attributes is not None
@@ -409,7 +409,7 @@ async def test_raw_response_records_request_only_span(
     span = _only_span(span_exporter)
     attributes = span.attributes
     assert attributes is not None
-    assert span.name == "interactions.create gemini-2.5-flash"
+    assert span.name == "chat gemini-2.5-flash"
     assert span.status.status_code == StatusCode.UNSET
     assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in attributes
     assert GenAIAttributes.GEN_AI_RESPONSE_ID not in attributes
@@ -447,7 +447,7 @@ async def test_stream_closed_early_ends_span(
     span = _only_span(span_exporter)
     attributes = span.attributes
     assert attributes is not None
-    assert span.name == "interactions.create gemini-2.5-flash"
+    assert span.name == "chat gemini-2.5-flash"
     assert span.status.status_code == StatusCode.UNSET
     assert ERROR_TYPE not in attributes
 
