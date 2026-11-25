@@ -56,13 +56,14 @@ def format_retrieval_document(doc: Document) -> RetrievalDocument:
     )
 
 
-def format_content(val: object) -> str:
-    """Format content into a string, converting structured objects to JSON."""
-    if isinstance(val, str):
-        return val
+def format_content(val: object) -> str | None:
+    """Format content into a string, converting structured objects to JSON.
+
+    Returns None for content that cannot be converted.
+    """
     any_value = object_to_any_value(val)
-    if any_value is None:
-        return str(val)
+    if any_value is None or isinstance(any_value, str):
+        return any_value
     return gen_ai_json_dumps(any_value, ensure_ascii=False)
 
 

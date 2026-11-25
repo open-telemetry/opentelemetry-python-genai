@@ -7,23 +7,27 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from agno.agent import Agent
 from agno.models.response import ModelResponse
 from agno.team import Team
 from agno.tools.function import Function, FunctionCall
+from pydantic import BaseModel
 from tests.mock_model import MockModel
 
+from opentelemetry.instrumentation.genai.agno import AgnoInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import INVALID_SPAN, get_current_span
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai.types import TextPart
 
 
 def _patch_agent_stream(side_effect):
@@ -737,9 +741,11 @@ def test_agent_stream_tool_completed_event_preserves_final_content(
         {
             "role": "assistant",
             "parts": ({"type": "text", "content": "final answer"},),
-            "finish_reason": "stop",
         },
     )
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
 
 
 def test_agent_stream_no_llm_client_metrics(
@@ -793,7 +799,6 @@ def test_workflow_stream_step_completed_event_preserves_final_content(
         {
             "role": "assistant",
             "parts": ({"type": "text", "content": "final workflow output"},),
-            "finish_reason": "stop",
         },
     )
 
@@ -1149,20 +1154,20 @@ def test_agent_stream_empty_session_id_not_set() -> None:
     )
 
     mixin = _AgentStreamMixin()
-    mixin._self_agent_invocation = MagicMock()
-    mixin._self_agent_invocation.conversation_id = None
-    mixin._self_capture_content = False
+    invocation = MagicMock()
+    invocation.conversation_id = None
+    mixin._init_agent_state(invocation)
 
     class FakeChunk:
         session_id = ""
         event = ""
 
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_agent_invocation.conversation_id is None
+    assert invocation.conversation_id is None
 
     FakeChunk.session_id = "sess-123"
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_agent_invocation.conversation_id == "sess-123"
+    assert invocation.conversation_id == "sess-123"
 
 
 def test_workflow_stream_empty_session_id_not_set() -> None:
@@ -1174,20 +1179,20 @@ def test_workflow_stream_empty_session_id_not_set() -> None:
     )
 
     mixin = _WorkflowStreamMixin()
-    mixin._self_workflow_invocation = MagicMock()
-    mixin._self_workflow_invocation.conversation_id = None
-    mixin._self_capture_content = False
+    invocation = MagicMock()
+    invocation.conversation_id = None
+    mixin._init_workflow_state(invocation, None)
 
     class FakeChunk:
         session_id = ""
         event = ""
 
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_workflow_invocation.conversation_id is None
+    assert invocation.conversation_id is None
 
     FakeChunk.session_id = "wf-sess-456"
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_workflow_invocation.conversation_id == "wf-sess-456"
+    assert invocation.conversation_id == "wf-sess-456"
 
 
 def _tool_call() -> FunctionCall:
@@ -1305,3 +1310,238 @@ def test_tool_aexecute_closed_while_tool_is_pending_fails_the_span(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
+
+
+def test_agent_run_stream_completion_event_records_stop(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    from agno.agent import RunCompletedEvent, RunContentEvent
+
+    agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunContentEvent(content="done")
+        yield RunCompletedEvent()
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
+
+
+def test_agent_run_stream_without_completion_event_has_no_finish_reason(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk 1"
+        yield "chunk 2"
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in (
+        span.attributes or {}
+    )
+
+
+def test_agent_run_stream_error_event_records_error(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    from agno.agent import RunErrorEvent
+
+    agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk 1"
+        yield RunErrorEvent(content="model failed")
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("error",)
+
+
+def test_agent_run_stream_exception_has_no_finish_reason(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
+
+    def failing_stream(*args, **kwargs):
+        yield "chunk 1"
+        raise ConnectionError("dropped")
+
+    with (
+        _patch_agent_stream(failing_stream),
+        pytest.raises(ConnectionError),
+    ):
+        list(agent.run("hello", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get("error.type") == "ConnectionError"
+    assert GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in (
+        span.attributes or {}
+    )
+
+
+def test_workflow_run_stream_output_is_last_step(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    pytest.importorskip("agno.workflow.workflow")
+    from agno.workflow.workflow import Workflow
+
+    def step1(step_input):
+        return "first step output"
+
+    def step2(step_input):
+        return "second step output"
+
+    workflow = Workflow(name="two-step-workflow", steps=[step1, step2])
+    list(workflow.run("input", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES) == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "second step output"},),
+        },
+    )
+
+
+def test_agent_run_stream_closed_early_has_no_finish_reason(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    agent = Agent(name="closed-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk 1"
+        yield "chunk 2"
+
+    with _patch_agent_stream(fake_stream):
+        stream = agent.run("hello", stream=True)
+        next(stream)
+        stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code != StatusCode.ERROR
+    assert GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in (
+        span.attributes or {}
+    )
+
+
+def test_agent_stream_closed_after_contentless_completion_reports_stop(
+    instrument_agno_content_capture, span_exporter
+) -> None:
+    from agno.agent import RunCompletedEvent, RunContentEvent
+
+    agent = Agent(name="completed-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunContentEvent(content="final answer")
+        yield RunCompletedEvent()
+        yield RunContentEvent(content="trailing")
+
+    with _patch_agent_stream(fake_stream):
+        stream = agent.run("hello", stream=True)
+        for event in stream:
+            if isinstance(event, RunCompletedEvent):
+                break
+        stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
+    assert span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES) == (
+        {
+            "role": "assistant",
+            "parts": ({"type": "text", "content": "final answer"},),
+        },
+    )
+
+
+class UncapturableAnswer(BaseModel):
+    answer: str = "final"
+
+    def model_dump(self, *args, **kwargs):
+        raise ValueError("cannot capture")
+
+    def __str__(self) -> str:
+        raise ValueError("cannot capture")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_public_agent_stream_preserves_partial_output_on_conversion_failure(
+    tracer_provider, logger_provider, meter_provider, asynchronous
+) -> None:
+    answer = UncapturableAnswer()
+    hook = MagicMock()
+    agent = Agent(
+        name="partial-answer",
+        model=MockModel(id="mock-model"),
+        output_schema=UncapturableAnswer,
+    )
+
+    def response_stream(*args, **kwargs):
+        yield ModelResponse(content="partial")
+        yield ModelResponse(content=answer)
+
+    async def aresponse_stream(*args, **kwargs):
+        yield ModelResponse(content="partial")
+        yield ModelResponse(content=answer)
+
+    async def consume():
+        stream = agent.arun("Give an answer", stream=True, stream_events=True)
+        if inspect.isawaitable(stream):
+            stream = await stream
+        return [chunk async for chunk in stream]
+
+    with (
+        instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            completion_hook=hook,
+        ),
+        patch(
+            "agno.models.base.Model.response_stream",
+            side_effect=response_stream,
+        ),
+        patch(
+            "agno.models.base.Model.aresponse_stream",
+            side_effect=aresponse_stream,
+        ),
+    ):
+        chunks = (
+            asyncio.run(consume())
+            if asynchronous
+            else list(
+                agent.run("Give an answer", stream=True, stream_events=True)
+            )
+        )
+
+    assert any(getattr(chunk, "content", None) is answer for chunk in chunks)
+    hook.on_completion.assert_called_once()
+    outputs = hook.on_completion.call_args.kwargs["outputs"]
+    captured_text = "".join(
+        part.content
+        for message in outputs
+        for part in message.parts
+        if isinstance(part, TextPart)
+    )
+    assert captured_text == "partial"

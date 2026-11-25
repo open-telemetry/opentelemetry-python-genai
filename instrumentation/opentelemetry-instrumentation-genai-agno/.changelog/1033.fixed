@@ -1,0 +1,1 @@
+Agent and workflow runs no longer raise into the application, or record empty messages, when content can't be serialized.
