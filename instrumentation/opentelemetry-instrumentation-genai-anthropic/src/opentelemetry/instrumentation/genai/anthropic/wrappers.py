@@ -376,7 +376,7 @@ class MessagesStreamWrapper(
             if name == "text_stream":
                 return self._scoped_text_stream(attribute)
             if name in _DRAINING_HELPERS:
-                return self._scoped_helper(attribute)
+                return self._scoped_helper(name, attribute)
             return attribute
 
     def _scoped_text_stream(self, text_stream: Iterator[str]) -> Iterator[str]:
@@ -416,15 +416,30 @@ class MessagesStreamWrapper(
                     self._finalize_failure(error)
                     raise
 
-    def _scoped_helper(self, helper: Callable[..., Any]) -> Callable[..., Any]:
+    def _scoped_helper(
+        self, name: str, helper: Callable[..., Any]
+    ) -> Callable[..., Any]:
+        # Only draining reads the response; the final-message helpers then
+        # raise their own usage errors on a successful response
+        # (``get_final_text()`` on a reply with no text block), which must not
+        # fail the span. So drain under the invocation, then call the helper.
+        drain = (
+            None
+            if name == "until_done"
+            else getattr(self.stream, "until_done", None)
+        )
+
         @functools.wraps(helper)
         def scoped(*args: Any, **kwargs: Any) -> Any:
             with self._execution_context():
                 try:
-                    return helper(*args, **kwargs)
+                    if drain is None:
+                        return helper(*args, **kwargs)
+                    drain()
                 except BaseException as error:
                     self._finalize_failure(error)
                     raise
+            return helper(*args, **kwargs)
 
         return scoped
 
@@ -498,7 +513,7 @@ class AsyncMessagesStreamWrapper(
             if name == "text_stream":
                 return self._scoped_text_stream(attribute)
             if name in _DRAINING_HELPERS:
-                return self._scoped_helper(attribute)
+                return self._scoped_helper(name, attribute)
             return attribute
 
     def _scoped_text_stream(
@@ -534,16 +549,26 @@ class AsyncMessagesStreamWrapper(
                     raise
 
     def _scoped_helper(
-        self, helper: Callable[..., Awaitable[Any]]
+        self, name: str, helper: Callable[..., Awaitable[Any]]
     ) -> Callable[..., Awaitable[Any]]:
+        # See ``MessagesStreamWrapper._scoped_helper``.
+        drain = (
+            None
+            if name == "until_done"
+            else getattr(self.stream, "until_done", None)
+        )
+
         @functools.wraps(helper)
         async def scoped(*args: Any, **kwargs: Any) -> Any:
             with self._execution_context():
                 try:
-                    return await helper(*args, **kwargs)
+                    if drain is None:
+                        return await helper(*args, **kwargs)
+                    await drain()
                 except BaseException as error:
                     self._finalize_failure(error)
                     raise
+            return await helper(*args, **kwargs)
 
         return scoped
 

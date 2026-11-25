@@ -614,6 +614,7 @@ class _HelperStream:
 
     def __init__(self, invocation: Any) -> None:
         self._invocation = invocation
+        self._drained = False
         self.text_stream = self._texts()
 
     def __iter__(self) -> Iterator[Any]:
@@ -629,19 +630,23 @@ class _HelperStream:
 
     def until_done(self) -> None:
         _assert_invocation_current(self._invocation)
+        self._drained = True
 
+    # Like the SDK's, these read nothing once ``until_done()`` drained the
+    # stream, so the wrapper drains first and calls them outside the span.
     def get_final_message(self) -> Message:
-        _assert_invocation_current(self._invocation)
+        assert self._drained
         return _start_event().message
 
     def get_final_text(self) -> str:
-        _assert_invocation_current(self._invocation)
+        assert self._drained
         return "Hello"
 
 
 class _AsyncHelperStream:
     def __init__(self, invocation: Any) -> None:
         self._invocation = invocation
+        self._drained = False
         self.text_stream = self._texts()
 
     def __aiter__(self) -> AsyncIterator[Any]:
@@ -663,15 +668,16 @@ class _AsyncHelperStream:
     async def until_done(self) -> None:
         await asyncio.sleep(0)
         _assert_invocation_current(self._invocation)
+        self._drained = True
 
     async def get_final_message(self) -> Message:
         await asyncio.sleep(0)
-        _assert_invocation_current(self._invocation)
+        assert self._drained
         return _start_event().message
 
     async def get_final_text(self) -> str:
         await asyncio.sleep(0)
-        _assert_invocation_current(self._invocation)
+        assert self._drained
         return "Hello"
 
 
@@ -1351,6 +1357,108 @@ async def test_async_messages_stream_open_error_keeps_caller_span_current(
     assert "NotFoundError" in chat.attributes["error.type"]
 
 
+# --- final-message helpers on a successful response --------------------------
+
+_TOOL_USE_SSE = b"".join(
+    [
+        _SSE_CHUNKS[0],
+        _sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {},
+                },
+            },
+        ),
+        _sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "{}"},
+            },
+        ),
+        _sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {"output_tokens": 1},
+            },
+        ),
+        _sse("message_stop", {"type": "message_stop"}),
+    ]
+)
+
+
+def _tool_use_response(request: Any) -> Any:
+    return _http_lib.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_TOOL_USE_SSE,
+    )
+
+
+def _assert_tool_use_span_succeeded(span_exporter) -> None:
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is not trace.StatusCode.ERROR
+    assert span.attributes is not None
+    assert "error.type" not in span.attributes
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+
+
+def test_sync_get_final_text_without_text_block_keeps_the_span_ok(
+    span_exporter, instrument_no_content
+) -> None:
+    """The SDK's usage error on a drained, successful stream is the caller's."""
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        max_retries=0,
+        http_client=_http_lib.Client(
+            transport=_http_lib.MockTransport(_tool_use_response)
+        ),
+    )
+    with client.messages.stream(
+        model=_MODEL, max_tokens=100, messages=_MESSAGES
+    ) as stream:
+        with pytest.raises(RuntimeError, match="text`? (content )?block"):
+            stream.get_final_text()
+    client.close()
+
+    _assert_tool_use_span_succeeded(span_exporter)
+
+
+@pytest.mark.asyncio
+async def test_async_get_final_text_without_text_block_keeps_the_span_ok(
+    span_exporter, instrument_no_content
+) -> None:
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        max_retries=0,
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(_tool_use_response)
+        ),
+    )
+    async with client.messages.stream(
+        model=_MODEL, max_tokens=100, messages=_MESSAGES
+    ) as stream:
+        with pytest.raises(RuntimeError, match="text`? (content )?block"):
+            await stream.get_final_text()
+    await client.close()
+
+    _assert_tool_use_span_succeeded(span_exporter)
+
+
 # --- the SDK text stream closed early through the public API ------------------
 
 
@@ -1609,7 +1717,7 @@ class _FailingHelperStream(_HelperStream):
 
     current_message_snapshot = _start_event().message
 
-    def get_final_message(self) -> Message:
+    def until_done(self) -> None:
         raise ConnectionError("helper failed")
 
     def _texts(self) -> Iterator[str]:
@@ -1620,7 +1728,7 @@ class _FailingHelperStream(_HelperStream):
 class _FailingAsyncHelperStream(_AsyncHelperStream):
     current_message_snapshot = _start_event().message
 
-    async def get_final_message(self) -> Message:
+    async def until_done(self) -> None:
         raise ConnectionError("helper failed")
 
     async def _texts(self) -> AsyncIterator[str]:

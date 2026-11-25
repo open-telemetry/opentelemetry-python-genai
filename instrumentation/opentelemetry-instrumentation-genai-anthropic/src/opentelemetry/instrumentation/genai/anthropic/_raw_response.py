@@ -375,9 +375,7 @@ class RawResponseProxy(_ObjectProxy):
             )
 
     def _finalize_once(self) -> None:
-        # ``stop()`` is not idempotent, so finalize at most once. Stopping while
-        # the span is current keeps completion hooks inside it, as the read and
-        # close hooks already do.
+        # ``stop()`` is not idempotent, so finalize at most once.
         if self._self_span_open:
             with self._current():
                 self._self_span_open = False
