@@ -30,10 +30,7 @@ from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test.weaver_live_check import LiveCheckReport
-from opentelemetry.test_util_genai.conformance import (
-    ExpectedViolation,
-    Scenario,
-)
+from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
@@ -119,16 +116,10 @@ def _attr(span: dict[str, Any], name: str) -> Any:
 
 
 class InteractionsMediaInputScenario(Scenario):
-    expected_spans = {"interactions.create": 1}
+    expected_spans = {"chat": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
-    )
-    expected_violations = (
-        ExpectedViolation(
-            advice_id="genai_operation_name_unknown",
-            message_substring="interactions.create",
-        ),
     )
 
     def run(
@@ -211,8 +202,7 @@ class InteractionsMediaInputScenario(Scenario):
             entry["span"]
             for entry in report["samples"]
             if "span" in entry
-            and _attr(entry["span"], "gen_ai.operation.name")
-            == "interactions.create"
+            and _attr(entry["span"], "gen_ai.operation.name") == "chat"
         ]
         assert len(spans) == 1
         assert _attr(spans[0], "gen_ai.input.messages") == [

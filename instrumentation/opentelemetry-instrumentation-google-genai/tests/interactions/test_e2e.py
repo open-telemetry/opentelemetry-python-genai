@@ -1279,7 +1279,7 @@ def _assert_create_tool_call_and_steps_span(
     otel_mocker: OTelMocker, response: Any, content_mode: str
 ) -> None:
     assert response.status == "requires_action"
-    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    span = otel_mocker.get_span_named("chat gemini-2.5-flash")
     assert span is not None
     assert span.attributes["gen_ai.response.finish_reasons"] == ("tool_calls",)
     assert span.attributes["gen_ai.usage.input_tokens"] == 42
@@ -1475,7 +1475,7 @@ def _assert_malformed_input_span(
     from pydantic import ValidationError
 
     assert not get_current_span().get_span_context().is_valid
-    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    span = otel_mocker.get_span_named("chat gemini-2.5-flash")
     assert span is not None
     assert span.status.status_code == StatusCode.ERROR
     if isinstance(exc, ValidationError):
@@ -1586,7 +1586,7 @@ def _assert_cyclic_server_tool_span(
     assert steps[1]["type"] == "google_search_result"
     assert steps[1]["call_id"] == "search-1"
 
-    span = otel_mocker.get_span_named("interactions.create gemini-2.5-flash")
+    span = otel_mocker.get_span_named("chat gemini-2.5-flash")
     assert span is not None
     assert span.status.status_code == StatusCode.ERROR
     expected_error_type = (
@@ -1671,6 +1671,162 @@ async def test_async_interactions_create_server_tool_dict_cycle_and_dataclass(
 
     _assert_cyclic_server_tool_span(
         otel_mocker, exc_info.value, steps, content_mode
+    )
+
+
+def _sdk_tool_serialization_failure_tools() -> list[Any]:
+    cyclic_params: dict[str, Any] = {
+        "type": "object",
+        "properties": {"meta": _ServerToolMeta(source="docs")},
+    }
+    cyclic_params["self"] = cyclic_params
+    unserializable_params: dict[str, Any] = {
+        "type": "object",
+        "properties": {"bad": object(), "ok": {"type": "string"}},
+    }
+    if _uses_legacy_interactions_sdk():
+        from google.genai._interactions.types import Function
+        from google.genai._interactions.types.tool import (
+            GoogleSearch,
+            MCPServer,
+        )
+
+        return [
+            Function(
+                type="function",
+                name="bad_obj_tool",
+                description="Unserializable",
+                parameters=unserializable_params,
+            ),
+            Function(
+                type="function",
+                name="cyclic_tool",
+                description="Cyclic",
+                parameters=cyclic_params,
+            ),
+            GoogleSearch(type="google_search"),
+            MCPServer(
+                type="mcp_server",
+                url="https://api.example.com/mcp",
+            ),
+        ]
+
+    from google.genai._gaos.types.interactions import (
+        Function,
+        GoogleSearch,
+        MCPServer,
+    )
+
+    return [
+        Function(
+            name="bad_obj_tool",
+            description="Unserializable",
+            parameters=unserializable_params,
+        ),
+        Function(
+            name="cyclic_tool",
+            description="Cyclic",
+            parameters=cyclic_params,
+        ),
+        GoogleSearch(),
+        MCPServer(url="https://api.example.com/mcp"),
+    ]
+
+
+def _assert_sdk_tool_serialization_failure_span(
+    otel_mocker: OTelMocker,
+    exc: BaseException,
+    content_mode: str,
+) -> None:
+    assert not get_current_span().get_span_context().is_valid
+    assert "Unable to serialize unknown type" in str(exc)
+
+    span = otel_mocker.get_span_named("chat gemini-2.5-flash")
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert (
+        span.attributes["error.type"]
+        == "pydantic_core._pydantic_core.PydanticSerializationError"
+    )
+    if content_mode == "no_content_capture":
+        assert "gen_ai.tool.definitions" not in span.attributes
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+        return
+
+    assert get_content_attribute(
+        span.attributes, "gen_ai.tool.definitions"
+    ) == [
+        {
+            "type": "function",
+            "name": "bad_obj_tool",
+            "description": "Unserializable",
+            "parameters": {
+                "type": "object",
+                "properties": {"ok": {"type": "string"}},
+            },
+        },
+        {
+            "type": "function",
+            "name": "cyclic_tool",
+            "description": "Cyclic",
+            "parameters": {
+                "type": "object",
+                "properties": {"meta": {"source": "docs"}},
+            },
+        },
+        {"type": "google_search", "name": "google_search"},
+        {"type": "mcp_server", "name": "https://api.example.com/mcp"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_sdk_tool_serialization_failure(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    from pydantic_core import PydanticSerializationError
+
+    request.getfixturevalue(content_mode)
+    tools = _sdk_tool_serialization_failure_tools()
+    with pytest.raises(PydanticSerializationError) as exc_info:
+        client.interactions.create(
+            model="gemini-2.5-flash",
+            input="Hello",
+            tools=tools,
+        )
+
+    _assert_sdk_tool_serialization_failure_span(
+        otel_mocker, exc_info.value, content_mode
+    )
+
+
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_sdk_tool_serialization_failure(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    from pydantic_core import PydanticSerializationError
+
+    request.getfixturevalue(content_mode)
+    tools = _sdk_tool_serialization_failure_tools()
+    with pytest.raises(PydanticSerializationError) as exc_info:
+        await client.aio.interactions.create(
+            model="gemini-2.5-flash",
+            input="Hello",
+            tools=tools,
+        )
+
+    _assert_sdk_tool_serialization_failure_span(
+        otel_mocker, exc_info.value, content_mode
     )
 
 

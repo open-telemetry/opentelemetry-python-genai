@@ -37,6 +37,7 @@ try:
     from google.genai._interactions.types.document_content import (
         DocumentContent,
     )
+    from google.genai._interactions.types.function import Function
     from google.genai._interactions.types.function_call_step import (
         FunctionCallStep,
     )
@@ -53,6 +54,7 @@ try:
     )
     from google.genai._interactions.types.step import Step
     from google.genai._interactions.types.text_content import TextContent
+    from google.genai._interactions.types.tool import MCPServer, Tool
     from google.genai._interactions.types.user_input_step import UserInputStep
     from google.genai._interactions.types.video_content import VideoContent
 
@@ -74,13 +76,16 @@ except ImportError:
         from google.genai._gaos.types.interactions import (
             AudioContent,
             DocumentContent,
+            Function,
             FunctionCallStep,
             FunctionResultStep,
             ImageContent,
             Interaction,
             InteractionSSEEvent,
+            MCPServer,
             Step,
             TextContent,
+            Tool,
             Usage,
             UserInputStep,
             VideoContent,
@@ -165,6 +170,9 @@ def _union_model_types(annotation: object) -> tuple[type[object], ...]:
 
 _STEP_MODEL_TYPES: tuple[type[object], ...] = (
     _union_model_types(Step) if _HAS_INTERACTIONS else ()
+)
+_TOOL_MODEL_TYPES: tuple[type[object], ...] = (
+    _union_model_types(Tool) if _HAS_INTERACTIONS else ()
 )
 
 # Interaction.status values that differ from the gen_ai.response.status value
@@ -1093,56 +1101,98 @@ class AsyncFetchInteractionStreamWrapper(
         self._init_stream_state(telemetry_handler)
 
 
+_GENERIC_TOOL_TYPES = frozenset(
+    {
+        "bash",
+        "code_execution",
+        "filesystem",
+        "file_search",
+        "google_maps",
+        "google_search",
+        "url_context",
+        "computer_use",
+    }
+)
+
+
+def _tool_definition_from_model(tool: Tool) -> ToolDefinition | None:
+    if isinstance(tool, Function):
+        return FunctionToolDefinition(
+            name=tool.name or "function",
+            description=tool.description,
+            parameters=tool.parameters,
+        )
+    if isinstance(tool, MCPServer):
+        return GenericToolDefinition(
+            name=tool.name or tool.url or "mcp_server",
+            type="mcp_server",
+        )
+    if tool.type in _GENERIC_TOOL_TYPES:
+        return GenericToolDefinition(
+            name=tool.type,
+            type=tool.type,
+        )
+    return None
+
+
 # See https://ai.google.dev/gemini-api/docs/function-calling
 def _maybe_get_tool_definitions(
-    tools: Any | None,
+    tools: object,
 ) -> list[ToolDefinition] | None:
     if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
         return None
     definitions: list[ToolDefinition] = []
     for raw_tool in tools:
-        tool = (
-            raw_tool if isinstance(raw_tool, dict) else _as_payload(raw_tool)
-        )
-        # Tool must be a dictionary or an SDK model that dumps to one
-        if not isinstance(tool, dict):
+        if isinstance(raw_tool, _TOOL_MODEL_TYPES):
+            if definition := _tool_definition_from_model(cast(Tool, raw_tool)):
+                definitions.append(definition)
             continue
+        if not isinstance(raw_tool, dict):
+            continue
+        tool = cast(dict[str, object], raw_tool)
         # This is currently a required field and the SDK will raise an error if it isn't present or
         # takes on a type field that isn't supported.
         tool_type = tool.get("type")
-        if tool_type in (
-            "bash",
-            "code_execution",
-            "filesystem",
-            "file_search",
-            "google_maps",
-            "google_search",
-            "url_context",
-            "computer_use",
-        ):
+        if not isinstance(tool_type, str):
+            continue
+        if tool_type in _GENERIC_TOOL_TYPES:
+            name = tool.get("name")
             definitions.append(
                 GenericToolDefinition(
-                    name=tool.get("name") or tool_type,
+                    name=name if isinstance(name, str) and name else tool_type,
                     type=tool_type,
                 )
             )
-
         elif tool_type == "mcp_server":
             # Name and uri are optional.
-            name = tool.get("name") or tool.get("url") or "mcp_server"
+            name = tool.get("name")
+            url = tool.get("url")
+            resolved_name = (
+                name
+                if isinstance(name, str) and name
+                else url
+                if isinstance(url, str) and url
+                else "mcp_server"
+            )
             # GenericToolDefinition only has 2 fields (name and type). It'd be useful to
             # add support for extra fields somehow, so we can put the URI in here.
             definitions.append(
                 GenericToolDefinition(
-                    name=name,
+                    name=resolved_name,
                     type="mcp_server",
                 )
             )
         elif tool_type == "function":
+            name = tool.get("name")
+            description = tool.get("description")
             definitions.append(
                 FunctionToolDefinition(
-                    name=tool.get("name") or "function",
-                    description=tool.get("description"),
+                    name=name
+                    if isinstance(name, str) and name
+                    else "function",
+                    description=(
+                        description if isinstance(description, str) else None
+                    ),
                     parameters=tool.get("parameters"),
                 )
             )
