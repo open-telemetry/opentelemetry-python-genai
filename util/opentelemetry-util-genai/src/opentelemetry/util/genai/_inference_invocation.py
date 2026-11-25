@@ -18,6 +18,7 @@ from opentelemetry.trace import (
     SpanKind,
     Tracer,
 )
+from opentelemetry.util.genai._agent_context import get_ambient_agent_name
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     ContextData,
@@ -143,6 +144,9 @@ class InferenceData(ContextData):
 class InferenceInvocation(GenAIInvocation):
     """Represents a single LLM chat/completion call.
 
+    Captures the ambient ``gen_ai.agent.name`` from OTel Context at start and
+    sets it on recorded client inference metrics when available.
+
     Use handler.inference(provider) rather than constructing this directly.
     """
 
@@ -172,6 +176,7 @@ class InferenceInvocation(GenAIInvocation):
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
     ) -> None:
+        self._agent_name: str | None = get_ambient_agent_name(context)
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
         )
@@ -897,6 +902,8 @@ class InferenceInvocation(GenAIInvocation):
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs = dict(self._start_attributes)
+        if self._agent_name is not None:
+            attrs[GenAI.GEN_AI_AGENT_NAME] = self._agent_name
         if self.data.provider_name is not None:
             attrs[GenAI.GEN_AI_PROVIDER_NAME] = self.data.provider_name
         if self.data.request_model is not None:

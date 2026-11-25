@@ -455,6 +455,11 @@ class TelemetryHandler:
         ``context`` parents the span and becomes the base of the invocation's
         own context. ``conversation_id`` overrides the one inherited from it.
 
+        Publishes ``agent_name`` (or clears any outer name when omitted) into
+        the invocation's context so nested ``inference`` metrics record
+        ``gen_ai.agent.name``; the agent's context must be current, or passed
+        as ``context=``, around the model call.
+
         Only set data attributes on the invocation object, do not modify the span or context.
         """
         return LocalAgentInvocation(

@@ -16,6 +16,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
+from opentelemetry.util.genai._agent_context import with_agent_name
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
@@ -417,6 +418,10 @@ class AgentInvocation(GenAIInvocation, ABC):
 class LocalAgentInvocation(AgentInvocation):
     """Represents an in-process agent invocation (INTERNAL span kind).
 
+    Publishes ``agent_name`` (or ``None`` when unnamed) into the invocation's
+    OTel Context so nested client inference metrics record ``gen_ai.agent.name``
+    for the active agent.
+
     Use handler.invoke_local_agent() rather than constructing this directly.
 
     Reference:
@@ -439,6 +444,7 @@ class LocalAgentInvocation(AgentInvocation):
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
     ) -> None:
+        context = with_agent_name(agent_name, context=context)
         super().__init__(
             tracer,
             instruments,
