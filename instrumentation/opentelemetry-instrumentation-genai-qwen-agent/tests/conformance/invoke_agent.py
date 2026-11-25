@@ -17,7 +17,10 @@ from opentelemetry.instrumentation.genai.qwen_agent import (
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
+from opentelemetry.test_util_genai.conformance import (
+    LiveCheckReport,
+    Scenario,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
@@ -56,6 +59,8 @@ class InvokeAgentScenario(Scenario):
     expected_spans = {"invoke_agent": 2, "execute_tool": 2}
     expected_metrics = (
         "gen_ai.invoke_agent.duration",
+        "gen_ai.invoke_agent.inference_calls",
+        "gen_ai.invoke_agent.tool_calls",
         "gen_ai.execute_tool.duration",
     )
 
@@ -92,3 +97,38 @@ class InvokeAgentScenario(Scenario):
                         ]
                     )
                 )
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        metrics = {
+            entry["metric"]["name"]: entry["metric"]
+            for entry in report["samples"]
+            if "metric" in entry
+        }
+        # The outer Assistant takes three model turns (two of them request the
+        # tool) and calls the tool twice. Memory is not a model-calling agent
+        # execution, so call counts are not reported for it.
+        expected = {
+            "gen_ai.invoke_agent.inference_calls": {
+                "WeatherAgent": 3,
+            },
+            "gen_ai.invoke_agent.tool_calls": {
+                "WeatherAgent": 2,
+            },
+        }
+        for name, per_agent in expected.items():
+            metric = metrics[name]
+            assert metric["instrument"] == "histogram"
+            observed: dict[str, tuple[int, float]] = {}
+            for point in metric["data_points"]:
+                attributes = {
+                    attribute["name"]: attribute["value"]
+                    for attribute in point["attributes"]
+                }
+                observed[attributes["gen_ai.agent.name"]] = (
+                    point["count"],
+                    point["sum"],
+                )
+            assert observed == {
+                agent: (1, total) for agent, total in per_agent.items()
+            }

@@ -44,6 +44,7 @@ from opentelemetry.instrumentation.genai.qwen_agent.package import (
     _instruments,
 )
 from opentelemetry.instrumentation.genai.qwen_agent.patch import (
+    wrap_agent_call_llm,
     wrap_agent_call_tool,
     wrap_agent_run,
 )
@@ -82,6 +83,10 @@ class QwenAgentInstrumentor(BaseInstrumentor):
       ``run()`` internally, so the ``invoke_agent`` span is created once
       by the ``run()`` wrapper.
     - ``Agent._call_tool()``: tool execution spans (``execute_tool``).
+    - ``Agent._call_llm()`` and ``Agent._call_tool()``: model and executed tool
+      call counts of the enclosing run, reported on the ``invoke_agent``
+      histograms ``gen_ai.invoke_agent.inference_calls`` and
+      ``gen_ai.invoke_agent.tool_calls``.
 
     LLM call spans (``chat``) are not emitted by this instrumentation;
     enable the instrumentation of the underlying model client library
@@ -117,6 +122,11 @@ class QwenAgentInstrumentor(BaseInstrumentor):
             "Agent._call_tool",
             _with_handler(wrap_agent_call_tool, handler),
         )
+        wrap_function_wrapper(
+            _AGENT_MODULE,
+            "Agent._call_llm",
+            _with_handler(wrap_agent_call_llm, handler),
+        )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Qwen-Agent instrumentation."""
@@ -124,3 +134,4 @@ class QwenAgentInstrumentor(BaseInstrumentor):
 
         unwrap(qwen_agent.agent.Agent, "run")
         unwrap(qwen_agent.agent.Agent, "_call_tool")
+        unwrap(qwen_agent.agent.Agent, "_call_llm")

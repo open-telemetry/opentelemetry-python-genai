@@ -1,0 +1,1 @@
+Add ``gen_ai.invoke_agent.inference_calls`` and ``gen_ai.invoke_agent.tool_calls`` histograms reporting how many model and executed tool calls each agent run made.
