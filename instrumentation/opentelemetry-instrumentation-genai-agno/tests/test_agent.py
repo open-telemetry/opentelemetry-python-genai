@@ -731,7 +731,7 @@ def test_format_content_structured_types() -> None:
     assert json.loads(format_content([MockV1Model("v1_list")])) == [
         {"key": "v1_list"}
     ]
-    assert format_content(MockV1Model) == str(MockV1Model)
+    assert format_content(MockV1Model) is None
 
 
 def test_set_invocation_output_pydantic_structured_content(
@@ -2483,3 +2483,28 @@ def test_agent_continue_run_unresolved_tool_has_none_response(
     messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(messages) == 1
     assert messages[0]["parts"][0]["response"] is None
+
+
+def test_unconvertible_output_records_no_output_message(
+    tracer_provider,
+) -> None:
+    from opentelemetry.instrumentation.genai.agno.patch import (
+        _set_invocation_output,
+    )
+    from opentelemetry.util.genai.handler import TelemetryHandler
+
+    class _Unconvertible:
+        def __str__(self) -> str:
+            raise ValueError("cannot capture")
+
+    class _Result:
+        content = _Unconvertible()
+        session_id = None
+
+    invocation = TelemetryHandler(tracer_provider=tracer_provider).workflow(
+        name="wf"
+    )
+    _set_invocation_output(invocation, _Result(), capture_content=True)
+    invocation.stop()
+
+    assert invocation.output_messages == []

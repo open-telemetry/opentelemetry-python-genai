@@ -1,0 +1,1 @@
+Agent streams report ``gen_ai.response.finish_reasons`` from Agno's completion and error events instead of a per-message finish reason.

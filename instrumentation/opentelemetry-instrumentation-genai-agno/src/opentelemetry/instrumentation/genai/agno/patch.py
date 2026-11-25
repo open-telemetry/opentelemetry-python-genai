@@ -578,18 +578,16 @@ _EMBEDDER_METHOD_FACTORIES: tuple[
 )
 
 
-def _extract_input_content(input_val: Any) -> str:
+def _extract_input_content(input_val: Any) -> str | None:
     if input_val is None:
-        return ""
+        return None
     content = _get_property_value(input_val, "content")
-    if content is not None:
-        return format_content(content)
-    return format_content(input_val)
+    return format_content(input_val if content is None else content)
 
 
-def _extract_output_content(result: Any) -> str:
+def _extract_output_content(result: Any) -> str | None:
     if result is None:
-        return ""
+        return None
     return format_content(_extract_output_value(result))
 
 
@@ -648,11 +646,13 @@ def _set_invocation_input(
         input_val = get_argument("input", wrapped, args, kwargs)
         if input_val is not None:
             content_str = _extract_input_content(input_val)
-            invocation.input_messages = [
-                InputMessage(
-                    role=Role.USER.value, parts=[TextPart(content=content_str)]
-                )
-            ]
+            if content_str is not None:
+                invocation.input_messages = [
+                    InputMessage(
+                        role=Role.USER.value,
+                        parts=[TextPart(content=content_str)],
+                    )
+                ]
 
 
 def _to_tool_executions(raw_tools: object) -> list[ToolExecution]:
@@ -855,8 +855,8 @@ def _set_invocation_output(
     result: object | None,
     capture_content: bool,
 ) -> None:
-    if capture_content and result is not None:
-        output_str = _extract_output_content(result)
+    output_str = _extract_output_content(result) if capture_content else None
+    if output_str is not None:
         invocation.output_messages = [
             OutputMessage(
                 role=Role.ASSISTANT.value,
@@ -968,7 +968,6 @@ def _agent_run(
                 return AgnoAgentStreamWrapper(
                     result,
                     invocation,
-                    capture_content,
                 )
 
             _set_invocation_output(invocation, result, capture_content)
@@ -1019,7 +1018,6 @@ def _agent_arun(
             return AsyncAgnoAgentStreamWrapper(
                 result,
                 invocation,
-                capture_content,
             )
 
         if isinstance(result, Awaitable):
@@ -1042,7 +1040,6 @@ def _agent_arun(
                         return AsyncAgnoAgentStreamWrapper(
                             response,
                             invocation,
-                            capture_content,
                         )
                     _set_invocation_output(
                         invocation, response, capture_content
@@ -1188,7 +1185,6 @@ def _workflow_run(
                 return AgnoWorkflowStreamWrapper(
                     result,
                     invocation,
-                    capture_content,
                 )
 
             _set_invocation_output(invocation, result, capture_content)
@@ -1288,7 +1284,6 @@ def _workflow_arun(
             return AsyncAgnoWorkflowStreamWrapper(
                 result,
                 invocation,
-                capture_content,
                 on_close=functools.partial(_release_run_id, run_id),
             )
 
@@ -1315,7 +1310,6 @@ def _workflow_arun(
                             return AsyncAgnoWorkflowStreamWrapper(
                                 response,
                                 invocation,
-                                capture_content,
                                 on_close=functools.partial(
                                     _release_run_id, run_id
                                 ),
@@ -1454,7 +1448,6 @@ def _workflow_aexecute_stream(
                     return AsyncAgnoWorkflowStreamWrapper(
                         result,
                         invocation,
-                        capture_content,
                         on_close=functools.partial(_release_run_id, run_id),
                     )
                 _release_run_id(run_id)
@@ -1523,7 +1516,6 @@ def _workflow_aexecute_workflow_agent(
             return AsyncAgnoWorkflowStreamWrapper(
                 result,
                 invocation,
-                capture_content,
                 on_close=functools.partial(_release_run_id, run_id),
             )
 
@@ -1541,7 +1533,6 @@ def _workflow_aexecute_workflow_agent(
                             return AsyncAgnoWorkflowStreamWrapper(
                                 response,
                                 invocation,
-                                capture_content,
                                 on_close=functools.partial(
                                     _release_run_id, run_id
                                 ),
