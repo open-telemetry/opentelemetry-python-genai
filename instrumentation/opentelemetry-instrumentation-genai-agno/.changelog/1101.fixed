@@ -1,0 +1,1 @@
+Record individual input messages with their respective roles when passing ``Message`` objects to Agno agent runs.
