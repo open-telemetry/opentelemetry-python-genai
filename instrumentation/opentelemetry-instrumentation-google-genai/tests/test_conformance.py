@@ -30,6 +30,9 @@ from .conformance.inference import InferenceScenario
 from .conformance.interactions_media_input import (
     InteractionsMediaInputScenario,
 )
+from .conformance.interactions_tool_calling import (
+    InteractionsToolCallingScenario,
+)
 from .conformance.server_tool_calling import (
     GenerateContentServerToolCallingScenario,
     InteractionsServerToolCallingScenario,
@@ -42,6 +45,7 @@ from .conformance.tool_calling import ToolCallingScenario
     [
         InferenceScenario(),
         InteractionsMediaInputScenario(),
+        InteractionsToolCallingScenario(),
         EmbeddingScenario(),
         GenerateContentScenario(),
         ToolCallingScenario(),
