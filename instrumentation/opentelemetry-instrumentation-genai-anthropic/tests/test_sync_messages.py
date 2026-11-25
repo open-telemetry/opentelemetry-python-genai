@@ -1681,6 +1681,130 @@ def test_sync_messages_stream_early_exit_marks_incomplete_tool_use(
     ]
 
 
+def _completed_tool_use_then_truncated_text_sse_body() -> bytes:
+    """A completed tool call followed by a text block whose stream cuts off
+    before any text_delta, the body never reaching message_stop."""
+
+    def _event(name: str, payload: dict[str, object]) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    return b"".join(
+        [
+            _event(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_completed_tool_use",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 3, "output_tokens": 0},
+                    },
+                },
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_A",
+                        "name": "get_weather",
+                        "input": {},
+                    },
+                },
+            ),
+            _event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": '{"city": "Chicago"}',
+                    },
+                },
+            ),
+            _event(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": 0},
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+        ]
+    )
+
+
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_stream_text_stream_preserves_completed_tool_use(
+    span_exporter, instrument_with_content
+):
+    """A tool call completed before the body ends early stays on the span
+    even when the caller only reads ``text_stream``, which bypasses our own
+    per-chunk tracking and leaves the SDK snapshot as the only source."""
+
+    def respond(_request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_completed_tool_use_then_truncated_text_sse_body(),
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        for _ in stream.text_stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "arguments": {"city": "Chicago"},
+                    "name": "get_weather",
+                    "id": "toolu_A",
+                    "type": "tool_call",
+                },
+                {"type": "text", "content": ""},
+            ],
+            "finish_reason": "error",
+        }
+    ]
+
+
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_sync_messages_stream")
 def test_sync_messages_stream_without_content_does_not_buffer_blocks(

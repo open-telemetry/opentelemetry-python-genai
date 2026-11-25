@@ -200,9 +200,17 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     def _partial_output_messages(self) -> list[OutputMessage] | None:
         block_states = self._self_block_states.copy()
         if self._self_message is not None:
-            # text_stream bypasses event tracking; tool snapshots may hold placeholders.
-            for index, block in enumerate(self._self_message.content):
-                if block.type in ("text", "thinking"):
+            content = self._self_message.content
+            last_index = len(content) - 1
+            for index, block in enumerate(content):
+                # Content blocks stream strictly in order, so every block
+                # before the last one has already seen its content_block_stop
+                # and the snapshot holds its final data. text_stream bypasses
+                # event tracking entirely, and the last block's snapshot may
+                # still hold a placeholder until it completes, so only text
+                # and thinking (which never carry a placeholder) are trusted
+                # there.
+                if index < last_index or block.type in ("text", "thinking"):
                     block_states[index] = create_stream_block_state(block)
 
         parts = [
