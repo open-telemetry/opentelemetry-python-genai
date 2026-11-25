@@ -1,0 +1,72 @@
+interactions:
+- request:
+    body: |-
+      {
+        "input": [
+          null,
+          {
+            "type": "user_input",
+            "content": [
+              null
+            ]
+          }
+        ],
+        "model": "gemini-2.5-flash"
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - identity
+      api-revision:
+      - '2026-05-20'
+      connection:
+      - keep-alive
+      content-length:
+      - '82'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - GeminiNextGenAPIClient/Python 2.8.0, google-genai-sdk/2.8.0 gl-python/3.11.14
+      x-goog-api-client:
+      - google-genai-sdk/2.8.0 gl-python/3.11.14
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: |-
+        {
+          "error": {
+            "message": "'input' must be a Content[], string, Turn[], Step[], or Content",
+            "code": "invalid_request"
+          }
+        }
+    headers:
+      accept-ranges:
+      - none
+      content-type:
+      - application/json; charset=UTF-8
+      date:
+      - Thu, 19 Nov 2026 17:07:01 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=120
+      transfer-encoding:
+      - chunked
+      vary:
+      - X-Origin
+      - Referer
+      - Origin,Accept-Encoding
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 400
+      message: Bad Request
+version: 1
