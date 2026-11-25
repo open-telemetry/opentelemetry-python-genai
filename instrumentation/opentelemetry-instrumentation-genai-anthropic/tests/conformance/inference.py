@@ -51,7 +51,7 @@ class InferenceScenario(Scenario):
             ):
                 with vcr.use_cassette("inference_conformance.yaml"):
                     Anthropic().messages.create(
-                        model="claude-sonnet-4-20250514",
+                        model="claude-sonnet-5-5",
                         max_tokens=100,
                         messages=[
                             {

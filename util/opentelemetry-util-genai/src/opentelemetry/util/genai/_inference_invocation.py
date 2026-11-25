@@ -595,6 +595,11 @@ class InferenceInvocation(GenAIInvocation):
 
     @property
     def prompt_variables(self) -> Mapping[str, object] | None:
+        """Variables passed to the prompt template.
+
+        Recorded as the structured ``gen_ai.prompt.variables`` attribute when
+        content capturing is enabled.
+        """
         return self.data.prompt_variable
 
     @prompt_variables.setter

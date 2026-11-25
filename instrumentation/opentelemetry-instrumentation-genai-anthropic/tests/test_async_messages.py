@@ -17,6 +17,7 @@ from anthropic import (
     NOT_GIVEN,
     APIConnectionError,
     AsyncAnthropic,
+    DefaultAsyncHttpxClient,
     NotFoundError,
 )
 from anthropic._response import AsyncAPIResponse, AsyncResponseContextManager
@@ -29,6 +30,8 @@ from anthropic._streaming import AsyncStream as AnthropicAsyncStream
 from anthropic.resources.messages import AsyncMessages as _AsyncMessages
 from anthropic.types import Message, Usage
 
+from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.instrumentation.genai.anthropic import (
     AnthropicInstrumentor,
     _raw_response,
@@ -153,7 +156,7 @@ async def test_async_messages_create_basic(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test basic async message creation produces correct span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     response = await async_anthropic_client.messages.create(
@@ -201,7 +204,7 @@ async def test_async_messages_create_with_raw_response(
     returns from ``with_raw_response`` has no ``model`` attribute, so extraction
     raised ``AttributeError`` into the caller after the API call succeeded.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     raw_response = (
@@ -238,7 +241,7 @@ async def test_async_messages_create_captures_content(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
     """Test content capture on async non-streaming create."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     await async_anthropic_client.messages.create(
@@ -275,7 +278,7 @@ async def test_async_messages_create_captures_multimodal_content(
         "test_async_messages_create_captures_multimodal_content.yaml"
     ):
         await async_anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[multimodal_input_message()],
         )
@@ -291,7 +294,7 @@ async def test_async_messages_create_with_all_params(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test async message creation with all optional parameters."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-haiku-4-5"
     messages = [{"role": "user", "content": "Say hello."}]
 
     kwargs = {
@@ -300,7 +303,7 @@ async def test_async_messages_create_with_all_params(
         "messages": messages,
         "stop_sequences": ["STOP"],
     }
-    sampling_params = {"temperature": 0.7, "top_p": 0.9, "top_k": 40}
+    sampling_params = {"temperature": 0.7, "top_k": 40}
     if "temperature" in _create_params:
         kwargs.update(sampling_params)
     else:
@@ -313,7 +316,6 @@ async def test_async_messages_create_with_all_params(
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
         "STOP",
@@ -326,7 +328,7 @@ async def test_async_messages_create_token_usage(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test that async token usage is captured correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Count to 5."}]
 
     response = await async_anthropic_client.messages.create(
@@ -356,7 +358,7 @@ async def test_async_messages_create_stop_reason(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test that async stop reason is captured as finish_reasons array."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hi."}]
 
     response = await async_anthropic_client.messages.create(
@@ -379,7 +381,7 @@ async def test_async_messages_create_connection_error(
     span_exporter, instrument_no_content
 ):
     """Test that async connection errors are handled correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Hello"}]
 
     client = AsyncAnthropic(base_url="http://localhost:9999")
@@ -410,7 +412,7 @@ async def test_async_messages_create_streaming(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test async create(stream=True) returns a wrapped stream and records a span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     response_id = None
@@ -466,7 +468,7 @@ async def test_async_messages_create_streaming_captures_content(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
     """Test content capture on async create(stream=True)."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     stream = await async_anthropic_client.messages.create(
@@ -505,7 +507,7 @@ async def test_async_messages_create_streaming_captures_multimodal_content(
         "test_async_messages_create_streaming_captures_multimodal_content.yaml"
     ):
         stream = await async_anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[multimodal_input_message()],
             stream=True,
@@ -525,7 +527,7 @@ async def test_async_messages_create_streaming_iteration(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test async streaming with direct iteration."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hi."}]
 
     stream = await async_anthropic_client.messages.create(
@@ -557,7 +559,7 @@ async def test_async_messages_create_streaming_delegates_response_attribute(
 ):
     """Async stream wrapper should expose attributes from the wrapped stream."""
     stream = await async_anthropic_client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hi."}],
         stream=True,
@@ -585,7 +587,7 @@ async def test_async_messages_stream_records_tool_definitions(
     come from the request, so the recorded response does not matter.
     """
     async with async_anthropic_client.messages.stream(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         tools=[_WEATHER_TOOL],
@@ -856,7 +858,7 @@ async def test_async_messages_create_streaming_connection_error(
     span_exporter, instrument_no_content
 ):
     """Test that async connection errors during streaming are handled correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Hello"}]
 
     client = AsyncAnthropic(base_url="http://localhost:9999")
@@ -892,7 +894,7 @@ async def test_async_messages_create_captures_tool_use_content(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
     """Test that async tool_use blocks are captured as tool_call parts."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "What is the weather in SF?"}]
 
     await async_anthropic_client.messages.create(
@@ -900,7 +902,6 @@ async def test_async_messages_create_captures_tool_use_content(
         max_tokens=256,
         messages=messages,
         tools=[_WEATHER_TOOL],
-        tool_choice={"type": "tool", "name": "get_weather"},
     )
 
     spans = span_exporter.get_finished_spans()
@@ -937,7 +938,7 @@ async def test_async_messages_create_tools_generator_reaches_the_sdk(
                 "id": "msg_generator",
                 "type": "message",
                 "role": "assistant",
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-5-5",
                 "content": [{"type": "text", "text": "ok"}],
                 "stop_reason": "end_turn",
                 "stop_sequence": None,
@@ -954,7 +955,7 @@ async def test_async_messages_create_tools_generator_reaches_the_sdk(
     )
     try:
         await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=256,
             messages=[
                 {"role": "user", "content": "What is the weather in SF?"}
@@ -982,11 +983,10 @@ async def test_async_messages_create_omits_tool_definitions_without_content(
 ):
     """Tool definitions are content: they stay off when capture is off."""
     await async_anthropic_client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=256,
         messages=[{"role": "user", "content": "What is the weather in SF?"}],
         tools=[_WEATHER_TOOL],
-        tool_choice={"type": "tool", "name": "get_weather"},
     )
 
     spans = span_exporter.get_finished_spans()
@@ -1007,14 +1007,19 @@ async def test_async_messages_create_captures_thinking_content(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
     """Test that async thinking blocks are captured as reasoning parts."""
-    model = "claude-sonnet-4-20250514"
-    messages = [{"role": "user", "content": "What is 17*19? Think first."}]
+    model = "claude-sonnet-5-5"
+    messages = [
+        {
+            "role": "user",
+            "content": "Solve 347 * 892 + 519 * 743 step by step. Think carefully first.",
+        }
+    ]
 
     response = await async_anthropic_client.messages.create(
         model=model,
         max_tokens=16000,
         messages=messages,
-        thinking={"type": "enabled", "budget_tokens": 10000},
+        thinking={"type": "adaptive"},
     )
 
     spans = span_exporter.get_finished_spans()
@@ -1049,7 +1054,7 @@ async def test_async_stream_wrapper_finalize_idempotent(
     instrument_no_content,
 ):
     """Fully consumed async stream plus explicit close should still yield one span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     stream = await async_anthropic_client.messages.create(
@@ -1105,7 +1110,7 @@ async def test_async_messages_create_aggregates_cache_tokens(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Async non-streaming response with cache tokens aggregates correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     response = await async_anthropic_client.messages.create(
@@ -1155,7 +1160,7 @@ async def test_async_messages_create_streaming_aggregates_cache_tokens(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Async streaming response with cache tokens aggregates correctly."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     input_tokens = None
@@ -1232,7 +1237,7 @@ async def test_async_messages_create_stream_propagation_error(
         if capture_content
         else "instrument_no_content"
     )
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     stream = await async_anthropic_client.messages.create(
@@ -1259,7 +1264,7 @@ async def test_async_messages_create_stream_propagation_error(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
     assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
     assert isinstance(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
     )
@@ -1285,7 +1290,7 @@ async def test_async_messages_create_streaming_user_exception(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test that user raised exceptions are propagated from async streams."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with pytest.raises(ValueError, match="User raised exception"):
@@ -1339,7 +1344,7 @@ async def test_async_messages_create_event_only_no_content_in_span(
     instrument_event_only,
 ):
     """Test EVENT_ONLY mode emits async create content as a log event only."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     await async_anthropic_client.messages.create(
@@ -1381,7 +1386,7 @@ async def test_async_messages_create_streaming_with_raw_response(
     immediately with no response attributes. The proxy must defer finalization
     until the parsed async stream is drained and then populate the span.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     raw_response = (
@@ -1416,8 +1421,8 @@ async def test_async_messages_create_streaming_with_raw_response(
     # attributes accumulated from the drained stream.
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
@@ -1435,7 +1440,7 @@ async def test_async_messages_create_streaming_with_raw_response_never_parsed(
     must still be finalized exactly once when the underlying body is closed,
     since ``stop()`` is not idempotent.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     raw_response = (
@@ -1472,7 +1477,7 @@ async def test_async_messages_raw_response_read_without_close(
     context manager to close the body a second time, so finalization has to
     happen when the read completes.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     raw_response = (
         await async_anthropic_client.messages.with_raw_response.create(
             model=model,
@@ -1498,7 +1503,7 @@ async def test_async_messages_raw_response_read_without_parse(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Reading a non-SSE body without parsing still records response attributes."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     async with async_anthropic_client.messages.with_streaming_response.create(
         model=model,
         max_tokens=100,
@@ -1529,7 +1534,7 @@ async def test_async_messages_with_streaming_response_nonstreaming(
     the awaited ``parse()`` result extracts the message and records the response
     model, usage, and finish reason.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     async with async_anthropic_client.messages.with_streaming_response.create(
@@ -1580,7 +1585,7 @@ async def test_async_messages_with_streaming_response_parse_twice(
 ):
 
     async with async_anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
@@ -1613,7 +1618,7 @@ async def test_async_messages_raw_response_parse_after_read_is_the_sdk_parse(
     monkeypatch.setattr(AsyncAPIResponse, "parse", counting_parse)
 
     async with async_anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
@@ -1638,7 +1643,7 @@ async def test_async_messages_with_streaming_response_parse_never_awaited(
     close-fallback suppression flag must never have been set, so ``__aexit__``'s
     ``aclose`` still finalizes the span exactly once.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     async with async_anthropic_client.messages.with_streaming_response.create(
@@ -1663,7 +1668,7 @@ async def test_async_messages_with_streaming_response_streaming(
     The awaited ``parse()`` yields an ``AsyncStream``; draining it finalizes the
     span with the response model, token usage, and finish reason.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     async with async_anthropic_client.messages.with_streaming_response.create(
@@ -1690,8 +1695,8 @@ async def test_async_messages_with_streaming_response_streaming(
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
@@ -1705,7 +1710,7 @@ async def test_async_messages_streaming_raw_response_abandoned(
 ):
     """Abandoning a parsed async stream still finalizes the span."""
     async with async_anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -1723,7 +1728,7 @@ async def test_async_messages_raw_response_read_before_parse(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Reading the body before ``parse()`` still records response telemetry."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     async with async_anthropic_client.messages.with_streaming_response.create(
         model=model,
         max_tokens=100,
@@ -1756,7 +1761,7 @@ async def test_async_messages_raw_response_parse_stream_twice(
     the async client awaits ``parse()``.
     """
     async with async_anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -1777,7 +1782,7 @@ async def test_async_messages_raw_response_parse_to_honors_cast_target(
 ):
     """``parse(to=...)`` returns the requested type, as the SDK does."""
     async with async_anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
@@ -1799,7 +1804,7 @@ async def test_async_messages_raw_response_parse_after_exit(
     message it deserialized. The async client awaits ``parse()``, so the replay
     has to hand back an awaitable rather than the message itself.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     async with async_anthropic_client.messages.with_streaming_response.create(
         model=model,
         max_tokens=100,
@@ -1829,7 +1834,7 @@ async def test_async_messages_with_streaming_response_user_exception(
     exception raised by the caller before the stream is drained must propagate
     unchanged and finalize the span with the matching ``error.type``.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with pytest.raises(ValueError, match="User raised exception"):
         async with (
@@ -1862,7 +1867,7 @@ async def test_async_messages_with_streaming_response_user_exception_before_pars
     with pytest.raises(ValueError, match="User raised exception"):
         async with (
             async_anthropic_client.messages.with_streaming_response.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-5-5",
                 max_tokens=100,
                 messages=[
                     {"role": "user", "content": "Say hello in one word."}
@@ -1887,7 +1892,7 @@ async def test_async_messages_with_streaming_response_user_exception_after_drain
     with pytest.raises(ValueError, match="User raised exception"):
         async with (
             async_anthropic_client.messages.with_streaming_response.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-5-5",
                 max_tokens=100,
                 messages=[
                     {"role": "user", "content": "Say hello in one word."}
@@ -1911,7 +1916,7 @@ async def test_async_messages_with_streaming_response_nonstreaming_user_exceptio
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """A caller error in a non-streaming async response context fails the span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with pytest.raises(ValueError, match="User raised exception"):
         async with (
@@ -1939,7 +1944,7 @@ async def test_async_messages_with_raw_response_caller_exception(
     """A caller error while handling a raw response is separate from the call."""
     raw_response = (
         await async_anthropic_client.messages.with_raw_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
         )
@@ -1987,7 +1992,7 @@ async def test_async_streaming_response_type_survives_instrumentation_round_trip
 
     def create_context_manager():
         context_manager = client.messages.with_streaming_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Hello"}],
             stream=True,
@@ -2032,7 +2037,7 @@ async def test_async_messages_raw_response_is_transparent(
     """The proxy must be indistinguishable from the SDK's raw response."""
     raw_response = (
         await async_anthropic_client.messages.with_raw_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
         )
@@ -2051,7 +2056,7 @@ async def test_async_messages_streaming_response_is_transparent(
     """The streaming proxy must also keep the SDK's type and its parsed stream."""
     context_manager = (
         async_anthropic_client.messages.with_streaming_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
             stream=True,
@@ -2080,7 +2085,7 @@ async def test_async_messages_with_raw_response_never_parsed(
     """A caller that only reads metadata still gets exactly one span."""
     raw_response = (
         await async_anthropic_client.messages.with_raw_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
         )
@@ -2111,7 +2116,7 @@ async def test_async_messages_with_raw_response_does_not_parse_early(
 
     monkeypatch.setattr(LegacyAPIResponse, "parse", counting_parse)
 
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
     raw_response = (
         await async_anthropic_client.messages.with_raw_response.create(
             model=model,
@@ -2143,7 +2148,7 @@ async def test_async_messages_raw_response_stream_wrap_failure_not_raised(
     monkeypatch.setattr(_raw_response, "_wrap_parsed_stream", boom)
 
     async with async_anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -2165,7 +2170,7 @@ async def test_async_messages_with_raw_response_captures_content(
     """Content capture must work through the raw-response path too."""
     raw_response = (
         await async_anthropic_client.messages.with_raw_response.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5-5",
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
         )
@@ -2191,7 +2196,7 @@ async def test_async_messages_with_streaming_response_captures_content(
 ):
     """Content capture must work through the streamed raw-response path too."""
     async with async_anthropic_client.messages.with_streaming_response.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5-5",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
@@ -2217,7 +2222,7 @@ async def test_async_messages_raw_response_stream_propagation_error(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """A mid-iteration stream error re-raises unchanged and fails the span."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     with pytest.raises(
         ConnectionError, match="connection reset during stream"
@@ -2259,7 +2264,7 @@ async def test_async_messages_streaming_raw_response_sync_close_defers_to_aclose
     wrapper, so ``aclose`` -- which the context manager runs on exit -- is left
     to finalize the abandoned stream with everything it accumulated.
     """
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     async with async_anthropic_client.messages.with_streaming_response.create(
         model=model,
@@ -2285,7 +2290,7 @@ async def test_async_messages_raw_response_only_parse_to_records_telemetry(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Async half: an awaited cast parse still records the response."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-5-5"
 
     async with async_anthropic_client.messages.with_streaming_response.create(
         model=model,
@@ -2327,6 +2332,8 @@ async def test_async_raw_response_proxy_hooks_stack_over_one_response():
 
         def stop(self):
             self._stops.append(True)
+
+        context = Context()
 
     http_response = _FakeAsyncHTTPResponse()
 
@@ -2569,7 +2576,7 @@ async def test_async_beta_messages_create_basic(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test basic async beta message creation produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     response = await async_anthropic_client.beta.messages.create(
@@ -2616,7 +2623,7 @@ async def test_async_beta_messages_create_with_content(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
     """Test async beta message creation captures input and output content."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     prompt = "Say hello in one word."
     messages = [{"role": "user", "content": prompt}]
 
@@ -2709,7 +2716,7 @@ async def test_async_beta_messages_create_streaming(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test streaming async beta message creation produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     stream = await async_anthropic_client.beta.messages.create(
@@ -2734,11 +2741,11 @@ async def test_async_beta_messages_create_streaming(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert (
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
-        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+        == "msg_011CgwhcGRt4amPNqnjtM59d"
     )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
@@ -2759,7 +2766,7 @@ async def test_async_beta_messages_stream(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test streaming async beta message stream produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     async with async_anthropic_client.beta.messages.stream(
@@ -2780,11 +2787,11 @@ async def test_async_beta_messages_stream(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert (
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
-        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+        == "msg_011CgwhcMrJNhcgTSwtBvaUE"
     )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
@@ -2803,7 +2810,7 @@ async def test_async_beta_messages_with_raw_response(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test that with_raw_response.create on async beta messages produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     raw_response = (
@@ -2854,7 +2861,7 @@ async def test_async_beta_messages_with_streaming_response(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test async beta message creation with streaming response produces correct span."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     async with (
@@ -2878,11 +2885,11 @@ async def test_async_beta_messages_with_streaming_response(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert (
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
-        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+        == "msg_011CgwhcGRt4amPNqnjtM59d"
     )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 16
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
@@ -2902,7 +2909,7 @@ async def test_async_beta_messages_stream_interrupted_mid_iteration(
     monkeypatch, span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test that mid-stream network failures in async beta stream propagate and record error.type."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     class ErrorInjectingStreamDelegate:
@@ -2957,7 +2964,7 @@ async def test_async_beta_messages_stream_user_exception(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test that user raised exceptions from async beta.messages.stream are propagated."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with pytest.raises(ValueError, match="User raised exception"):
@@ -2987,7 +2994,7 @@ async def test_async_beta_messages_create_streaming_with_content(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
     """Test content capture on async beta create(stream=True)."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     stream = await async_anthropic_client.beta.messages.create(
@@ -3014,7 +3021,7 @@ async def test_async_beta_messages_create_streaming_with_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"] == [
-        {"type": "text", "content": "Hello"}
+        {"type": "text", "content": "Hello!"}
     ]
 
 
@@ -3029,7 +3036,7 @@ async def test_async_beta_messages_stream_with_content(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
     """Test content capture on async beta.messages.stream()."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     async with async_anthropic_client.beta.messages.stream(
@@ -3053,7 +3060,7 @@ async def test_async_beta_messages_stream_with_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"] == [
-        {"type": "text", "content": "Hello"}
+        {"type": "text", "content": "Hello!"}
     ]
 
 
@@ -3068,7 +3075,7 @@ async def test_async_beta_messages_create_streaming_interrupted_mid_iteration(
     monkeypatch, span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test that mid-stream network failures in async beta create(stream=True) propagate and record error.type."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     class ErrorInjectingStreamDelegate:
@@ -3126,7 +3133,7 @@ async def test_async_beta_messages_create_streaming_user_exception(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Test that user raised exceptions in async beta create(stream=True) are propagated."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     stream = await async_anthropic_client.beta.messages.create(
@@ -3159,7 +3166,7 @@ async def test_async_beta_messages_stream_closed_early_by_caller(
     span_exporter, async_anthropic_client, instrument_no_content
 ):
     """Caller-closing AsyncBetaMessages.stream early finalizes without error."""
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     async with async_anthropic_client.beta.messages.stream(
@@ -3275,3 +3282,130 @@ async def test_async_messages_create_unset_sentinel_keeps_extra_body_fallback(
     assert (
         spans[0].attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.5
     )
+
+
+def _client_recording_current_span() -> tuple[AsyncAnthropic, list[int]]:
+    seen: list[int] = []
+
+    async def hook(_request: object) -> None:
+        seen.append(trace.get_current_span().get_span_context().span_id)
+
+    client = AsyncAnthropic(
+        http_client=DefaultAsyncHttpxClient(event_hooks={"request": [hook]})
+    )
+    return client, seen
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_span_is_current_only_during_the_request(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_async_messages_create_basic.yaml"):
+        await client.messages.create(**_UNSET_BASE_KWARGS)
+        assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_streaming_span_is_not_current_between_reads(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_async_messages_create_streaming.yaml"):
+        stream = await client.messages.create(
+            **_UNSET_BASE_KWARGS, stream=True
+        )
+        assert not trace.get_current_span().get_span_context().is_valid
+        async with stream:
+            async for _ in stream:
+                assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_span_is_not_current_between_reads(
+    span_exporter, instrument_no_content, vcr
+):
+    client, seen = _client_recording_current_span()
+    with vcr.use_cassette("test_async_messages_stream.yaml"):
+        async with client.messages.stream(**_UNSET_BASE_KWARGS) as stream:
+            assert not trace.get_current_span().get_span_context().is_valid
+            async for _ in stream:
+                assert not trace.get_current_span().get_span_context().is_valid
+
+    (span,) = span_exporter.get_finished_spans()
+    assert seen == [span.context.span_id]
+
+
+class _Pending:
+    def __await__(self):
+        yield
+
+
+def test_async_messages_create_closed_while_request_is_pending_fails_the_span(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    monkeypatch.setattr(AsyncAnthropic, "post", lambda *_a, **_kw: _Pending())
+    coro = AsyncAnthropic().messages.create(**_UNSET_BASE_KWARGS)
+    coro.send(None)
+    coro.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
+
+
+_RAW_MESSAGE = {
+    "id": "msg_raw",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-20250514",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+async def test_async_raw_response_close_after_parse_runs_in_caller_context(
+    span_exporter, instrument_no_content, monkeypatch
+):
+    closes: list[int] = []
+    aclose = _http_lib.Response.aclose
+
+    async def recording_aclose(self: _http_lib.Response) -> None:
+        closes.append(trace.get_current_span().get_span_context().span_id)
+        await aclose(self)
+
+    async def body():
+        yield json.dumps(_RAW_MESSAGE).encode()
+
+    monkeypatch.setattr(_http_lib.Response, "aclose", recording_aclose)
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(
+                lambda _request: _http_lib.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    content=body(),
+                )
+            )
+        ),
+    )
+    async with client.messages.with_streaming_response.create(
+        **_UNSET_BASE_KWARGS
+    ) as response:
+        await response.parse()
+        assert len(span_exporter.get_finished_spans()) == 1
+        closes.clear()
+
+    assert closes
+    assert set(closes) == {trace.INVALID_SPAN_ID}

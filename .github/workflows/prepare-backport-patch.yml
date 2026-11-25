@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 env:
-  UV_FROZEN: "true"
+  UV_LOCKED: "true"
 
 run-name: "Prepare backport patch: ${{ inputs.package }}"
 

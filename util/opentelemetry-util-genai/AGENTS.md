@@ -78,7 +78,9 @@ stay open until then. Do **not** call `invocation.stop()` when the SDK returns t
 span would close before any chunks arrive. The invocation's span must also not stay current in
 the caller's context while the stream is unconsumed: create the invocation with
 `_attach_to_context=False`, run the SDK call inside `with invocation.activate():`, and let the
-stream wrapper make it current while a chunk is being read.
+stream wrapper make it current while a chunk is being read. `activate()` lets `StopIteration` and
+`StopAsyncIteration` through without finishing the invocation; code that raises them inside the
+block must stop it itself.
 
 Instrument streams by subclassing `SyncStreamWrapper` / `AsyncStreamWrapper` from
 `opentelemetry.util.genai.stream` (the public, supported helpers; requires the `[wrapt]` extra:

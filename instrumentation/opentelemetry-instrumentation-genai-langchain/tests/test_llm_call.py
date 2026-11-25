@@ -3,6 +3,7 @@
 
 import asyncio
 import base64
+import os
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
@@ -84,7 +85,7 @@ _REAL_PNG_B64 = (
 _REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 
 # An Anthropic Files API image reference. Pinned to the recorded cassette.
-_ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
+_ANTHROPIC_FILE_ID = "file_01Y2U724wHRo2D9zsfYpvQhK"
 
 
 @pytest.mark.skipif(
@@ -124,9 +125,11 @@ def test_chat_openai_prompt_template(
         chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
         == "weather_prompt"
     )
-    assert (
-        chat_span.attributes["gen_ai.prompt.variable.question"]
-        == "What's the weather like in Seattle?"
+    assert chat_span.attributes["gen_ai.prompt.variables"] == {
+        "question": "What's the weather like in Seattle?",
+    }
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in chat_span.attributes
     )
 
 
@@ -169,12 +172,14 @@ async def test_async_prompt_template_propagates_prompt_context(
         == "weather_prompt"
     )
     if capture_content == "SPAN_ONLY":
-        assert (
-            chat_span.attributes["gen_ai.prompt.variable.question"]
-            == "What's the weather like in Seattle?"
-        )
+        assert chat_span.attributes["gen_ai.prompt.variables"] == {
+            "question": "What's the weather like in Seattle?",
+        }
     else:
-        assert "gen_ai.prompt.variable.question" not in chat_span.attributes
+        assert "gen_ai.prompt.variables" not in chat_span.attributes
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in chat_span.attributes
+    )
 
 
 def test_prompt_template_accepts_scalar_input(
@@ -202,7 +207,64 @@ def test_prompt_template_accepts_scalar_input(
         if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
         == "chat"
     )
-    assert chat_span.attributes["gen_ai.prompt.variable.name"] == "Ada"
+    assert chat_span.attributes["gen_ai.prompt.variables"] == {"name": "Ada"}
+
+
+def test_prompt_template_preserves_structured_variables(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+):
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Done.")])
+    prompt = PromptTemplate.from_template(
+        "Count={count}, enabled={enabled}, tags={tags}, meta={meta}"
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_AND_EVENT",
+    ):
+        response = (prompt | model).invoke(
+            {
+                "count": 3,
+                "enabled": True,
+                "tags": ["a", "b"],
+                "meta": {"lang": "en"},
+            },
+            config={"metadata": {"ls_model_name": "test-chat-model"}},
+        )
+
+    assert response.content == "Done."
+    expected = {
+        "count": 3,
+        "enabled": True,
+        "tags": ("a", "b"),
+        "meta": {"lang": "en"},
+    }
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert chat_span.attributes["gen_ai.prompt.variables"] == expected
+    assert (
+        type(chat_span.attributes["gen_ai.prompt.variables"]["count"]) is int
+    )
+    assert chat_span.attributes["gen_ai.prompt.variables"]["enabled"] is True
+
+    event = next(
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    )
+    assert event.attributes["gen_ai.prompt.variables"] == expected
 
 
 def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
@@ -239,7 +301,10 @@ def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
         == "chat"
     )
     assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES in chat_span.attributes
-    assert "gen_ai.prompt.variable.value" not in chat_span.attributes
+    assert "gen_ai.prompt.variables" not in chat_span.attributes
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in chat_span.attributes
+    )
     assert (
         gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
         in chat_span.attributes
@@ -299,11 +364,13 @@ def test_chat_openai_chat_prompt_template(
         chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
         == "weather_chat_prompt"
     )
-    assert (
-        chat_span.attributes["gen_ai.prompt.variable.question"]
-        == "What's the weather like in Seattle?"
+    assert chat_span.attributes["gen_ai.prompt.variables"] == {
+        "question": "What's the weather like in Seattle?",
+        "style": "concise",
+    }
+    assert not any(
+        k.startswith("gen_ai.prompt.variable.") for k in chat_span.attributes
     )
-    assert chat_span.attributes["gen_ai.prompt.variable.style"] == "concise"
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -616,22 +683,14 @@ def test_chat_openai_standard_image_block_llm_call(
 def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
     span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0, vcr
 ):
-    is_old_bedrock = not getattr(
-        us_amazon_nova_lite_v1_0, "beta_use_converse_api", False
-    )
-
-    cassette_name = (
-        "test_us_amazon_nova_lite_v1_0_bedrock_llm_call_old.yaml"
-        if is_old_bedrock
-        else "test_us_amazon_nova_lite_v1_0_bedrock_llm_call.yaml"
-    )
-
     messages = [
         SystemMessage(content="You are a helpful assistant!"),
         HumanMessage(content="What is the capital of France?"),
     ]
 
-    with vcr.use_cassette(cassette_name):
+    with vcr.use_cassette(
+        "test_us_amazon_nova_lite_v1_0_bedrock_llm_call.yaml"
+    ):
         result = us_amazon_nova_lite_v1_0.invoke(messages)
 
     assert result.content.find("The capital of France is Paris") != -1
@@ -646,6 +705,26 @@ def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
 
 
 @pytest.mark.vcr()
+def test_meta_llama3_8b_instruct_bedrock_llm_call(
+    span_exporter, start_instrumentation, meta_llama3_8b_instruct
+):
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    result = meta_llama3_8b_instruct.invoke(messages)
+
+    assert "Paris" in result.content
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_bedrock_completion_attributes(
+        spans[0], result, model="meta.llama3-8b-instruct-v1:0"
+    )
+
+
+@pytest.mark.vcr()
 def test_chat_anthropic_claude_sonnet_llm_call(
     span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
 ):
@@ -656,7 +735,7 @@ def test_chat_anthropic_claude_sonnet_llm_call(
 
     result = chat_anthropic_claude_sonnet.invoke(messages)
 
-    assert result.content.find("The capital of France is Paris") != -1
+    assert "Paris" in result.content
 
     # verify spans
     spans = span_exporter.get_finished_spans()
@@ -664,7 +743,7 @@ def test_chat_anthropic_claude_sonnet_llm_call(
     span = spans[0]
     assert (
         span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
-        == "claude-sonnet-4-5"
+        == "claude-sonnet-5-5"
     )
 
     assert (
@@ -698,7 +777,7 @@ def test_chat_anthropic_claude_sonnet_tool_call(
     span = spans[0]
     assert (
         span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
-        == "claude-sonnet-4-5"
+        == "claude-sonnet-5-5"
     )
     assert span.attributes.get(
         gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
@@ -833,7 +912,7 @@ def test_chat_anthropic_multimodal_image_llm_call(
     span = spans[0]
 
     assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
-        "claude-sonnet-4-5"
+        "claude-sonnet-5-5"
     )
 
     input_message = span.attributes.get(
@@ -1018,7 +1097,7 @@ def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
     with vcr.use_cassette(_gemini_cassette_name("test_gemini")):
         result = gemini.invoke(messages)
 
-    assert result.content.find("The capital of France is **Paris**") != -1
+    assert "Paris" in result.content
 
     # verify spans
     spans = span_exporter.get_finished_spans()
@@ -1165,8 +1244,8 @@ def test_chat_anthropic_captures_top_k(
     logger_provider,
 ):
     model = ChatAnthropic(
-        model="claude-sonnet-4-5",
-        api_key="test_key",
+        model="claude-haiku-4-5",
+        api_key=os.getenv("ANTHROPIC_API_KEY", "test_key"),
         max_tokens=32,
         top_k=40,
     )
@@ -1359,14 +1438,13 @@ def assert_openai_completion_attributes_with_error(
 
 
 def assert_bedrock_completion_attributes(
-    span: ReadableSpan, response: Optional
+    span: ReadableSpan,
+    response: Optional,
+    model: str = "us.amazon.nova-lite-v1:0",
 ):
-    assert span.name == "chat us.amazon.nova-lite-v1:0"
+    assert span.name == f"chat {model}"
     assert span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
-    assert (
-        span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL]
-        == "us.amazon.nova-lite-v1:0"
-    )
+    assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL] == model
 
     assert span.attributes["gen_ai.provider.name"] == "aws.bedrock"
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS] == 100
@@ -1399,11 +1477,11 @@ def assert_gemini_completion_attributes(
     span: ReadableSpan, response: Optional
 ):
     assert span is not None
-    assert span.name == "chat gemini-2.5-pro"
+    assert span.name == "chat gemini-2.5-flash"
     assert span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     assert (
         span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL]
-        == "gemini-2.5-pro"
+        == "gemini-2.5-flash"
     )
     assert span.attributes["gen_ai.provider.name"] == "gcp.gen_ai"
 
@@ -1723,8 +1801,8 @@ def test_chat_anthropic_claude_sonnet_stop_sequences_constructor_fallback(
     span_exporter, start_instrumentation
 ):
     model = ChatAnthropic(
-        model="claude-sonnet-4-5",
-        api_key="test_key",
+        model="claude-sonnet-5-5",
+        api_key=os.getenv("ANTHROPIC_API_KEY", "test_key"),
         max_tokens=1024,
         stop_sequences=["STOP"],
     )

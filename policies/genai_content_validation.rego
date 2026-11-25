@@ -16,12 +16,15 @@ _genai_content_schema_keys := {
 	"gen_ai.system_instructions": "gen-ai-system-instructions",
 	"gen_ai.tool.definitions":    "gen-ai-tool-definitions",
 	"gen_ai.retrieval.documents": "gen-ai-retrieval-documents",
+	"gen_ai.prompt.variables":    "gen-ai-prompt-variables",
 }
 
 deny contains result if {
 	input.sample.attribute
 	attr_name := input.sample.attribute.name
 	attr_value := input.sample.attribute.value
+	# Weaver drops OTLP KvlistValue maps to null during OTLP-to-JSON conversion.
+	attr_value != null
 
 	key := _genai_content_schema_keys[attr_name]
 	# Undefined (so the rule skips this attribute) when the schema isn't loaded
