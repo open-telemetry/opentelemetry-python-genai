@@ -1,1 +1,0 @@
-Streamed agent runs no longer raise into the application when the final answer can't be recorded.

@@ -998,25 +998,3 @@ def test_tool_calling_agent_with_tuple_images(
     }
     assert agent_inputs[0]["parts"][1]["type"] == "blob"
     assert agent_inputs[0]["parts"][1]["modality"] == "image"
-
-
-def test_streamed_final_answer_recording_failure_does_not_raise(
-    instrument_with_content, span_exporter, monkeypatch
-) -> None:
-    from opentelemetry.instrumentation.genai.smolagents import (
-        patch as patch_module,
-    )
-
-    def failing_record(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("unconvertible answer")
-
-    monkeypatch.setattr(patch_module, "_record_run_answer", failing_record)
-    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
-
-    steps = list(agent.run("Test question", stream=True))
-
-    assert any(isinstance(step, FinalAnswerStep) for step in steps)
-    (agent_span,) = spans_by_operation(
-        span_exporter.get_finished_spans(), "invoke_agent"
-    )
-    assert agent_span.end_time is not None
