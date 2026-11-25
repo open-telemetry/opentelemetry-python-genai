@@ -197,7 +197,9 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
             and stop_reason is None
         )
 
-    def _partial_output_messages(self) -> list[OutputMessage] | None:
+    def _partial_output_messages(
+        self, *, trust_last_block: bool
+    ) -> list[OutputMessage] | None:
         block_states = self._self_block_states.copy()
         if self._self_message is not None:
             content = self._self_message.content
@@ -205,12 +207,36 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
             for index, block in enumerate(content):
                 # Content blocks stream strictly in order, so every block
                 # before the last one has already seen its content_block_stop
-                # and the snapshot holds its final data. text_stream bypasses
-                # event tracking entirely, and the last block's snapshot may
-                # still hold a placeholder until it completes, so only text
-                # and thinking (which never carry a placeholder) are trusted
-                # there.
-                if index < last_index or block.type in ("text", "thinking"):
+                # and the snapshot holds its final data. Text and thinking
+                # accumulate character-by-character with no parse-attempt
+                # placeholder, so the snapshot is trustworthy for those even
+                # as the last block, chunk-tracked or not.
+                #
+                # A tool call (or any other block type) as the last block is
+                # different: the SDK parses its input JSON in partial_mode on
+                # every delta, so a genuinely unfinished call still looks like
+                # a plausible, if wrong, parsed value. _stop can fire two ways
+                # that look identical from here: the caller let .text_stream
+                # (which bypasses our own per-chunk tracking entirely) run to
+                # the connection's natural end, which only happens once every
+                # event up to message_stop has been accumulated into the
+                # snapshot; or the caller broke out of direct iteration early,
+                # which can abandon the connection mid-block. Per-chunk
+                # tracking distinguishes them: it is untouched in the first
+                # case (there is nothing to lose by trusting the snapshot)
+                # and already holds the real partial state in the second
+                # (trusting the snapshot there would silently replace a
+                # correct partial value with a wrong "finished" one). _fail
+                # only ever reaches here on genuine mid-stream interruption,
+                # so it keeps the conservative text/thinking-only trust.
+                if (
+                    index < last_index
+                    or block.type in ("text", "thinking")
+                    or (
+                        trust_last_block
+                        and index not in self._self_block_states
+                    )
+                ):
                     block_states[index] = create_stream_block_state(block)
 
         parts = [
@@ -246,7 +272,11 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
             self._self_invocation.finish_reasons = ["error"]
             if (
                 self._self_capture_content
-                and (output_messages := self._partial_output_messages())
+                and (
+                    output_messages := self._partial_output_messages(
+                        trust_last_block=True
+                    )
+                )
                 is not None
             ):
                 self._self_invocation.output_messages = output_messages
@@ -267,7 +297,11 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
             self._self_invocation.finish_reasons = ["error"]
             if (
                 self._self_capture_content
-                and (output_messages := self._partial_output_messages())
+                and (
+                    output_messages := self._partial_output_messages(
+                        trust_last_block=False
+                    )
+                )
                 is not None
             ):
                 self._self_invocation.output_messages = output_messages

@@ -1746,6 +1746,124 @@ def _completed_tool_use_then_truncated_text_sse_body() -> bytes:
     )
 
 
+def _completed_tool_use_only_block_truncated_sse_body() -> bytes:
+    """A single tool call whose content_block_stop fires, then the body
+    ends with no further block and no message_stop. The completed tool
+    call is the last (and only) block in the snapshot, not a case where a
+    later block's own start proves it finished."""
+
+    def _event(name: str, payload: dict[str, object]) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    return b"".join(
+        [
+            _event(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_completed_tool_use_only",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 3, "output_tokens": 0},
+                    },
+                },
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_A",
+                        "name": "get_weather",
+                        "input": {},
+                    },
+                },
+            ),
+            _event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": '{"city": "Chicago"}',
+                    },
+                },
+            ),
+            _event(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": 0},
+            ),
+        ]
+    )
+
+
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_stream_text_stream_preserves_sole_completed_tool_use(
+    span_exporter, instrument_with_content
+):
+    """A tool call that is both the first and the last block, completed
+    before the body ends, stays on the span. Unlike the sibling test above,
+    there is no later block whose own start proves the tool call is done,
+    so this exercises _stop's trust_last_block path on its own."""
+
+    def respond(_request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_completed_tool_use_only_block_truncated_sse_body(),
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        for _ in stream.text_stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "arguments": {"city": "Chicago"},
+                    "name": "get_weather",
+                    "id": "toolu_A",
+                    "type": "tool_call",
+                },
+            ],
+            "finish_reason": "error",
+        }
+    ]
+
+
 @pytest.mark.skipif(
     not _has_tools_param,
     reason="anthropic SDK too old to support 'tools' parameter",
