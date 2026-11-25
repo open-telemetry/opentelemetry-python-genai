@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
     from agno.knowledge.knowledge import Knowledge
+    from agno.media import Audio, File, Image, Video
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
     from wrapt import BoundFunctionWrapper, FunctionWrapper
@@ -58,9 +59,13 @@ from opentelemetry.instrumentation.genai.agno.stream import (
 )
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
+    extract_media_parts,
     extract_session_id,
     format_content,
     format_retrieval_document,
+    is_message_like,
+    is_message_sequence,
+    is_workflow_execution_input,
     prepare_tool_definitions,
     resolve_embedder_provider,
     safe_int,
@@ -84,6 +89,7 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     Error,
     InputMessage,
+    MessagePart,
     OutputMessage,
     Role,
     SystemInstructionPart,
@@ -636,23 +642,203 @@ def _set_tool_invocation_output(
         )
 
 
+def _combine_media(msg_media: Any, extra_media: Any) -> list[Any] | None:
+    combined: list[Any] = []
+    for media_val in (msg_media, extra_media):
+        if media_val is None:
+            continue
+        if isinstance(media_val, Sequence) and not isinstance(
+            media_val, (str, bytes, bytearray, Mapping)
+        ):
+            combined.extend(cast("Sequence[object]", media_val))
+        else:
+            combined.append(media_val)
+    return combined or None
+
+
+def _build_single_input_message(
+    msg: object,
+    *,
+    extra_images: Any = None,
+    extra_audio: Any = None,
+    extra_videos: Any = None,
+    extra_files: Any = None,
+) -> InputMessage | None:
+    role = Role.USER.value
+    name: str | None = None
+
+    if is_message_like(msg):
+        role_val = _get_property_value(msg, "role")
+        if role_val is not None:
+            role = str(role_val)
+        name_val = _get_property_value(msg, "name")
+        if name_val is not None:
+            name = str(name_val)
+        content = _get_property_value(msg, "content")
+        text = format_content(content) if content is not None else ""
+        msg_images = _get_property_value(msg, "images")
+        msg_audio = _get_property_value(msg, "audio")
+        msg_videos = _get_property_value(msg, "videos")
+        msg_files = _get_property_value(msg, "files")
+    else:
+        text = _extract_input_content(msg) if msg is not None else ""
+        msg_images, msg_audio, msg_videos, msg_files = None, None, None, None
+
+    parts: list[MessagePart] = [TextPart(content=text)] if text else []
+    parts.extend(
+        extract_media_parts(
+            images=_combine_media(msg_images, extra_images),
+            audio=_combine_media(msg_audio, extra_audio),
+            videos=_combine_media(msg_videos, extra_videos),
+            files=_combine_media(msg_files, extra_files),
+        )
+    )
+    if parts:
+        kwargs: dict[str, Any] = {"role": role, "parts": parts}
+        if name is not None:
+            kwargs["name"] = name
+        return InputMessage(**kwargs)
+    return None
+
+
+def _build_user_input_messages(
+    input_val: object,
+    *,
+    images: Sequence[Image] | None = None,
+    audio: Sequence[Audio] | None = None,
+    videos: Sequence[Video] | None = None,
+    files: Sequence[File] | None = None,
+) -> list[InputMessage]:
+    if is_message_sequence(input_val):
+        input_seq = cast("Sequence[object]", input_val)
+        messages: list[InputMessage] = []
+        extra_idx = -1
+        for idx in reversed(range(len(input_seq))):
+            if _get_property_value(input_seq[idx], "role") == Role.USER.value:
+                extra_idx = idx
+                break
+        if extra_idx == -1 and len(input_seq) > 0:
+            extra_idx = len(input_seq) - 1
+
+        for idx, item in enumerate(input_seq):
+            is_extra_target = idx == extra_idx
+            item_images = images if is_extra_target else None
+            item_audio = audio if is_extra_target else None
+            item_videos = videos if is_extra_target else None
+            item_files = files if is_extra_target else None
+
+            msg = _build_single_input_message(
+                item,
+                extra_images=item_images,
+                extra_audio=item_audio,
+                extra_videos=item_videos,
+                extra_files=item_files,
+            )
+            if msg is not None:
+                messages.append(msg)
+        return messages
+
+    single_msg = _build_single_input_message(
+        input_val,
+        extra_images=images,
+        extra_audio=audio,
+        extra_videos=videos,
+        extra_files=files,
+    )
+    return [single_msg] if single_msg is not None else []
+
+
 def _set_invocation_input(
-    invocation: LocalAgentInvocation | WorkflowInvocation,
+    invocation: LocalAgentInvocation,
     instance: Any,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     capture_content: bool,
     wrapped: Callable[..., Any],
 ) -> None:
-    if capture_content:
-        input_val = get_argument("input", wrapped, args, kwargs)
-        if input_val is not None:
-            content_str = _extract_input_content(input_val)
-            invocation.input_messages = [
-                InputMessage(
-                    role=Role.USER.value, parts=[TextPart(content=content_str)]
-                )
-            ]
+    if not capture_content:
+        return
+    bound = bind_arguments(wrapped, args, kwargs)
+    messages = _build_user_input_messages(
+        bound.get("input"),
+        images=cast("Sequence[Image] | None", bound.get("images")),
+        audio=cast("Sequence[Audio] | None", bound.get("audio")),
+        videos=cast("Sequence[Video] | None", bound.get("videos")),
+        files=cast("Sequence[File] | None", bound.get("files")),
+    )
+    if messages:
+        invocation.input_messages = messages
+
+
+def _build_workflow_input_messages(
+    input_val: object,
+    *,
+    images: Sequence[Any] | None = None,
+    audio: Sequence[Any] | None = None,
+    videos: Sequence[Any] | None = None,
+    files: Sequence[Any] | None = None,
+) -> list[InputMessage]:
+    text = _extract_input_content(input_val) if input_val is not None else ""
+    parts: list[MessagePart] = [TextPart(content=text)] if text else []
+    parts.extend(
+        extract_media_parts(
+            images=images,
+            audio=audio,
+            videos=videos,
+            files=files,
+        )
+    )
+    if parts:
+        return [InputMessage(role=Role.USER.value, parts=parts)]
+    return []
+
+
+def _set_workflow_invocation_input(
+    invocation: WorkflowInvocation,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    capture_content: bool,
+    wrapped: Callable[..., Any],
+) -> None:
+    if not capture_content:
+        return
+    bound = bind_arguments(wrapped, args, kwargs)
+    messages = _build_workflow_input_messages(
+        bound.get("input"),
+        images=cast("Sequence[Any] | None", bound.get("images")),
+        audio=cast("Sequence[Any] | None", bound.get("audio")),
+        videos=cast("Sequence[Any] | None", bound.get("videos")),
+        files=cast("Sequence[Any] | None", bound.get("files")),
+    )
+    if messages:
+        invocation.input_messages = messages
+
+
+def _set_workflow_execution_input_messages(
+    invocation: WorkflowInvocation,
+    input_val: object,
+    exec_input: object,
+) -> None:
+    images: Sequence[Any] | None = None
+    audio: Sequence[Any] | None = None
+    videos: Sequence[Any] | None = None
+    files: Sequence[Any] | None = None
+
+    if is_workflow_execution_input(exec_input):
+        images = exec_input.images
+        audio = exec_input.audio
+        videos = exec_input.videos
+        files = exec_input.files
+
+    messages = _build_workflow_input_messages(
+        input_val,
+        images=images,
+        audio=audio,
+        videos=videos,
+        files=files,
+    )
+    if messages:
+        invocation.input_messages = messages
 
 
 def _to_tool_executions(raw_tools: object) -> list[ToolExecution]:
@@ -1154,8 +1340,8 @@ def _start_workflow_invocation(
             invocation, wrapped, args, kwargs, capture_content
         )
     else:
-        _set_invocation_input(
-            invocation, instance, args, kwargs, capture_content, wrapped
+        _set_workflow_invocation_input(
+            invocation, args, kwargs, capture_content, wrapped
         )
     return invocation
 
@@ -1383,15 +1569,10 @@ def _start_background_workflow_invocation(
         _attach_to_context=False,
     )
 
-    if capture_content and input_val is not None:
-        content_str = _extract_input_content(input_val)
-        if content_str:
-            invocation.input_messages = [
-                InputMessage(
-                    role=Role.USER.value,
-                    parts=[TextPart(content=content_str)],
-                )
-            ]
+    if capture_content:
+        _set_workflow_execution_input_messages(
+            invocation, input_val, exec_input
+        )
 
     return invocation
 
@@ -1499,15 +1680,10 @@ def _workflow_aexecute_workflow_agent(
             _attach_to_context=False,
         )
 
-        if capture_content and user_input is not None:
-            content_str = _extract_input_content(user_input)
-            if content_str:
-                invocation.input_messages = [
-                    InputMessage(
-                        role=Role.USER.value,
-                        parts=[TextPart(content=content_str)],
-                    )
-                ]
+        if capture_content:
+            _set_workflow_execution_input_messages(
+                invocation, user_input, bound_args.get("execution_input")
+            )
 
         if run_id:
             _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
