@@ -3,16 +3,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import Field, dataclass, fields
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Literal,
     TypeAlias,
     Union,
+    cast,
 )
+
+from opentelemetry.util.types import AnyValue
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=useless-import-alias
@@ -34,6 +38,64 @@ class ContentCapturingMode(Enum):
     SPAN_AND_EVENT = 3
 
 
+def _convert_generic_parts(
+    parts: Sequence[MessagePart],
+) -> Sequence[AnyValue]:
+    if not any(isinstance(part, GenericPart) for part in parts):
+        return cast(Sequence[AnyValue], parts)
+
+    from opentelemetry.util.genai.utils import (  # pylint: disable=import-outside-toplevel
+        object_to_any_value,
+    )
+
+    # Generic extensions can use Mapping method names as data fields.
+    converted_parts: list[AnyValue] = []
+    for part in parts:
+        if isinstance(part, GenericPart):
+            converted = object_to_any_value(part)
+            if converted is not None:
+                converted_parts.append(converted)
+        else:
+            converted_parts.append(part)
+    return converted_parts
+
+
+class _AnyValueMapping(Mapping[str, AnyValue]):
+    __dataclass_fields__: ClassVar[dict[str, Field[object]]]
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset()
+    _KEEP_NONE: ClassVar[frozenset[str]] = frozenset()
+
+    def __getitem__(self, key: str) -> AnyValue:
+        if key not in self._present_fields():
+            raise KeyError(key)
+        value = getattr(self, key)
+        if key not in self._SANITIZE:
+            return value
+
+        from opentelemetry.util.genai.utils import (  # pylint: disable=import-outside-toplevel
+            object_to_any_value,
+        )
+
+        return object_to_any_value(value)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._present_fields())
+
+    def __len__(self) -> int:
+        return len(self._present_fields())
+
+    def _present_fields(self) -> list[str]:
+        return [
+            field.name
+            for field in fields(self)
+            if getattr(self, field.name) is not None
+            or field.name in self._KEEP_NONE
+        ]
+
+    def __bool__(self) -> bool:
+        return True
+
+
 @dataclass()
 class GenericPart:
     """Represents an arbitrary message part with any type and properties.
@@ -52,7 +114,7 @@ class GenericPart:
 
 
 @dataclass()
-class ToolCallRequestPart:
+class ToolCallRequestPart(_AnyValueMapping):
     """Represents a tool call requested by the model (message part only).
 
     Use this for tool calls in message history. For execution tracking with spans
@@ -62,6 +124,8 @@ class ToolCallRequestPart:
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset({"arguments"})
+
     arguments: Any
     name: str
     id: str | None
@@ -69,12 +133,15 @@ class ToolCallRequestPart:
 
 
 @dataclass()
-class ToolCallResponsePart:
+class ToolCallResponsePart(_AnyValueMapping):
     """Represents a tool call result sent to the model or a built-in tool call outcome and details
 
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallResponsePart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
+
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset({"response"})
+    _KEEP_NONE: ClassVar[frozenset[str]] = frozenset({"response"})
 
     response: Any
     id: str | None
@@ -82,7 +149,7 @@ class ToolCallResponsePart:
 
 
 @dataclass()
-class ServerToolCallPart:
+class ServerToolCallPart(_AnyValueMapping):
     """Represents a server-side tool call.
 
     Server tool calls are executed by the model provider on the server side rather
@@ -93,6 +160,8 @@ class ServerToolCallPart:
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset({"server_tool_call"})
+
     name: str
     server_tool_call: Any
     id: str | None = None
@@ -100,7 +169,7 @@ class ServerToolCallPart:
 
 
 @dataclass()
-class ServerToolCallResponsePart:
+class ServerToolCallResponsePart(_AnyValueMapping):
     """Represents a server-side tool call response.
 
     Contains the outcome and details of a server tool execution. Provider-specific
@@ -111,13 +180,17 @@ class ServerToolCallResponsePart:
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset(
+        {"server_tool_call_response"}
+    )
+
     server_tool_call_response: Any
     id: str | None = None
     type: Literal["server_tool_call_response"] = "server_tool_call_response"
 
 
 @dataclass()
-class TextPart:
+class TextPart(_AnyValueMapping):
     """Represents text content sent to or received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - TextPart
@@ -129,7 +202,7 @@ class TextPart:
 
 
 @dataclass()
-class ReasoningPart:
+class ReasoningPart(_AnyValueMapping):
     """Represents reasoning/thinking content received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - ReasoningPart
@@ -141,7 +214,7 @@ class ReasoningPart:
 
 
 @dataclass()
-class CompactionPart:
+class CompactionPart(_AnyValueMapping):
     """Represents a server-side context compaction event.
 
     A bare ``CompactionPart`` (only ``type`` set) is the common case: it
@@ -189,8 +262,8 @@ Token setters record only text, image, and audio; other modalities are ignored.
 
 
 @dataclass()
-class BlobPart:
-    """Represents blob binary data sent inline to the model
+class BlobPart(_AnyValueMapping):
+    """Represents binary data sent inline to the model
 
     This model is specified as part of semconv in `GenAI messages Python models - BlobPart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
@@ -203,8 +276,8 @@ class BlobPart:
 
 
 @dataclass()
-class FilePart:
-    """Represents an external referenced file sent to the model by file id
+class FilePart(_AnyValueMapping):
+    """Represents an external file referenced by file ID
 
     This model is specified as part of semconv in `GenAI messages Python models - FilePart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
@@ -217,8 +290,8 @@ class FilePart:
 
 
 @dataclass()
-class UriPart:
-    """Represents an external referenced file sent to the model by URI
+class UriPart(_AnyValueMapping):
+    """Represents an external file referenced by URI
 
     This model is specified as part of semconv in `GenAI messages Python models - UriPart
     <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
@@ -289,8 +362,10 @@ Uri = UriPart
 
 
 @dataclass()
-class FunctionToolDefinition:
+class FunctionToolDefinition(_AnyValueMapping):
     """Represents a function tool definition sent to the model"""
+
+    _SANITIZE: ClassVar[frozenset[str]] = frozenset({"parameters"})
 
     name: str
     description: str | None
@@ -299,7 +374,7 @@ class FunctionToolDefinition:
 
 
 @dataclass()
-class GenericToolDefinition:
+class GenericToolDefinition(_AnyValueMapping):
     """Represents a generic tool definition sent to the model"""
 
     name: str
@@ -340,15 +415,24 @@ class Role(str, Enum):
 SystemInstructionPart = Union[TextPart, GenericPart]
 
 
+class _MessageMapping(_AnyValueMapping):
+    parts: list[MessagePart]
+
+    def __getitem__(self, key: str) -> AnyValue:
+        if key == "parts":
+            return _convert_generic_parts(self.parts)
+        return super().__getitem__(key)
+
+
 @dataclass()
-class InputMessage:
+class InputMessage(_MessageMapping):
     role: str
     parts: list[MessagePart]
     name: str | None = None
 
 
 @dataclass()
-class OutputMessage:
+class OutputMessage(_MessageMapping):
     role: str
     parts: list[MessagePart]
     finish_reason: str | FinishReason | None = None
@@ -357,7 +441,7 @@ class OutputMessage:
 
 
 @dataclass()
-class RetrievalDocument:
+class RetrievalDocument(_AnyValueMapping):
     """Represents a document retrieved from a vector database or search system.
 
     Mirrors the `GenAI retrieval Python model - RetrievalDocument

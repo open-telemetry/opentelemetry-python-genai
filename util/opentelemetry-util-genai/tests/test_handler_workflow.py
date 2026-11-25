@@ -407,6 +407,19 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
             ),
         )
 
+    @patch(
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
+        return_value=ContentCapturingMode.SPAN_ONLY,
+    )
+    def test_workflow_omits_empty_messages(self, _mock_cap) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        with handler.workflow("wf"):
+            pass
+
+        attrs = self._get_finished_spans()[0].attributes
+        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, attrs)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, attrs)
+
 
 class TestWorkflowInvocationMetrics(TestBase):
     def _harvest_metrics(self):

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.context import Context, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -23,6 +24,7 @@ from opentelemetry.util.genai._invocation import (
     ContextData,
     Error,
     GenAIInvocation,
+    _is_active_completion_hook,
     _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
@@ -969,6 +971,9 @@ class InferenceInvocation(GenAIInvocation):
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
+        if _is_active_completion_hook(self._completion_hook):
+            # Hooks run before emission and may mutate the content models.
+            attributes = dict(BoundedAttributes(attributes=attributes))
         return LogRecord(
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,

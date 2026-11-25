@@ -14,7 +14,7 @@ OpenTelemetry Python - GenAI Util
 .. automodule:: opentelemetry.util.genai.types
     :members:
     :undoc-members:
-    :show-inheritance:
+    :no-show-inheritance:
 
 .. automodule:: opentelemetry.util.genai.environment_variables
     :members:

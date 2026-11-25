@@ -40,11 +40,13 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
     BlobPart,
+    CompactionPart,
     ContentCapturingMode,
     File,
     FilePart,
     FunctionToolDefinition,
     GenericPart,
+    GenericToolDefinition,
     InputMessage,
     MessagePart,
     Modality,
@@ -53,6 +55,8 @@ from opentelemetry.util.genai.types import (
     ReasoningPart,
     RetrievalDocument,
     Role,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     SystemInstructionPart,
     Text,
     TextPart,
@@ -408,6 +412,308 @@ class TestTelemetryHandler(unittest.TestCase):
         attrs = _get_span_attributes(span)
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+    def test_shared_content_models_on_spans(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
+        )
+        factories = (
+            ("inference", lambda: handler.inference("test-provider")),
+            ("local_agent", handler.invoke_local_agent),
+            (
+                "remote_agent",
+                lambda: handler.invoke_remote_agent("test-provider"),
+            ),
+            (
+                "fetch_response",
+                lambda: handler.fetch_response(
+                    "test-provider", response_id="response-id"
+                ),
+            ),
+        )
+        for name, factory in factories:
+            for failed in (False, True):
+                with self.subTest(invocation=name, failed=failed):
+                    self.span_exporter.clear()
+                    invocation = factory()
+                    if name != "fetch_response":
+                        invocation.input_messages = [
+                            _create_input_message("hello")
+                        ]
+                    invocation.output_messages = [_create_output_message("hi")]
+                    invocation.system_instruction = (
+                        _create_system_instruction()
+                    )
+                    invocation.tool_definitions = [
+                        FunctionToolDefinition(
+                            name="tool",
+                            description=None,
+                            parameters={"type": "object"},
+                        ),
+                        GenericToolDefinition(
+                            name="builtin", type="web_search"
+                        ),
+                    ]
+                    if failed:
+                        invocation.fail(ValueError("failed"))
+                    else:
+                        invocation.stop()
+                    attrs = _get_span_attributes(
+                        _get_single_span(self.span_exporter)
+                    )
+                    _assert_text_message(
+                        attrs[GenAI.GEN_AI_OUTPUT_MESSAGES][0],
+                        "AI",
+                        "hi",
+                        "stop",
+                    )
+                    self.assertEqual(
+                        attrs[GenAI.GEN_AI_TOOL_DEFINITIONS],
+                        (
+                            {
+                                "name": "tool",
+                                "parameters": {"type": "object"},
+                                "type": "function",
+                            },
+                            {"name": "builtin", "type": "web_search"},
+                        ),
+                    )
+                    self.assertEqual(
+                        attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS],
+                        (
+                            {
+                                "content": "You are a helpful assistant.",
+                                "type": "text",
+                            },
+                        ),
+                    )
+                    if name != "fetch_response":
+                        _assert_text_message(
+                            attrs[GenAI.GEN_AI_INPUT_MESSAGES][0],
+                            "Human",
+                            "hello",
+                        )
+                    else:
+                        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, attrs)
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+        },
+    )
+    def test_typed_parts_on_spans_and_events(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        parts = [
+            TextPart(content=""),
+            ReasoningPart(content="thinking"),
+            CompactionPart(),
+            CompactionPart(id="", content=""),
+            BlobPart(
+                mime_type=None, modality=Modality.IMAGE, content=b"\x00\xff"
+            ),
+            FilePart(
+                mime_type="application/pdf", modality="document", file_id=""
+            ),
+            UriPart(
+                mime_type=None,
+                modality="image",
+                uri="https://example.test/image.png",
+            ),
+        ]
+        with handler.inference("test-provider") as invocation:
+            invocation.input_messages = [
+                InputMessage(role=Role.USER, parts=parts, name="")
+            ]
+            invocation.output_messages = [
+                OutputMessage(role=Role.ASSISTANT, parts=parts)
+            ]
+        expected = (
+            {"content": "", "type": "text"},
+            {"content": "thinking", "type": "reasoning"},
+            {"type": "compaction"},
+            {"id": "", "content": "", "type": "compaction"},
+            {"modality": "image", "content": b"\x00\xff", "type": "blob"},
+            {
+                "mime_type": "application/pdf",
+                "modality": "document",
+                "file_id": "",
+                "type": "file",
+            },
+            {
+                "modality": "image",
+                "uri": "https://example.test/image.png",
+                "type": "uri",
+            },
+        )
+        span_attrs = _get_span_attributes(_get_single_span(self.span_exporter))
+        event_attrs = self.log_exporter.get_finished_logs()[
+            0
+        ].log_record.attributes
+        for attrs in (span_attrs, event_attrs):
+            self.assertEqual(
+                attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+                ({"role": "user", "parts": expected, "name": ""},),
+            )
+            self.assertEqual(
+                attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
+                ({"role": "assistant", "parts": expected},),
+            )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+        },
+    )
+    def test_tool_payloads_on_spans_and_events(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+
+        @dataclass
+        class Payload:
+            count: int
+            label: str | None = None
+
+        cases = [
+            (Payload(count=0), {"count": 0, "label": None}),
+            ({"count": 0, "invalid": object()}, {"count": 0}),
+            (object(), None),
+            (None, None),
+        ]
+        for payload, converted in cases:
+            with self.subTest(payload=payload):
+                self.span_exporter.clear()
+                self.log_exporter.clear()
+                parts = [
+                    (
+                        ToolCallRequestPart(
+                            arguments=payload, name="tool", id=None
+                        ),
+                        "arguments",
+                        {"name": "tool", "type": "tool_call"},
+                    ),
+                    (
+                        ToolCallResponsePart(response=payload, id=None),
+                        "response",
+                        {"type": "tool_call_response", "response": None},
+                    ),
+                    (
+                        ServerToolCallPart(
+                            name="web_search", server_tool_call=payload
+                        ),
+                        "server_tool_call",
+                        {"name": "web_search", "type": "server_tool_call"},
+                    ),
+                    (
+                        ServerToolCallResponsePart(
+                            server_tool_call_response=payload, id="call-1"
+                        ),
+                        "server_tool_call_response",
+                        {"id": "call-1", "type": "server_tool_call_response"},
+                    ),
+                ]
+                expected_parts = []
+                for _, key, expected in parts:
+                    if payload is not None:
+                        expected[key] = converted
+                    expected_parts.append(expected)
+                definition = {
+                    "name": "tool",
+                    "description": "",
+                    "type": "function",
+                }
+                if payload is not None:
+                    definition["parameters"] = converted
+                with handler.inference("test-provider") as invocation:
+                    invocation.input_messages = [
+                        InputMessage(
+                            role="user", parts=[part for part, _, _ in parts]
+                        )
+                    ]
+                    invocation.tool_definitions = [
+                        FunctionToolDefinition(
+                            name="tool", description="", parameters=payload
+                        ),
+                        GenericToolDefinition(name="", type=""),
+                    ]
+                span_attrs = _get_span_attributes(
+                    _get_single_span(self.span_exporter)
+                )
+                event_attrs = self.log_exporter.get_finished_logs()[
+                    0
+                ].log_record.attributes
+                for attrs in (span_attrs, event_attrs):
+                    self.assertEqual(
+                        attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+                        ({"role": "user", "parts": tuple(expected_parts)},),
+                    )
+                    self.assertEqual(
+                        attrs[GenAI.GEN_AI_TOOL_DEFINITIONS],
+                        (definition, {"name": "", "type": ""}),
+                    )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+        },
+    )
+    def test_generic_parts_on_spans_and_events(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+
+        @dataclass
+        class CustomPart(GenericPart):
+            items: dict[str, str]
+            keys: list[str]
+            invalid: object
+
+        parts = [
+            CustomPart(
+                type="custom",
+                items={"query": "weather"},
+                keys=["result"],
+                invalid=object(),
+            ),
+            TextPart(content="hello"),
+        ]
+        with handler.inference("test-provider") as invocation:
+            invocation.input_messages = [
+                InputMessage(role="user", parts=parts)
+            ]
+            invocation.output_messages = [
+                OutputMessage(role="assistant", parts=parts)
+            ]
+        expected = (
+            {
+                "type": "custom",
+                "items": {"query": "weather"},
+                "keys": ("result",),
+            },
+            {"type": "text", "content": "hello"},
+        )
+        span_attrs = _get_span_attributes(_get_single_span(self.span_exporter))
+        event_attrs = self.log_exporter.get_finished_logs()[
+            0
+        ].log_record.attributes
+        for attrs in (span_attrs, event_attrs):
+            self.assertEqual(
+                attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+                ({"role": "user", "parts": expected},),
+            )
+            self.assertEqual(
+                attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
+                ({"role": "assistant", "parts": expected},),
+            )
 
     def test_inference_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time."""
@@ -1689,6 +1995,81 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
+    def test_content_models_are_mappings(self):
+        models = [
+            InputMessage(role="user", parts=[]),
+            OutputMessage(role="assistant", parts=[]),
+            RetrievalDocument(),
+            TextPart(content="hello"),
+            ReasoningPart(content="thinking"),
+            CompactionPart(),
+            BlobPart(mime_type=None, modality="image", content=b"data"),
+            FilePart(mime_type=None, modality="document", file_id="file"),
+            UriPart(
+                mime_type=None, modality="image", uri="https://example.test"
+            ),
+            ToolCallRequestPart(arguments=None, name="tool", id=None),
+            ToolCallResponsePart(response=None, id=None),
+            ServerToolCallPart(name="tool", server_tool_call=None),
+            ServerToolCallResponsePart(server_tool_call_response=None),
+            FunctionToolDefinition(
+                name="tool", description=None, parameters=None
+            ),
+            GenericToolDefinition(name="builtin", type="web_search"),
+        ]
+        for model in models:
+            with self.subTest(model=model):
+                self.assertIsInstance(model, Mapping)
+
+    def test_tool_call_request_mapping(self):
+        part = ToolCallRequestPart(
+            arguments={"count": 0}, name="tool", id=None
+        )
+        self.assertIsInstance(part, Mapping)
+        self.assertEqual(
+            dict(part),
+            {
+                "arguments": {"count": 0},
+                "name": "tool",
+                "type": "tool_call",
+            },
+        )
+        self.assertEqual(list(part), ["arguments", "name", "type"])
+        self.assertEqual(len(part), 3)
+        with self.assertRaises(KeyError):
+            part["missing"]
+
+    def test_tool_call_request_mapping_omits_none_fields(self):
+        part = ToolCallRequestPart(arguments=None, name="tool", id=None)
+        self.assertEqual(dict(part), {"name": "tool", "type": "tool_call"})
+        self.assertEqual(len(part), 2)
+        self.assertTrue(part)
+        with self.assertRaises(KeyError):
+            part["id"]
+        part.id = ""
+        self.assertEqual(part["id"], "")
+        self.assertEqual(len(part), 3)
+
+    def test_content_model_class_vars_are_not_mapping_keys(self):
+        parts = (
+            ToolCallRequestPart(arguments={}, name="tool", id=None),
+            ToolCallResponsePart(response=None, id=None),
+        )
+        for part in parts:
+            for key in ("_SANITIZE", "_KEEP_NONE"):
+                with self.subTest(part=type(part).__name__, key=key):
+                    self.assertNotIn(key, list(part))
+                    self.assertNotIn(key, part)
+                    with self.assertRaises(KeyError):
+                        part[key]
+                    self.assertIsNone(part.get(key))
+
+    def test_empty_content_mapping_is_truthy(self):
+        model = RetrievalDocument()
+        self.assertEqual(dict(model), {})
+        self.assertEqual(len(model), 0)
+        self.assertTrue(model)
+
     def test_output_message_optional_finish_reason(self):
         message = OutputMessage(
             role=Role.ASSISTANT,

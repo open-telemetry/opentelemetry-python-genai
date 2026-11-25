@@ -50,6 +50,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     SystemInstructionPart,
     ToolDefinition,
+    _convert_generic_parts,
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
@@ -606,27 +607,21 @@ def get_content_attributes(
     optional_attrs = (
         (
             GenAI.GEN_AI_INPUT_MESSAGES,
-            object_to_any_value(list(input_messages))
-            if input_messages
-            else None,
+            input_messages or None,
         ),
         (
             GenAI.GEN_AI_OUTPUT_MESSAGES,
-            object_to_any_value(list(output_messages))
-            if output_messages
-            else None,
+            output_messages or None,
         ),
         (
             GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
-            object_to_any_value(list(system_instruction))
+            _convert_generic_parts(system_instruction)
             if system_instruction
             else None,
         ),
         (
             GenAI.GEN_AI_TOOL_DEFINITIONS,
-            object_to_any_value(list(tool_definitions))
-            if tool_definitions
-            else None,
+            tool_definitions or None,
         ),
         (
             _GEN_AI_PROMPT_VARIABLES,
