@@ -9,7 +9,6 @@ The SDK drives a CLI subprocess, so the stream is replayed through a fake
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import anyio
@@ -112,7 +111,7 @@ class InvokeAgentScenario(Scenario):
         attributes = {a["name"]: a["value"] for a in agent["attributes"]}
         part_types = {
             part["type"]
-            for message in json.loads(attributes["gen_ai.output.messages"])
+            for message in attributes["gen_ai.output.messages"]
             for part in message["parts"]
         }
         assert {
