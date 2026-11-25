@@ -128,8 +128,8 @@ returning a chunk to the consumer. Generator ``send``/``throw`` and
 For invocation-backed streams, create the invocation with
 ``_attach_to_context=False`` and pass it to the base constructor
 (``super().__init__(stream, invocation)``). The base wrapper then makes the
-invocation current during reads, cleanup and finalization of an abandoned
-stream, so no ``_execution_context()`` override is needed.
+invocation current during reads and cleanup, so no ``_execution_context()``
+override is needed.
 Keep finalization in the existing ``_on_stream_end`` and ``_on_stream_error`` hooks.
 
 

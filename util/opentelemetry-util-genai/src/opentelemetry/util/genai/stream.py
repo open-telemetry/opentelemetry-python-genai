@@ -104,27 +104,27 @@ class AbandonedStreamError(Exception):
         super().__init__(message)
 
 
+def _activation(
+    invocation: _StreamInvocation | None,
+) -> AbstractContextManager[None]:
+    """Make an unattached invocation current; leave the context alone otherwise.
+
+    Applies when the invocation was created with ``_attach_to_context=False``
+    or was suspended. Invocations that are still attached, or that reuse the
+    current span, leave the context alone.
+    """
+    if (
+        isinstance(invocation, GenAIInvocation)
+        and invocation._needs_activation
+    ):
+        return invocation.activate()
+    return nullcontext()
+
+
 class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     """Finalize-once bookkeeping and telemetry hooks shared by both wrappers."""
 
     _self_finalized: bool
-
-    def _execution_context(self) -> AbstractContextManager[None]:
-        """Scope stream reads and cleanup, restoring context before returning a chunk.
-
-        By default the invocation is made current for each read when it is not
-        attached to the context: it was created with
-        ``_attach_to_context=False``, or it was suspended. Invocations that are
-        still attached, or that reuse the current span, leave the context alone.
-        """
-        # getattr: __del__ can run on a wrapper whose __init__ raised.
-        invocation = getattr(self, "_self_invocation", None)
-        if (
-            isinstance(invocation, GenAIInvocation)
-            and invocation._needs_activation
-        ):
-            return invocation.activate()
-        return nullcontext()
 
     def _finalize_success(self) -> None:
         if self._self_finalized:
@@ -151,8 +151,7 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
         if getattr(self, "_self_finalized", True):
             return
         try:
-            with self._execution_context():
-                self._finalize_failure(AbandonedStreamError())
+            self._finalize_failure(AbandonedStreamError())
         except BaseException:  # pylint: disable=broad-exception-caught
             _logger.debug(
                 "GenAI stream finalization error for abandoned stream",
@@ -208,6 +207,10 @@ class SyncStreamWrapper(
     # ``stream`` property carrying the SDK's own type.
     _self_stream: Any
 
+    def _execution_context(self) -> AbstractContextManager[None]:
+        """Scope stream reads and cleanup, restoring context before returning a chunk."""
+        return _activation(self._self_invocation)
+
     def _bind_stream(self, stream: _SyncStream[ChunkT]) -> None:
         self._self_stream = stream
         self._self_iterator = iter(stream)
@@ -237,6 +240,10 @@ class SyncStreamWrapper(
                 try:
                     self._self_stream.close()
                 except Exception:  # pylint: disable=broad-exception-caught
+                    # A stream that isn't a context manager (e.g. a generator)
+                    # would never be closed here without instrumentation.
+                    if hasattr(self._self_stream, "__exit__"):
+                        raise
                     _logger.debug(
                         "GenAI stream close error after user exception",
                         exc_info=True,
@@ -334,6 +341,10 @@ class AsyncStreamWrapper(
     # See ``SyncStreamWrapper._self_stream``.
     _self_stream: Any
 
+    def _execution_context(self) -> AbstractContextManager[None]:
+        """See ``SyncStreamWrapper._execution_context``."""
+        return _activation(self._self_invocation)
+
     def _bind_stream(self, stream: _AsyncStream[ChunkT]) -> None:
         self._self_stream = stream
         self._self_aiter = aiter(stream)
@@ -361,6 +372,9 @@ class AsyncStreamWrapper(
                 try:
                     await self._close_stream()
                 except Exception:  # pylint: disable=broad-exception-caught
+                    # See SyncStreamWrapper.__exit__.
+                    if hasattr(self._self_stream, "__aexit__"):
+                        raise
                     _logger.debug(
                         "GenAI stream close error after user exception",
                         exc_info=True,
@@ -534,10 +548,9 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
 
     def __del__(self) -> None:
         try:
-            with self._execution_context():
-                self._finalize_failure(
-                    GeneratorExit("Stream garbage collected before completion")
-                )
+            self._finalize_failure(
+                GeneratorExit("Stream garbage collected before completion")
+            )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
@@ -580,10 +593,9 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
 
     def __del__(self) -> None:
         try:
-            with self._execution_context():
-                self._finalize_failure(
-                    GeneratorExit("Stream garbage collected before completion")
-                )
+            self._finalize_failure(
+                GeneratorExit("Stream garbage collected before completion")
+            )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
@@ -750,20 +762,18 @@ class SyncStreamManagerWrapper(
                 )
             except BaseException as error:
                 if stream_wrapper is not None:
-                    stream_wrapper.__exit__(
-                        type(error), error, error.__traceback__
-                    )
+                    stream_wrapper._finalize_failure(error)
                 elif self._self_invocation is not None:
                     self._self_invocation.fail(error)
                 raise
             if stream_wrapper is not None:
-                if suppressed:
-                    # The manager swallowed the caller's exception, so the
-                    # stream ended successfully as far as telemetry is
-                    # concerned.
-                    stream_wrapper.__exit__(None, None, None)
+                # The manager already closed the stream. If it swallowed the
+                # caller's exception, the stream ended successfully as far as
+                # telemetry is concerned.
+                if exc_val is not None and not suppressed:
+                    stream_wrapper._finalize_failure(exc_val)
                 else:
-                    stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
+                    stream_wrapper._finalize_success()
             return suppressed
 
 
@@ -826,17 +836,15 @@ class AsyncStreamManagerWrapper(
                 )
             except BaseException as error:
                 if stream_wrapper is not None:
-                    await stream_wrapper.__aexit__(
-                        type(error), error, error.__traceback__
-                    )
+                    stream_wrapper._finalize_failure(error)
                 elif self._self_invocation is not None:
                     self._self_invocation.fail(error)
                 raise
             if stream_wrapper is not None:
-                if suppressed:
-                    await stream_wrapper.__aexit__(None, None, None)
+                if exc_val is not None and not suppressed:
+                    stream_wrapper._finalize_failure(exc_val)
                 else:
-                    await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
+                    stream_wrapper._finalize_success()
             return suppressed
 
 
