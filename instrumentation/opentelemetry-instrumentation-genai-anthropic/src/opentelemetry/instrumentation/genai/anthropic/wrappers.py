@@ -14,7 +14,7 @@ from collections.abc import (
     Generator,
     Iterator,
 )
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -108,6 +108,8 @@ else:
 
 
 ResponseFormatT = TypeVar("ResponseFormatT")
+_SourceT = TypeVar("_SourceT")
+_ViewT = TypeVar("_ViewT")
 accumulate_event = cast("Callable[..., Message] | None", _sdk_accumulate_event)
 beta_accumulate_event = cast(
     "Callable[..., ParsedBetaMessage[Any]] | None", _sdk_beta_accumulate_event
@@ -160,9 +162,7 @@ async def _aclose_text_source(text_stream: AsyncIterator[str]) -> None:
 
 
 class _TextStreamScope(Protocol):
-    def _execution_context(self) -> AbstractContextManager[None]: ...
-
-    def _finalize_failure(self, error: BaseException) -> None: ...
+    def _reading(self) -> AbstractContextManager[None]: ...
 
 
 class _ScopedTextStream(_ObjectProxy):
@@ -183,26 +183,20 @@ class _ScopedTextStream(_ObjectProxy):
     def __iter__(self) -> Iterator[str]:
         return self
 
-    def __next__(self) -> str:
-        with self._self_scope._execution_context():
+    def _read(self, read: Callable[[], str]) -> str:
+        with self._self_scope._reading():
             try:
-                return next(self.__wrapped__)
+                return read()
             except StopIteration:
                 pass
-            except BaseException as error:
-                # Finalize through the wrapper before ``activate()`` fails the
-                # invocation, so the SDK snapshot is still recorded.
-                self._self_scope._finalize_failure(error)
-                raise
         raise StopIteration
 
+    def __next__(self) -> str:
+        return self._read(lambda: next(self.__wrapped__))
+
     def close(self) -> None:
-        with self._self_scope._execution_context():
-            try:
-                _close_text_source(self.__wrapped__)
-            except BaseException as error:
-                self._self_scope._finalize_failure(error)
-                raise
+        with self._self_scope._reading():
+            _close_text_source(self.__wrapped__)
 
 
 class _AsyncScopedTextStream(_ObjectProxy):
@@ -219,24 +213,26 @@ class _AsyncScopedTextStream(_ObjectProxy):
     def __aiter__(self) -> AsyncIterator[str]:
         return self
 
-    async def __anext__(self) -> str:
-        with self._self_scope._execution_context():
+    async def _read(self, read: Callable[[], Awaitable[str]]) -> str:
+        with self._self_scope._reading():
             try:
-                return await anext(self.__wrapped__)
+                return await read()
             except StopAsyncIteration:
                 pass
-            except BaseException as error:
-                self._self_scope._finalize_failure(error)
-                raise
         raise StopAsyncIteration
 
+    async def __anext__(self) -> str:
+        return await self._read(lambda: anext(self.__wrapped__))
+
     async def aclose(self) -> None:
-        with self._self_scope._execution_context():
-            try:
-                await _aclose_text_source(self.__wrapped__)
-            except BaseException as error:
-                self._self_scope._finalize_failure(error)
-                raise
+        with self._self_scope._reading():
+            await _aclose_text_source(self.__wrapped__)
+
+
+class _ReadScope(Protocol):
+    def _execution_context(self) -> AbstractContextManager[None]: ...
+
+    def _finalize_failure(self, error: BaseException) -> None: ...
 
 
 class _StreamWrapperWithStream(Protocol):
@@ -291,6 +287,53 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     _self_json_bufs: dict[int, bytes]
     _self_is_beta: bool
     _self_beta_accumulation_disabled: bool
+    # The SDK hands out the same text generator every time, so the scoped
+    # copy of it is memoized against the generator it was built from.
+    _self_text_stream_source: object
+    _self_text_stream: object
+
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            attribute = super().__getattr__(name)
+            if name == "text_stream":
+                return self._scoped_text_stream(attribute)
+            if name in _DRAINING_HELPERS:
+                return self._scoped_helper(name, attribute)
+            return attribute
+
+    def _memoized_text_view(
+        self, text_stream: _SourceT, view: Callable[[_SourceT], _ViewT]
+    ) -> _ViewT:
+        if self._self_text_stream_source is not text_stream:
+            self._self_text_stream_source = text_stream
+            self._self_text_stream = view(text_stream)
+        return cast(_ViewT, self._self_text_stream)
+
+    def _drain_for(self, name: str) -> Callable[[], object] | None:
+        # Only draining reads the response; the final-message helpers then
+        # raise their own usage errors on a successful response
+        # (``get_final_text()`` on a reply with no text block), which must not
+        # fail the span. So drain under the invocation, then call the helper.
+        if name == "until_done":
+            return None
+        stream = cast(_StreamWrapperWithStream, self).stream
+        drain: Callable[[], object] | None = getattr(
+            stream, "until_done", None
+        )
+        return drain
+
+    @contextmanager
+    def _reading(self) -> Iterator[None]:
+        # Finalize through the wrapper before ``activate()`` fails the
+        # invocation, so the SDK snapshot is still recorded.
+        scope = cast(_ReadScope, self)
+        with scope._execution_context():
+            try:
+                yield
+            except BaseException as error:
+                scope._finalize_failure(error)
+                raise
 
     def _stop(self) -> None:
         if self._self_message_telemetry_finalized:
@@ -452,53 +495,25 @@ class MessagesStreamWrapper(
         self._self_json_bufs = {}
         self._self_is_beta = is_beta
         self._self_beta_accumulation_disabled = False
-        # The SDK hands out the same text generator every time, so the scoped
-        # copy of it is memoized against the generator it was built from.
-        self._self_text_stream_source: object = None
-        self._self_text_stream: _ScopedTextStream | None = None
-
-    if not TYPE_CHECKING:
-
-        def __getattr__(self, name: str) -> Any:
-            attribute = super().__getattr__(name)
-            if name == "text_stream":
-                return self._scoped_text_stream(attribute)
-            if name in _DRAINING_HELPERS:
-                return self._scoped_helper(name, attribute)
-            return attribute
+        self._self_text_stream_source = None
+        self._self_text_stream = None
 
     def _scoped_text_stream(self, text_stream: Iterator[str]) -> Iterator[str]:
-        # ``text_stream`` is the one helper the caller iterates rather than
-        # calls, and the SDK hands out the same generator each time, so wrap it
-        # once and hand the same wrapper back.
-        if self._self_text_stream_source is not text_stream:
-            self._self_text_stream_source = text_stream
-            self._self_text_stream = _ScopedTextStream(text_stream, self)
-        return cast("Iterator[str]", self._self_text_stream)
-
-    def _scoped_helper(
-        self, name: str, helper: Callable[..., Any]
-    ) -> Callable[..., Any]:
-        # Only draining reads the response; the final-message helpers then
-        # raise their own usage errors on a successful response
-        # (``get_final_text()`` on a reply with no text block), which must not
-        # fail the span. So drain under the invocation, then call the helper.
-        drain = (
-            None
-            if name == "until_done"
-            else getattr(self.stream, "until_done", None)
+        return self._memoized_text_view(
+            text_stream, lambda source: _ScopedTextStream(source, self)
         )
 
+    def _scoped_helper(
+        self, name: str, helper: Callable[..., object]
+    ) -> Callable[..., object]:
+        drain = self._drain_for(name)
+
         @functools.wraps(helper)
-        def scoped(*args: Any, **kwargs: Any) -> Any:
-            with self._execution_context():
-                try:
-                    if drain is None:
-                        return helper(*args, **kwargs)
-                    drain()
-                except BaseException as error:
-                    self._finalize_failure(error)
-                    raise
+        def scoped(*args: Any, **kwargs: Any) -> object:
+            with self._reading():
+                if drain is None:
+                    return helper(*args, **kwargs)
+                drain()
             return helper(*args, **kwargs)
 
         return scoped
@@ -562,49 +577,27 @@ class AsyncMessagesStreamWrapper(
         self._self_json_bufs = {}
         self._self_is_beta = is_beta
         self._self_beta_accumulation_disabled = False
-        # See ``MessagesStreamWrapper.__init__``.
-        self._self_text_stream_source: object = None
-        self._self_text_stream: _AsyncScopedTextStream | None = None
-
-    if not TYPE_CHECKING:
-
-        def __getattr__(self, name: str) -> Any:
-            attribute = super().__getattr__(name)
-            if name == "text_stream":
-                return self._scoped_text_stream(attribute)
-            if name in _DRAINING_HELPERS:
-                return self._scoped_helper(name, attribute)
-            return attribute
+        self._self_text_stream_source = None
+        self._self_text_stream = None
 
     def _scoped_text_stream(
         self, text_stream: AsyncIterator[str]
     ) -> AsyncIterator[str]:
-        # See ``MessagesStreamWrapper._scoped_text_stream``.
-        if self._self_text_stream_source is not text_stream:
-            self._self_text_stream_source = text_stream
-            self._self_text_stream = _AsyncScopedTextStream(text_stream, self)
-        return cast("AsyncIterator[str]", self._self_text_stream)
-
-    def _scoped_helper(
-        self, name: str, helper: Callable[..., Awaitable[Any]]
-    ) -> Callable[..., Awaitable[Any]]:
-        # See ``MessagesStreamWrapper._scoped_helper``.
-        drain = (
-            None
-            if name == "until_done"
-            else getattr(self.stream, "until_done", None)
+        return self._memoized_text_view(
+            text_stream, lambda source: _AsyncScopedTextStream(source, self)
         )
 
+    def _scoped_helper(
+        self, name: str, helper: Callable[..., Awaitable[object]]
+    ) -> Callable[..., Awaitable[object]]:
+        drain = self._drain_for(name)
+
         @functools.wraps(helper)
-        async def scoped(*args: Any, **kwargs: Any) -> Any:
-            with self._execution_context():
-                try:
-                    if drain is None:
-                        return await helper(*args, **kwargs)
-                    await drain()
-                except BaseException as error:
-                    self._finalize_failure(error)
-                    raise
+        async def scoped(*args: Any, **kwargs: Any) -> object:
+            with self._reading():
+                if drain is None:
+                    return await helper(*args, **kwargs)
+                await cast("Awaitable[None]", drain())
             return await helper(*args, **kwargs)
 
         return scoped
