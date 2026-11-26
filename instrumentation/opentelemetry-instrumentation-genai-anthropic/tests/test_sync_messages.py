@@ -1964,13 +1964,15 @@ def _completed_tool_use_only_block_truncated_sse_body() -> bytes:
     not _has_tools_param,
     reason="anthropic SDK too old to support 'tools' parameter",
 )
-def test_sync_messages_stream_text_stream_preserves_sole_completed_tool_use(
+def test_sync_messages_stream_text_stream_drops_sole_unconfirmed_tool_use(
     span_exporter, instrument_with_content
 ):
-    """A tool call that is both the first and the last block, completed
-    before the body ends, stays on the span. Unlike the sibling test above,
-    there is no later block whose own start proves the tool call is done,
-    so this exercises _stop's trust_last_block path on its own."""
+    """A tool call that is both the first and the last block is not trusted
+    from the snapshot alone. .text_stream bypasses our own per-chunk
+    tracking, so there is no way to tell this case (content_block_stop
+    genuinely fired, then the body ends) apart from a connection that died
+    mid-delta, which would otherwise leak a wrong partial parse as if it
+    were a finished call."""
 
     def respond(_request):
         return httpx.Response(
@@ -2001,22 +2003,192 @@ def test_sync_messages_stream_text_stream_preserves_sole_completed_tool_use(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "error",
     )
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+
+
+def _redacted_thinking_only_block_truncated_sse_body() -> bytes:
+    """A redacted thinking block, complete and the only block, then the
+    body ends with no message_delta or message_stop."""
+
+    def _event(name: str, payload: dict[str, object]) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    return b"".join(
+        [
+            _event(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_redacted_thinking_only",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 3, "output_tokens": 0},
+                    },
+                },
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "redacted_thinking",
+                        "data": "opaque-encrypted-blob",
+                    },
+                },
+            ),
+            _event(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": 0},
+            ),
+        ]
+    )
+
+
+def test_sync_messages_stream_direct_iteration_preserves_redacted_thinking(
+    span_exporter, instrument_with_content
+):
+    """Direct iteration tracks a redacted thinking block the same way it
+    tracks a tool call, via create_stream_block_state, which keeps no data
+    for this type; the fallback must not leave its real, already-received
+    data behind just because per-chunk tracking saw the block."""
+
+    def respond(_request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_redacted_thinking_only_block_truncated_sse_body(),
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        thinking={"type": "enabled", "budget_tokens": 16},
+        messages=[{"role": "user", "content": "Calculate 2 + 2."}],
+    ) as stream:
+        for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
     assert _load_span_messages(
         span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     ) == [
         {
             "role": "assistant",
             "parts": [
-                {
-                    "arguments": {"city": "Chicago"},
-                    "name": "get_weather",
-                    "id": "toolu_A",
-                    "type": "tool_call",
-                },
+                {"type": "reasoning", "content": "opaque-encrypted-blob"}
             ],
             "finish_reason": "error",
         }
     ]
+
+
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_stream_text_stream_drops_tool_use_truncated_mid_delta(
+    span_exporter, instrument_with_content
+):
+    """A tool call whose JSON is cut off mid-delta, with no
+    content_block_stop at all, is dropped rather than reported with the
+    SDK's best-effort partial parse, which can look like a plausible but
+    wrong finished value."""
+
+    def _event(name: str, payload: dict[str, object]) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    body = b"".join(
+        [
+            _event(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_mid_delta_cut",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 3, "output_tokens": 0},
+                    },
+                },
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_A",
+                        "name": "get_weather",
+                        "input": {},
+                    },
+                },
+            ),
+            _event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": '{"city": "Chi',
+                    },
+                },
+            ),
+            # No content_block_stop: the connection dies mid-JSON.
+        ]
+    )
+
+    def respond(_request):
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        for _ in stream.text_stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.skipif(
