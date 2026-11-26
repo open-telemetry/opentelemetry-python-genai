@@ -44,16 +44,23 @@ class _AgentStreamMixin:
     _self_content_parts: list[str]
     _self_completed_content: str | None
     _self_finish_reason: str
+    _self_model_provider: str | None = None
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
         if session_id and not self._self_agent_invocation.conversation_id:
             self._self_agent_invocation.conversation_id = str(session_id)
 
+        # The provider is on the run's start event, the usage on its completion
+        # event, so keep the first one for the chunks that follow it.
+        provider = getattr(chunk, "model_provider", None)
+        if provider:
+            self._self_model_provider = str(provider)
+
         record_token_usage(
             self._self_agent_invocation,
             getattr(chunk, "metrics", None),
-            getattr(chunk, "model_provider", None),
+            provider or self._self_model_provider,
         )
 
         event_name = str(getattr(chunk, "event", ""))

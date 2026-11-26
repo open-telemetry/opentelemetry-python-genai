@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
@@ -124,7 +124,10 @@ def record_token_usage(
     """Record agno run metrics as ``gen_ai.usage.*`` on an invocation.
 
     ``provider`` is agno's ``RunOutput.model_provider``; it decides whether the
-    cached prompt tokens sit outside ``input_tokens``. Workflow results carry a
+    cached prompt tokens sit outside ``input_tokens``. When the metrics carry a
+    per-model ``details`` breakdown, each entry is normalized with its own
+    provider instead, because the aggregate sums every model in the run while
+    ``model_provider`` names only the primary one. Workflow results carry a
     ``WorkflowMetrics`` with no token fields, and workflow invocations carry no
     ``input_tokens``, so both are left alone.
     """
@@ -132,17 +135,57 @@ def record_token_usage(
         metrics, _run_metrics_cls()
     ):
         return
-    input_tokens = total_input_tokens(
+    input_tokens = _run_input_tokens(metrics, provider)
+    output_tokens = safe_int(metrics.output_tokens)
+    if not any((input_tokens, output_tokens)):
+        # All-zero metrics mean agno reported nothing, not that the run used
+        # no tokens.
+        return
+    if input_tokens is not None:
+        invocation.input_tokens = input_tokens
+    if output_tokens is not None:
+        invocation.output_tokens = output_tokens
+
+
+def _run_input_tokens(metrics: RunMetrics, provider: str | None) -> int | None:
+    """The run's input tokens, with cached prompt tokens folded in per model."""
+    per_model = _per_model_input_tokens(getattr(metrics, "details", None))
+    if per_model is not None:
+        return per_model
+    return total_input_tokens(
         safe_int(metrics.input_tokens),
         safe_int(metrics.cache_read_tokens),
         safe_int(metrics.cache_write_tokens),
         provider,
     )
-    if input_tokens:
-        invocation.input_tokens = input_tokens
-    output_tokens = safe_int(metrics.output_tokens)
-    if output_tokens:
-        invocation.output_tokens = output_tokens
+
+
+def _per_model_input_tokens(details: Any) -> int | None:
+    """Sum each model's input tokens, normalizing with that model's provider."""
+    if not isinstance(details, dict):
+        return None
+    typed = cast("dict[str, Any]", details)
+    if not typed:
+        return None
+    total = 0
+    counted = False
+    for entries in typed.values():
+        if not isinstance(entries, (list, tuple)):
+            continue
+        for entry in cast("Sequence[Any]", entries):
+            input_tokens = safe_int(getattr(entry, "input_tokens", None))
+            cache_read = safe_int(getattr(entry, "cache_read_tokens", None))
+            cache_write = safe_int(getattr(entry, "cache_write_tokens", None))
+            if input_tokens is None and cache_read is None:
+                continue
+            counted = True
+            total += input_tokens or 0
+            if (
+                _normalize_provider(getattr(entry, "provider", None))
+                in _CACHE_TOKENS_OUTSIDE_INPUT
+            ):
+                total += (cache_read or 0) + (cache_write or 0)
+    return total if counted else None
 
 
 def safe_float(val: Any) -> float | None:

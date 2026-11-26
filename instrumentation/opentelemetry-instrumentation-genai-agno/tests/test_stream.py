@@ -768,6 +768,107 @@ def test_agent_stream_no_llm_client_metrics(
     assert "gen_ai.client.operation.time_per_output_chunk" not in metric_names
 
 
+def test_agent_stream_keeps_the_run_provider_for_completion_usage(
+    instrument_agno, span_exporter
+) -> None:
+    """The completion event's usage is normalized with the run's provider.
+
+    ``RunCompletedEvent`` carries the metrics but not ``model_provider``; that
+    is on ``RunStartedEvent``, so the wrapper has to carry it across chunks.
+    """
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(name="test-provider-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunStartedEvent(model_provider="Anthropic")
+        yield RunCompletedEvent(
+            metrics=metrics_cls(
+                input_tokens=12, cache_read_tokens=1040, output_tokens=8
+            )
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 1052
+
+
+def test_agent_stream_records_a_zero_output_count(
+    instrument_agno, span_exporter
+) -> None:
+    """A run that reports no output tokens reports zero, not nothing."""
+    from agno.agent import RunCompletedEvent
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(name="test-zero-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunCompletedEvent(
+            metrics=metrics_cls(input_tokens=12, output_tokens=0)
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 0
+
+
+def test_agent_stream_normalizes_each_model_in_a_mixed_run(
+    instrument_agno, span_exporter
+) -> None:
+    """Token usage is normalized per model, using each model's own provider.
+
+    ``RunMetrics.input_tokens`` sums every model in the run while
+    ``model_provider`` names only the primary one, so folding the aggregate
+    with that single provider double counts a cached OpenAI prompt.
+    """
+    pytest.importorskip("agno.metrics")
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+    from agno.metrics import ModelMetrics
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(name="test-mixed-agent", model=MockModel(id="mock-model"))
+    details = {
+        "model": [
+            ModelMetrics(
+                provider="Anthropic",
+                input_tokens=12,
+                cache_read_tokens=1000,
+                output_tokens=5,
+            ),
+            ModelMetrics(
+                provider="OpenAI",
+                input_tokens=1000,
+                cache_read_tokens=800,
+                output_tokens=5,
+            ),
+        ]
+    }
+
+    def fake_stream(*args, **kwargs):
+        yield RunStartedEvent(model_provider="Anthropic")
+        yield RunCompletedEvent(
+            metrics=metrics_cls(
+                input_tokens=1012,
+                cache_read_tokens=1800,
+                output_tokens=10,
+                details=details,
+            )
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 2012
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 10
+
+
 def test_workflow_stream_step_completed_event_preserves_final_content(
     instrument_agno_content_capture, span_exporter
 ) -> None:
