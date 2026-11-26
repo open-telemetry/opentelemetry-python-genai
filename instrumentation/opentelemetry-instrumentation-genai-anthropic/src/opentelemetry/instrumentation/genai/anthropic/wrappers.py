@@ -253,9 +253,14 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
             )
         ]
 
-    def _stop(self) -> None:
-        if self._self_message_telemetry_finalized:
-            return
+    def _prepare_finish(self) -> None:
+        """Shared finalization prep for ``_stop`` and ``_fail``.
+
+        Adopts the SDK snapshot, classifies completeness, and sets the
+        response and partial-output attributes identically for both a
+        caller close and a provider error; only the final ``stop()`` vs.
+        ``fail(exc)`` call differs between them.
+        """
         # text_stream and the get_final_* helpers bypass _process_chunk, so the
         # snapshot can be the only record of the response.
         self._adopt_sdk_snapshot()
@@ -273,27 +278,18 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
                 is not None
             ):
                 self._self_invocation.output_messages = output_messages
+
+    def _stop(self) -> None:
+        if self._self_message_telemetry_finalized:
+            return
+        self._prepare_finish()
         self._self_invocation.stop()
         self._self_message_telemetry_finalized = True
 
     def _fail(self, exc: BaseException) -> None:
         if self._self_message_telemetry_finalized:
             return
-        self._adopt_sdk_snapshot()
-        incomplete_response = self._is_incomplete_response()
-        _set_response_attributes(
-            self._self_invocation,
-            self._self_message,
-            self._self_capture_content and not incomplete_response,
-        )
-        if incomplete_response:
-            self._self_invocation.finish_reasons = ["error"]
-            if (
-                self._self_capture_content
-                and (output_messages := self._partial_output_messages())
-                is not None
-            ):
-                self._self_invocation.output_messages = output_messages
+        self._prepare_finish()
         self._self_invocation.fail(exc)
         self._self_message_telemetry_finalized = True
 

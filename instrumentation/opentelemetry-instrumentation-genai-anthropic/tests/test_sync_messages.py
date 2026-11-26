@@ -71,6 +71,7 @@ from .conftest import (
     incomplete_thinking_text_stream_sse_body,
     local_anthropic_sse_server,
     multimodal_input_message,
+    partial_tool_use_stream_sse_body,
     unset_sampling_kwargs,
 )
 
@@ -243,76 +244,6 @@ _STREAM_SSE_BODY = b"".join(
         ("message_stop", {"type": "message_stop"}),
     )
 )
-
-
-def _partial_tool_use_stream_sse_body() -> bytes:
-    def _event(name: str, payload: dict[str, object]) -> bytes:
-        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
-
-    arguments = '{"city": "Chicago", "unit": "celsius"}'
-    return b"".join(
-        [
-            _event(
-                "message_start",
-                {
-                    "type": "message_start",
-                    "message": {
-                        "id": "msg_partial_tool_use",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": "claude-sonnet-4-20250514",
-                        "content": [],
-                        "stop_reason": None,
-                        "stop_sequence": None,
-                        "usage": {"input_tokens": 3, "output_tokens": 0},
-                    },
-                },
-            ),
-            _event(
-                "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": "toolu_A",
-                        "name": "get_weather",
-                        "input": {},
-                    },
-                },
-            ),
-            *[
-                _event(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": 0,
-                        "delta": {
-                            "type": "input_json_delta",
-                            "partial_json": character,
-                        },
-                    },
-                )
-                for character in arguments
-            ],
-            _event(
-                "content_block_stop",
-                {"type": "content_block_stop", "index": 0},
-            ),
-            _event(
-                "message_delta",
-                {
-                    "type": "message_delta",
-                    "delta": {
-                        "stop_reason": "tool_use",
-                        "stop_sequence": None,
-                    },
-                    "usage": {"output_tokens": 10},
-                },
-            ),
-            _event("message_stop", {"type": "message_stop"}),
-        ]
-    )
 
 
 def _assert_weather_tool_definitions(span):
@@ -1631,7 +1562,7 @@ def test_sync_messages_stream_early_exit_marks_incomplete_tool_use(
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            content=_partial_tool_use_stream_sse_body(),
+            content=partial_tool_use_stream_sse_body(),
         )
 
     client = Anthropic(
