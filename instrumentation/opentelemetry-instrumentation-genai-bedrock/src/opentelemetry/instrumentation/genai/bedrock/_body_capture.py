@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import io
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ class BodyCapture(_ObjectProxy):
         self._self_max_bytes = max_bytes
         self._self_buffer = bytearray()
         self._self_start: int | None = None
+        self._self_end: int | None = None
         self._self_complete = False
         self._self_usable = True
 
@@ -66,7 +68,7 @@ class BodyCapture(_ObjectProxy):
 
     def seek(self, *args: Any, **kwargs: Any) -> Any:
         position = self.__wrapped__.seek(*args, **kwargs)
-        self._self_track_seek_safely(position)
+        self._self_track_seek_safely(position, _requested_whence(args, kwargs))
         return position
 
     def snapshot(self) -> bytes | None:
@@ -107,14 +109,22 @@ class BodyCapture(_ObjectProxy):
         if size is None or (isinstance(size, int) and size < 0):
             # read() and read(-1) read through end of stream in one call.
             self._self_complete = True
+        elif (
+            self._self_end is not None
+            and self._self_start is not None
+            and self._self_start + len(self._self_buffer) >= self._self_end
+        ):
+            # The read reached the length the SDK measured for itself, so the
+            # stream is fully read even without a read that returns nothing.
+            self._self_complete = True
 
-    def _self_track_seek_safely(self, position: Any) -> None:
+    def _self_track_seek_safely(self, position: Any, whence: Any) -> None:
         try:
-            self._self_track_seek(position)
+            self._self_track_seek(position, whence)
         except Exception:
             self._self_usable = False
 
-    def _self_track_seek(self, position: Any) -> None:
+    def _self_track_seek(self, position: Any, whence: Any) -> None:
         if self._self_complete or not self._self_usable:
             return
 
@@ -122,6 +132,11 @@ class BodyCapture(_ObjectProxy):
             # A stream that does not report a position cannot be placed.
             self._self_usable = False
             return
+
+        if whence == io.SEEK_END and position >= 0:
+            # A seek to the end reports the stream's length, which tells the
+            # capture where a complete pass finishes.
+            self._self_end = position
 
         if self._self_start is None or (
             position != self._self_start + len(self._self_buffer)
@@ -138,3 +153,10 @@ def _requested_size(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     if args:
         return args[0]
     return kwargs.get("size")
+
+
+def _requested_whence(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    """The whence a seek asked for; a seek without one is absolute."""
+    if len(args) > 1:
+        return args[1]
+    return kwargs.get("whence", io.SEEK_SET)

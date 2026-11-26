@@ -1434,6 +1434,11 @@ async def test_async_invoke_model_embedding_abandoned_body(
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "_OTHER"
 
 
+def _open_body(path: Any):
+    """Open a request body; sync by design, so an async test can pass a file."""
+    return open(path, "rb")
+
+
 def _current_span_id() -> int:
     return trace.get_current_span().get_span_context().span_id
 
@@ -1649,6 +1654,41 @@ async def test_file_like_body_attributes_are_recorded_stream_async(
     input_messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert input_messages[0]["role"] == "user"
     assert input_messages[0]["parts"][0]["content"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_open_file_body_attributes_are_recorded_async(
+    tmp_path,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A body that is a real file still yields request attributes.
+
+    aiohttp learns the length of a file it can ``fstat`` and stops once it has
+    sent that many bytes, so the capture may never see an end-of-stream read.
+    """
+    path = tmp_path / "request.json"
+    path.write_bytes(ANTHROPIC_REQUEST)
+
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        with _open_body(path) as body:
+            with instrument(
+                BedrockInstrumentor(),
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+                content_capture="SPAN_ONLY",
+            ):
+                result = await call_bedrock_async(endpoint, INVOKE_MODEL, body)
+
+    assert result.error is None
+    assert result.received == [ANTHROPIC_REQUEST]
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
 
 
 @pytest.mark.asyncio
@@ -1875,4 +1915,41 @@ async def test_file_like_embedding_body_attributes_survive_a_provider_error_asyn
     assert (
         span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT]
         == 512
+    )
+
+
+@pytest.mark.asyncio
+async def test_returned_embedding_size_wins_over_the_requested_dimensions_async(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The async embedding path reports the returned vector's size too."""
+    request_body = json.dumps(
+        {"inputText": "Hello world", "dimensions": 512}
+    ).encode()
+    response_body = json.dumps(
+        {"embedding": [0.1, 0.2], "inputTextTokenCount": 3}
+    ).encode()
+
+    with local_bedrock([(200, response_body)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = await call_bedrock_async(
+                endpoint,
+                INVOKE_MODEL,
+                RecordingBody(request_body),
+                model_id="amazon.titan-embed-text-v2:0",
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT] == 2
     )

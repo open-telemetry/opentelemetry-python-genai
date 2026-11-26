@@ -1699,6 +1699,105 @@ def test_file_like_body_attributes_are_recorded_without_content(
     assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in span.attributes
 
 
+@pytest.mark.parametrize("operation", OPERATIONS)
+def test_tool_definitions_stay_off_the_span_without_content(
+    operation: str,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A body carrying tools builds no tool definitions with content off.
+
+    The request parameters still come from the same body, so this is about
+    the content-bearing attributes only.
+    """
+    request = json.loads(ANTHROPIC_REQUEST)
+    request["tools"] = [
+        {
+            "name": "get_weather",
+            "description": "Get the weather for a city",
+            "input_schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        }
+    ]
+    response = (
+        ANTHROPIC_STREAM_RESPONSE
+        if operation == INVOKE_MODEL_STREAM
+        else ANTHROPIC_RESPONSE
+    )
+
+    with local_bedrock([(200, response)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="NO_CONTENT",
+        ):
+            result = call_bedrock(
+                endpoint,
+                operation,
+                RecordingBody(json.dumps(request).encode()),
+                drain=True,
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.parametrize("operation", OPERATIONS)
+def test_tool_definitions_are_recorded_when_content_is_enabled(
+    operation: str,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The same body does produce tool definitions with content on."""
+    request = json.loads(ANTHROPIC_REQUEST)
+    request["tools"] = [
+        {
+            "name": "get_weather",
+            "description": "Get the weather for a city",
+            "input_schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        }
+    ]
+    response = (
+        ANTHROPIC_STREAM_RESPONSE
+        if operation == INVOKE_MODEL_STREAM
+        else ANTHROPIC_RESPONSE
+    )
+
+    with local_bedrock([(200, response)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint,
+                operation,
+                RecordingBody(json.dumps(request).encode()),
+                drain=True,
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    tools = span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
+    assert tools[0]["name"] == "get_weather"
+
+
 def test_file_like_body_attributes_survive_a_provider_error(
     tracer_provider,
     logger_provider,
@@ -1761,4 +1860,44 @@ def test_file_like_embedding_body_attributes_survive_a_provider_error(
     assert (
         span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT]
         == 512
+    )
+
+
+def test_returned_embedding_size_wins_over_the_requested_dimensions(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The vector the provider returned decides the dimension count.
+
+    A request may ask for a size the response does not honour; the span has to
+    report what came back, not what was asked for.
+    """
+    request_body = json.dumps(
+        {"inputText": "Hello world", "dimensions": 512}
+    ).encode()
+    response_body = json.dumps(
+        {"embedding": [0.1, 0.2], "inputTextTokenCount": 3}
+    ).encode()
+
+    with local_bedrock([(200, response_body)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint,
+                INVOKE_MODEL,
+                RecordingBody(request_body),
+                model_id="amazon.titan-embed-text-v2:0",
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT] == 2
     )

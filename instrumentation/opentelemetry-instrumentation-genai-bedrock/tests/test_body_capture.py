@@ -85,6 +85,22 @@ def test_stops_after_the_first_complete_pass() -> None:
     assert capture.snapshot() == DATA
 
 
+def test_records_a_pass_that_ends_at_the_measured_length() -> None:
+    """A sender that stops at Content-Length needs no end-of-stream read.
+
+    aiohttp measures a file it can ``fstat``, sends exactly that many bytes and
+    returns, so the last read is a full one and no read returns nothing.
+    """
+    capture = capture_body(RecordingBody(DATA))
+    assert capture is not None
+
+    capture.seek(0, 2)
+    capture.seek(0)
+    assert capture.read(len(DATA)) == DATA
+
+    assert capture.snapshot() == DATA
+
+
 def test_records_a_pass_read_in_parts() -> None:
     capture = capture_body(RecordingBody(DATA, chunk_size=7))
     assert capture is not None

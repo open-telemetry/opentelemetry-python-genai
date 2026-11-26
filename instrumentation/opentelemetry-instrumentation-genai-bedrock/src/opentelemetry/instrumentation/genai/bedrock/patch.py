@@ -230,20 +230,20 @@ def _handle_invoke_model(
         with invocation:
             try:
                 response: Any = wrapped(*call.args, **call.kwargs)
-                raw_bytes = b""
-                body_stream = response.get("body")
-                if hasattr(body_stream, "read"):
-                    raw_bytes = body_stream.read()
-                    response["body"] = StreamingBody(
-                        io.BytesIO(raw_bytes), len(raw_bytes)
-                    )
-                extract_embedding_response(
-                    response,
-                    raw_bytes,
-                    invocation,
-                )
             finally:
                 extract_embedding_request(_request_params(call), invocation)
+            raw_bytes = b""
+            body_stream = response.get("body")
+            if hasattr(body_stream, "read"):
+                raw_bytes = body_stream.read()
+                response["body"] = StreamingBody(
+                    io.BytesIO(raw_bytes), len(raw_bytes)
+                )
+            extract_embedding_response(
+                response,
+                raw_bytes,
+                invocation,
+            )
         return response
 
     invocation = handler.inference(

@@ -183,7 +183,7 @@ class CallResult:
     """What one Bedrock call did to its request body."""
 
     calls: tuple[str, ...]
-    position: int
+    position: int | None
     received: list[bytes]
     error: str | None
 
@@ -285,7 +285,7 @@ def local_bedrock(
 def call_bedrock(
     endpoint: LocalBedrockEndpoint,
     operation: str,
-    body: RecordingBody,
+    body: Any,
     model_id: str = MODEL_ID,
     *,
     drain: bool = False,
@@ -311,13 +311,18 @@ def call_bedrock(
                     pass
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
-    return CallResult(body.calls, body.position, endpoint.received, error)
+    return CallResult(
+        getattr(body, "calls", ()),
+        getattr(body, "position", None),
+        endpoint.received,
+        error,
+    )
 
 
 async def call_bedrock_async(
     endpoint: LocalBedrockEndpoint,
     operation: str,
-    body: RecordingBody,
+    body: Any,
     model_id: str = MODEL_ID,
     *,
     drain: bool = False,
@@ -340,4 +345,9 @@ async def call_bedrock_async(
                         pass
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
-    return CallResult(body.calls, body.position, endpoint.received, error)
+    return CallResult(
+        getattr(body, "calls", ()),
+        getattr(body, "position", None),
+        endpoint.received,
+        error,
+    )
