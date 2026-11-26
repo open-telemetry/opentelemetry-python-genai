@@ -39,6 +39,7 @@ from .bedrock_endpoint import (
     ANTHROPIC_REQUEST,
     ANTHROPIC_RESPONSE,
     ANTHROPIC_STREAM_RESPONSE,
+    ERROR_RESPONSE,
     INVOKE_MODEL,
     INVOKE_MODEL_STREAM,
     OPERATIONS,
@@ -1618,6 +1619,43 @@ async def test_file_like_body_attributes_are_recorded_async(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+
+
+#: See ``test_invoke_model.OVERFLOWING_REQUEST``; kept local so the async suite
+#: does not import the sync test module.
+OVERFLOWING_REQUEST = b'{"anthropic_version": "bedrock-2023-05-31", "max_tokens": 1e1000, "temperature": 0.3}'
+
+
+@pytest.mark.asyncio
+async def test_overflowing_request_number_does_not_mask_the_provider_error_async(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The async path also keeps the provider's error when a value overflows."""
+    with local_bedrock([(403, ERROR_RESPONSE)]) as endpoint:
+        uninstrumented = await call_bedrock_async(
+            endpoint, INVOKE_MODEL, RecordingBody(OVERFLOWING_REQUEST)
+        )
+
+    with local_bedrock([(403, ERROR_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            instrumented = await call_bedrock_async(
+                endpoint, INVOKE_MODEL, RecordingBody(OVERFLOWING_REQUEST)
+            )
+
+    assert uninstrumented.error is not None
+    assert instrumented.error == uninstrumented.error
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code is trace.StatusCode.ERROR
 
 
 @pytest.mark.asyncio

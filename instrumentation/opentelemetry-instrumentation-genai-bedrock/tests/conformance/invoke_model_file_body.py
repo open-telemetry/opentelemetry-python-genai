@@ -15,9 +15,22 @@ from opentelemetry.instrumentation.genai.bedrock import BedrockInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 from .invoke_model import InvokeModelScenario
+
+#: The request the scenario sends, as the body holds it.
+_PROMPT = "Say this is a test"
+_MAX_GEN_LEN = 10
+_TEMPERATURE = 0.8
+_TOP_P = 0.9
+_REQUEST = {
+    "prompt": _PROMPT,
+    "max_gen_len": _MAX_GEN_LEN,
+    "temperature": _TEMPERATURE,
+    "top_p": _TOP_P,
+}
 
 
 class InvokeModelFileBodyScenario(InvokeModelScenario):
@@ -27,6 +40,31 @@ class InvokeModelFileBodyScenario(InvokeModelScenario):
     what changes is that the bytes reach the SDK through a ``read`` call the
     instrumentation records rather than a string it could parse directly.
     """
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        attributes = {
+            attr["name"]: attr["value"]
+            for entry in report["samples"]
+            if "span" in entry
+            for attr in entry["span"]["attributes"]
+        }
+        expected = {
+            "gen_ai.request.max_tokens": _MAX_GEN_LEN,
+            "gen_ai.request.temperature": _TEMPERATURE,
+            "gen_ai.request.top_p": _TOP_P,
+        }
+        seen = {name: attributes.get(name) for name in expected}
+        assert seen == expected, (
+            "the file-like body should supply the request parameters; "
+            f"expected {expected}, saw {seen}"
+        )
+        messages = attributes.get("gen_ai.input.messages")
+        assert messages, (
+            "SPAN_ONLY should record the prompt read from the file-like body; "
+            f"saw attributes {sorted(attributes)}"
+        )
+        assert json.dumps(messages).count(_PROMPT) == 1, messages
 
     def run(
         self,

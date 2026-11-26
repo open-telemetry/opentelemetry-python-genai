@@ -19,6 +19,7 @@ from opentelemetry.test_util_genai.conformance import (
 )
 
 from .conformance.embedding import EmbeddingScenario
+from .conformance.embedding_file_body import EmbeddingFileBodyScenario
 from .conformance.inference import InferenceScenario
 from .conformance.inference_streaming import InferenceStreamingScenario
 from .conformance.invoke_agent import InvokeAgentScenario
@@ -44,6 +45,7 @@ from .conformance.tool_calling import ToolCallingScenario
         InvokeModelFileBodyScenario(),
         InvokeModelStreamingScenario(),
         EmbeddingScenario(),
+        EmbeddingFileBodyScenario(),
         InvokeAgentScenario(),
         InvokeInlineAgentScenario(),
         RetrieveScenario(),

@@ -808,6 +808,49 @@ def test_request_failure_is_reported_unchanged(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
 
 
+#: A request body with a number larger than a float can hold: ``json.loads``
+#: turns ``1e1000`` into ``inf``, and ``int(inf)`` raises ``OverflowError``.
+OVERFLOWING_REQUEST = b'{"anthropic_version": "bedrock-2023-05-31", "max_tokens": 1e1000, "temperature": 0.3}'
+
+
+def test_overflowing_request_number_does_not_mask_the_provider_error(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A number too large for a float cannot replace what the provider raised.
+
+    The request extraction runs while the provider's exception is in flight, so
+    an unconvertible value has to be dropped rather than raised: the caller
+    gets the error it can act on, and the span still carries what it could read.
+    """
+    with local_bedrock([(403, ERROR_RESPONSE)]) as endpoint:
+        uninstrumented = call_bedrock(
+            endpoint, INVOKE_MODEL, RecordingBody(OVERFLOWING_REQUEST)
+        )
+
+    with local_bedrock([(403, ERROR_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            instrumented = call_bedrock(
+                endpoint, INVOKE_MODEL, RecordingBody(OVERFLOWING_REQUEST)
+            )
+
+    assert uninstrumented.error is not None
+    assert instrumented.error == uninstrumented.error
+    assert str(instrumented.error).startswith("ClientError")
+    span = span_exporter.get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS not in span.attributes
+
+
 def test_body_read_failure_is_reported_unchanged(
     tracer_provider,
     logger_provider,
