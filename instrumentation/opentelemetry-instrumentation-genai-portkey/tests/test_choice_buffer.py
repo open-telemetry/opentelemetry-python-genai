@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from opentelemetry.instrumentation.genai.portkey.wrappers import ChoiceBuffer
 
 
@@ -79,3 +81,34 @@ def test_interleaved_repeated_ids_without_index_stay_two_calls():
     buffer.append_tool_call(_delta("call_2", None, "}"))
 
     assert _calls(buffer) == [("call_1", "f", "{}"), ("call_2", "g", "{}")]
+
+
+@pytest.mark.parametrize("index", [0, None])
+def test_id_arriving_late_fills_the_open_call(index):
+    buffer = ChoiceBuffer(0)
+    buffer.append_tool_call(_delta(None, "f", "{", index))
+    buffer.append_tool_call(_delta("call_1", None, "}", index))
+
+    assert _calls(buffer) == [("call_1", "f", "{}")]
+
+
+def test_continuation_follows_a_call_moved_off_its_repeated_index():
+    buffer = ChoiceBuffer(0)
+    buffer.append_tool_call(_delta("call_1", "f", "{}", 0))
+    buffer.append_tool_call(_delta("call_2", "g", "{", 0))
+    buffer.append_tool_call(_delta(None, None, "}", 0))
+
+    assert _calls(buffer) == [("call_1", "f", "{}"), ("call_2", "g", "{}")]
+
+
+def test_bare_continuation_follows_the_last_continued_call():
+    buffer = ChoiceBuffer(0)
+    buffer.append_tool_call(_delta("call_1", "f", "{"))
+    buffer.append_tool_call(_delta("call_2", "g", "{}"))
+    buffer.append_tool_call(_delta("call_1", None, '"a":'))
+    buffer.append_tool_call(_delta(None, None, "1}"))
+
+    assert _calls(buffer) == [
+        ("call_1", "f", '{"a":1}'),
+        ("call_2", "g", "{}"),
+    ]

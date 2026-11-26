@@ -50,6 +50,8 @@ class ChoiceBuffer:
         self.finish_reason: str | None = None
         self.text_content: list[str] = []
         self.tool_calls_buffers: list[ToolCallBuffer | None] = []
+        self._slots_by_index: dict[int, int] = {}
+        self._last_slot: int = 0
 
     def append_text_content(self, content: str) -> None:
         self.text_content.append(content)
@@ -57,28 +59,36 @@ class ChoiceBuffer:
     def _tool_call_index(self, tool_call: Any) -> int:
         index = get_property_value(tool_call, "index")
         call_id = get_property_value(tool_call, "id")
-        if call_id:
-            # A known id always continues its own call, even when deltas of
-            # parallel calls interleave.
-            for i, buffer in enumerate(self.tool_calls_buffers):
-                if buffer is not None and buffer.tool_call_id == str(call_id):
-                    return i
-            # A new id opens a new call. Some servers (Gemini via Portkey)
-            # send `index` as the position inside each chunk, so every
-            # parallel call arrives as index=0: honour the index only while
-            # its slot is still free.
-            if index is not None and (
-                index >= len(self.tool_calls_buffers)
-                or self.tool_calls_buffers[index] is None
-            ):
-                return index
-            return len(self.tool_calls_buffers)
+        # The slot this delta points at: the one its `index` last resolved
+        # to, or the last continued call when there is no `index`.
         if index is not None:
-            return index
-        return max(len(self.tool_calls_buffers) - 1, 0)
+            slot = self._slots_by_index.get(index, index)
+        else:
+            slot = self._last_slot
+        if not call_id:
+            return slot
+        # A known id always continues its own call, even when deltas of
+        # parallel calls interleave.
+        for i, buffer in enumerate(self.tool_calls_buffers):
+            if buffer is not None and buffer.tool_call_id == str(call_id):
+                return i
+        # A new id fills the slot if it is free or still has no id (the id
+        # arrived late). Otherwise it opens a new call: some servers (Gemini
+        # via Portkey) send `index` as the position inside each chunk, so
+        # every parallel call arrives as index=0.
+        if slot >= len(self.tool_calls_buffers):
+            return slot
+        buffer = self.tool_calls_buffers[slot]
+        if buffer is None or buffer.tool_call_id is None:
+            return slot
+        return len(self.tool_calls_buffers)
 
     def append_tool_call(self, tool_call: Any) -> None:
         idx = self._tool_call_index(tool_call)
+        self._last_slot = idx
+        index = get_property_value(tool_call, "index")
+        if index is not None:
+            self._slots_by_index[index] = idx
         for _ in range(len(self.tool_calls_buffers), idx + 1):
             self.tool_calls_buffers.append(None)
 
