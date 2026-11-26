@@ -796,6 +796,41 @@ def test_agent_stream_keeps_the_run_provider_for_completion_usage(
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 1052
 
 
+def test_agent_stream_keeps_the_leader_provider_when_a_member_starts(
+    instrument_agno, span_exporter
+) -> None:
+    """A nested member's start event must not hijack the leader's provider.
+
+    Team streams forward member events; with the provider held as a single
+    value, a member starting on a different provider replaced it and the
+    leader's completion was then normalized with the wrong one.
+    """
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(name="test-nested-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunStartedEvent(run_id="leader", model_provider="Anthropic")
+        yield RunStartedEvent(
+            run_id="member",
+            parent_run_id="leader",
+            model_provider="OpenAI",
+        )
+        yield RunCompletedEvent(
+            run_id="leader",
+            metrics=metrics_cls(
+                input_tokens=12, cache_read_tokens=1000, output_tokens=5
+            ),
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 1012
+
+
 def test_agent_stream_records_a_zero_output_count(
     instrument_agno, span_exporter
 ) -> None:
@@ -1488,3 +1523,39 @@ def test_agent_run_stream_does_not_double_count_openai_cached_tokens(
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1000
     )
+
+
+def test_agent_arun_stream_keeps_the_run_provider(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """The async stream wrapper normalizes usage with the run's provider."""
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(
+        name="test-async-provider-agent", model=MockModel(id="mock-model")
+    )
+
+    async def fake_astream(*args, **kwargs):
+        yield RunStartedEvent(model_provider="Anthropic")
+        yield RunCompletedEvent(
+            metrics=metrics_cls(
+                input_tokens=12, cache_read_tokens=1040, output_tokens=8
+            )
+        )
+
+    async def _run() -> None:
+        with _patch_agent_astream(fake_astream):
+            async for _ in agent.arun("hello", stream=True):
+                pass
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    input_tokens = spans[0].attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    )
+    assert input_tokens == 1052
+    assert isinstance(input_tokens, int)

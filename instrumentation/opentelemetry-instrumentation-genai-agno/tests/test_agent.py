@@ -10,7 +10,7 @@ import inspect
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from agno.agent import Agent
@@ -2635,3 +2635,45 @@ def test_agent_run_without_metrics_records_no_usage(
     span = span_exporter.get_finished_spans()[0]
     assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
     assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+
+
+def test_agent_arun_usage_keeps_cache_tokens_and_int_types(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """The async run path records the same normalized usage as the sync one."""
+    import agno.agent
+    from agno.agent import RunOutput
+
+    RunMetrics = _run_metrics_cls()
+    agent = Agent(
+        name="test-async-usage-agent", model=MockModel(id="mock-model")
+    )
+    run_output = RunOutput(
+        content="hello back",
+        model_provider="Anthropic",
+        metrics=RunMetrics(
+            input_tokens=12, output_tokens=0, cache_read_tokens=1000
+        ),
+    )
+
+    dispatch_target = (
+        "agno.agent._run.arun_dispatch"
+        if hasattr(agno.agent, "_run")
+        and hasattr(agno.agent._run, "arun_dispatch")
+        else "agno.agent.agent.Agent._arun"
+    )
+    with patch(dispatch_target, new=AsyncMock(return_value=run_output)):
+        asyncio.run(agent.arun("hello world"))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    input_tokens = spans[0].attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    )
+    output_tokens = spans[0].attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+    )
+    assert (input_tokens, output_tokens) == (1012, 0)
+    assert isinstance(input_tokens, int)
+    assert isinstance(output_tokens, int)

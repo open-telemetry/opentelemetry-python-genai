@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
@@ -38,6 +38,26 @@ def _extract_chunk_content(chunk: Any) -> str | None:
     return None
 
 
+def _provider_for_run(
+    chunk: Any, providers: dict[str, str], fallback: str | None
+) -> str | None:
+    """The model provider for the run this chunk belongs to.
+
+    Team streams forward their members' events, so the provider has to follow
+    the run an event belongs to instead of the last one seen on the stream; the
+    fallback is the first provider the stream reported, which is the leader's.
+    """
+    provider = getattr(chunk, "model_provider", None)
+    if provider:
+        providers[str(getattr(chunk, "run_id", None) or "")] = str(provider)
+    run_id = getattr(chunk, "run_id", None)
+    if run_id is not None:
+        remembered = providers.get(str(run_id))
+        if remembered:
+            return remembered
+    return str(provider) if provider else fallback
+
+
 class _AgentStreamMixin:
     _self_agent_invocation: LocalAgentInvocation
     _self_capture_content: bool
@@ -45,22 +65,32 @@ class _AgentStreamMixin:
     _self_completed_content: str | None
     _self_finish_reason: str
     _self_model_provider: str | None = None
+    _self_run_providers: dict[str, str]
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
         if session_id and not self._self_agent_invocation.conversation_id:
             self._self_agent_invocation.conversation_id = str(session_id)
 
+        providers = getattr(self, "_self_run_providers", None)
+        if providers is None:
+            providers = {}
+            self._self_run_providers = providers
+
         # The provider is on the run's start event, the usage on its completion
-        # event, so keep the first one for the chunks that follow it.
-        provider = getattr(chunk, "model_provider", None)
-        if provider:
-            self._self_model_provider = str(provider)
+        # event, so keep the providers seen so far for the chunks that follow.
+        provider = _provider_for_run(
+            chunk,
+            cast("dict[str, str]", providers),
+            self._self_model_provider,
+        )
+        if provider and self._self_model_provider is None:
+            self._self_model_provider = provider
 
         record_token_usage(
             self._self_agent_invocation,
             getattr(chunk, "metrics", None),
-            provider or self._self_model_provider,
+            provider,
         )
 
         event_name = str(getattr(chunk, "event", ""))
@@ -166,6 +196,7 @@ class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncStreamWrapper[Any]):
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+        self._self_run_providers = {}
 
 
 class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
@@ -183,6 +214,7 @@ class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+        self._self_run_providers = {}
 
 
 class _WorkflowStreamMixin:
