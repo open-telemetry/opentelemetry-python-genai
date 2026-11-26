@@ -194,6 +194,14 @@ class _ScopedTextStream(_ObjectProxy):
     def __next__(self) -> str:
         return self._read(lambda: next(self.__wrapped__))
 
+    def send(self, value: Any) -> str:
+        source = cast("Generator[str, Any, Any]", self.__wrapped__)
+        return self._read(lambda: source.send(value))
+
+    def throw(self, *args: Any) -> str:
+        source = cast("Generator[str, Any, Any]", self.__wrapped__)
+        return self._read(lambda: source.throw(*args))
+
     def close(self) -> None:
         with self._self_scope._reading():
             _close_text_source(self.__wrapped__)
@@ -223,6 +231,14 @@ class _AsyncScopedTextStream(_ObjectProxy):
 
     async def __anext__(self) -> str:
         return await self._read(lambda: anext(self.__wrapped__))
+
+    async def asend(self, value: Any) -> str:
+        source = cast("AsyncGenerator[str, Any]", self.__wrapped__)
+        return await self._read(lambda: source.asend(value))
+
+    async def athrow(self, *args: Any) -> str:
+        source = cast("AsyncGenerator[str, Any]", self.__wrapped__)
+        return await self._read(lambda: source.athrow(*args))
 
     async def aclose(self) -> None:
         with self._self_scope._reading():

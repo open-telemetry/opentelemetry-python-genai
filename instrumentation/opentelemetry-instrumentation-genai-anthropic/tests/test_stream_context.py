@@ -1464,6 +1464,139 @@ async def test_async_messages_stream_helper_rejects_arguments_when_called(
     )
 
 
+def test_sync_messages_stream_text_stream_send_reads_under_the_chat_span(
+    tracer_provider, span_exporter, instrument_no_content
+) -> None:
+    seen: list[trace.SpanContext] = []
+    client = _observed_client(seen)
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            assert stream.text_stream.send(None) == _SSE_TEXT
+            assert _is_current(caller)
+            _SYNC_CONSUMERS["text_stream"](stream)
+    client.close()
+
+    _assert_reads_under_chat(span_exporter, caller, seen)
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_text_stream_asend_reads_under_the_chat_span(
+    tracer_provider, span_exporter, instrument_no_content
+) -> None:
+    seen: list[trace.SpanContext] = []
+    client = _async_observed_client(seen)
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        async with client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            assert await stream.text_stream.asend(None) == _SSE_TEXT
+            assert _is_current(caller)
+            await _ASYNC_CONSUMERS["text_stream"](stream)
+    await client.close()
+
+    _assert_reads_under_chat(span_exporter, caller, seen)
+
+
+def test_sync_messages_stream_text_stream_throw_fails_the_span(
+    tracer_provider, span_exporter, instrument_no_content
+) -> None:
+    client = _observed_client([])
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            texts = stream.text_stream
+            assert next(texts) == _SSE_TEXT
+            with pytest.raises(ConnectionError, match="thrown"):
+                texts.throw(ConnectionError("thrown"))
+            assert _is_current(caller)
+            # The throw finalized the stream, before the block exits.
+            chat = _chat_span(span_exporter)
+    client.close()
+
+    assert chat.status.status_code is trace.StatusCode.ERROR
+    assert chat.attributes is not None
+    assert chat.attributes["error.type"] == "ConnectionError"
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "msg_1"
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_text_stream_athrow_fails_the_span(
+    tracer_provider, span_exporter, instrument_no_content
+) -> None:
+    client = _async_observed_client([])
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        async with client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            texts = stream.text_stream
+            assert await anext(texts) == _SSE_TEXT
+            with pytest.raises(ConnectionError, match="thrown"):
+                await texts.athrow(ConnectionError("thrown"))
+            assert _is_current(caller)
+            chat = _chat_span(span_exporter)
+    await client.close()
+
+    assert chat.status.status_code is trace.StatusCode.ERROR
+    assert chat.attributes is not None
+    assert chat.attributes["error.type"] == "ConnectionError"
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "msg_1"
+
+
+def test_sync_messages_stream_closed_text_stream_keeps_the_parent_readable(
+    span_exporter, instrument_no_content
+) -> None:
+    """``texts.close(); list(texts)`` leaves the SDK stream readable."""
+    client = _observed_client([])
+    with client.messages.stream(
+        model=_MODEL, max_tokens=100, messages=_MESSAGES
+    ) as stream:
+        texts = stream.text_stream
+        texts.close()
+        assert list(texts) == []
+        assert span_exporter.get_finished_spans() == ()
+
+        message = stream.get_final_message()
+        assert message.id == "msg_1"
+        assert message.content[0].text == _SSE_TEXT
+    client.close()
+
+    chat = _chat_span(span_exporter)
+    assert chat.status.status_code is not trace.StatusCode.ERROR
+    assert chat.attributes is not None
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "msg_1"
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_closed_text_stream_keeps_the_parent_readable(
+    span_exporter, instrument_no_content
+) -> None:
+    client = _async_observed_client([])
+    async with client.messages.stream(
+        model=_MODEL, max_tokens=100, messages=_MESSAGES
+    ) as stream:
+        texts = stream.text_stream
+        await texts.aclose()
+        assert [text async for text in texts] == []
+        assert span_exporter.get_finished_spans() == ()
+
+        message = await stream.get_final_message()
+        assert message.id == "msg_1"
+        assert message.content[0].text == _SSE_TEXT
+    await client.close()
+
+    chat = _chat_span(span_exporter)
+    assert chat.status.status_code is not trace.StatusCode.ERROR
+    assert chat.attributes is not None
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == "msg_1"
+
+
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_sync_messages_stream_api_error")
 def test_sync_messages_stream_open_error_keeps_caller_span_current(
