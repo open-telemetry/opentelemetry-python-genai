@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import array
 import base64
+import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from openai.types import CreateEmbeddingResponse
+from openai import AsyncStream, Stream
+from openai.types import Completion, CreateEmbeddingResponse
 from openai.types.chat import ChatCompletion
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -31,14 +33,21 @@ from .chat_wrappers import (
     ChatStreamManagerWrapper,
     ChatStreamWrapper,
 )
+from .completion_wrappers import (
+    AsyncCompletionStreamWrapper,
+    CompletionStreamWrapper,
+)
 from .utils import (
     _prepare_output_messages,
     create_chat_invocation,
+    create_completion_invocation,
     get_server_address_and_port,
     get_value,
     is_streaming,
     map_finish_reason,
     set_chat_usage,
+    set_completion_response,
+    set_system_fingerprint,
 )
 
 if TYPE_CHECKING:
@@ -49,6 +58,12 @@ if TYPE_CHECKING:
     from openai.resources.chat.completions import (
         AsyncCompletions,
         Completions,
+    )
+    from openai.resources.completions import (
+        AsyncCompletions as AsyncLegacyCompletions,
+    )
+    from openai.resources.completions import (
+        Completions as LegacyCompletions,
     )
 
 _logger = logging.getLogger(__name__)
@@ -155,6 +170,67 @@ def async_chat_completions_stream(
     return AsyncChatStreamManagerWrapper(wrapped(*args, **kwargs))
 
 
+def completions_create(
+    handler: TelemetryHandler,
+) -> Callable[..., Completion | Stream[Completion] | CompletionStreamWrapper]:
+    """Wrap the legacy ``Completions.create`` to trace it as text_completion."""
+
+    def traced_method(
+        wrapped: Callable[..., Completion | Stream[Completion]],
+        instance: LegacyCompletions,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Completion | Stream[Completion] | CompletionStreamWrapper:
+        invocation = create_completion_invocation(handler, kwargs, instance)
+        with invocation.activate():
+            result = wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    CompletionStreamWrapper,
+                    result,
+                    invocation,
+                    invocation.should_capture_content,
+                )
+            _stop_completion(invocation, result)
+            return result
+
+    return traced_method
+
+
+def async_completions_create(
+    handler: TelemetryHandler,
+) -> Callable[
+    ...,
+    Awaitable[
+        Completion | AsyncStream[Completion] | AsyncCompletionStreamWrapper
+    ],
+]:
+    """Wrap the legacy ``AsyncCompletions.create`` to trace it as text_completion."""
+
+    async def traced_method(
+        wrapped: Callable[
+            ..., Awaitable[Completion | AsyncStream[Completion]]
+        ],
+        instance: AsyncLegacyCompletions,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Completion | AsyncStream[Completion] | AsyncCompletionStreamWrapper:
+        invocation = create_completion_invocation(handler, kwargs, instance)
+        with invocation.activate():
+            result = await wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    AsyncCompletionStreamWrapper,
+                    result,
+                    invocation,
+                    invocation.should_capture_content,
+                )
+            _stop_completion(invocation, result)
+            return result
+
+    return traced_method
+
+
 def embeddings_create(handler: TelemetryHandler):
     """Wrap the `create` method of the `Embeddings` class to trace it."""
 
@@ -227,18 +303,37 @@ def _set_response_properties(
         set_chat_usage(invocation=chat_invocation, usage=result.usage)
 
     if getattr(result, "system_fingerprint", None):
-        chat_invocation.attributes.update(
-            {
-                OpenAIAttributes.OPENAI_RESPONSE_SYSTEM_FINGERPRINT: result.system_fingerprint
-            },
-        )
-        chat_invocation.metric_attributes.update(
-            {
-                OpenAIAttributes.OPENAI_RESPONSE_SYSTEM_FINGERPRINT: result.system_fingerprint
-            },
-        )
+        set_system_fingerprint(chat_invocation, result.system_fingerprint)
 
     return chat_invocation
+
+
+def _stop_completion(
+    invocation: InferenceInvocation,
+    result: Completion | ParsableResponse,
+) -> None:
+    if isinstance(result, ParsableResponse):
+        if inspect.iscoroutinefunction(result.parse):
+            # Async with_streaming_response: the caller awaits parse(), which
+            # reads the body, so there is nothing to record yet.
+            invocation.stop()
+            return
+        # with_raw_response: parse() memoizes its result, so the caller's own
+        # parse() returns the same object.
+        result = result.parse()
+    if isinstance(result, Completion):
+        invocation.response_model_name = result.model
+        set_completion_response(
+            invocation,
+            response_id=result.id,
+            system_fingerprint=result.system_fingerprint,
+            usage=result.usage,
+            finish_reasons=[choice.finish_reason for choice in result.choices],
+            texts=[choice.text for choice in result.choices]
+            if invocation.should_capture_content
+            else None,
+        )
+    invocation.stop()
 
 
 def _set_embeddings_response_properties(

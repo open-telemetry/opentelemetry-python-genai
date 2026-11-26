@@ -62,7 +62,7 @@ Check out the `manual example <examples/manual>`_ for more details.
 Instrumenting all clients
 *************************
 
-When using the instrumentor, all clients will automatically trace OpenAI operations including chat completions, the Responses API, and embeddings.
+When using the instrumentor, all clients will automatically trace OpenAI operations including chat completions, legacy completions (``client.completions.create(...)``, reported as ``text_completion``), the Responses API, and embeddings.
 You can also optionally capture prompts and completions as log events.
 
 Fetching a stored response with ``client.responses.retrieve(...)`` performs no
