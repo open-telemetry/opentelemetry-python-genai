@@ -81,12 +81,17 @@ _DOC_MIME_TYPES: dict[str, str] = {
 
 
 def _safe_int(val: Any) -> int | None:
-    """Safely convert a value to int or return None."""
+    """Safely convert a value to int or return None.
+
+    ``OverflowError`` is caught as well: a JSON body can carry a number too
+    large for a float (``1e1000`` parses to ``inf``), and extraction must not
+    raise — it runs while the provider's own exception may be in flight.
+    """
     if val is None:
         return None
     try:
         return int(val)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 

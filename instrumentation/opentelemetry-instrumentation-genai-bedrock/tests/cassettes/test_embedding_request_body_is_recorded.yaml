@@ -1,0 +1,18 @@
+interactions:
+- request:
+    body: '{"inputText": "Hello world", "dimensions": 512, "normalize": true}'
+    headers:
+      Content-Type:
+      - application/json
+    method: POST
+    uri: https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2%3A0/invoke
+  response:
+    body:
+      string: '{"inputTextTokenCount": 3}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

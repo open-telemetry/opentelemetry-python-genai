@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 
+from opentelemetry.instrumentation.genai.bedrock import BedrockInstrumentor
 from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_invoke_model_request,
     extract_invoke_model_response,
@@ -33,8 +34,23 @@ from opentelemetry.semconv._incubating.metrics import (
 from opentelemetry.semconv.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
+
+from .bedrock_endpoint import (
+    ANTHROPIC_REQUEST,
+    ANTHROPIC_RESPONSE,
+    ANTHROPIC_STREAM_RESPONSE,
+    ERROR_RESPONSE,
+    INVOKE_MODEL,
+    INVOKE_MODEL_STREAM,
+    MODEL_ID,
+    OPERATIONS,
+    RecordingBody,
+    call_bedrock,
+    local_bedrock,
+)
 
 
 def test_invoke_model_anthropic_messages(
@@ -552,6 +568,376 @@ def test_extract_invoke_model_request_zero_values(tracer_provider) -> None:
         assert isinstance(invocation.top_k, int)
         assert invocation.max_tokens == 0
         assert invocation.seed == 0
+
+
+class _BreakingBody(RecordingBody):
+    """A body whose reads start failing, as a broken file's would."""
+
+    def __init__(self, data: bytes, *, reads_before_failure: int) -> None:
+        super().__init__(data)
+        self._reads = 0
+        self._reads_before_failure = reads_before_failure
+
+    def read(self, size: int | None = -1) -> bytes:
+        self._reads += 1
+        if self._reads > self._reads_before_failure:
+            raise OSError("body is not readable")
+        return super().read(size)
+
+
+@pytest.mark.parametrize("operation", OPERATIONS)
+@pytest.mark.parametrize(
+    ("position", "chunk_size"),
+    [(0, None), (7, None), (0, 8)],
+    ids=["whole-body", "starts-part-way-in", "read-in-parts"],
+)
+def test_file_like_body_io_is_the_sdk_s_own(
+    operation: str,
+    position: int,
+    chunk_size: int | None,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+) -> None:
+    """Instrumentation adds no I/O to a file-like request body.
+
+    Both public Bedrock APIs are called twice, once with the instrumentor
+    active and once without, and the body's calls, its position, the bytes that
+    reached the endpoint and any error have to match.
+    """
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        uninstrumented = call_bedrock(
+            endpoint,
+            operation,
+            RecordingBody(
+                ANTHROPIC_REQUEST, position=position, chunk_size=chunk_size
+            ),
+        )
+
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            instrumented = call_bedrock(
+                endpoint,
+                operation,
+                RecordingBody(
+                    ANTHROPIC_REQUEST,
+                    position=position,
+                    chunk_size=chunk_size,
+                ),
+            )
+
+    assert instrumented.error == uninstrumented.error is None
+    assert instrumented.calls == uninstrumented.calls
+    assert instrumented.position == uninstrumented.position
+    assert instrumented.received == uninstrumented.received
+    # And the endpoint still received the payload the caller passed in.
+    assert instrumented.received == [ANTHROPIC_REQUEST[position:]]
+
+
+@pytest.mark.vcr
+def test_file_like_body_attributes_are_recorded(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    """Request attributes come from what the SDK read, after the call."""
+    response = bedrock_client.invoke_model(
+        modelId=MODEL_ID,
+        body=RecordingBody(ANTHROPIC_REQUEST),
+    )
+    response["body"].read()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    input_messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    assert input_messages[0]["parts"][0]["content"] == "hello"
+
+
+def test_file_like_body_attributes_are_recorded_stream(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The streaming API records the request attributes the body held."""
+    with local_bedrock([(200, ANTHROPIC_STREAM_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint,
+                INVOKE_MODEL_STREAM,
+                RecordingBody(ANTHROPIC_REQUEST),
+                drain=True,
+            )
+
+    assert result.error is None
+    assert result.received == [ANTHROPIC_REQUEST]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    input_messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    assert input_messages[0]["role"] == "user"
+    assert input_messages[0]["parts"][0]["content"] == "hello"
+
+
+@pytest.mark.parametrize(
+    ("body", "position", "chunk_size"),
+    [
+        (b"PAD!" + ANTHROPIC_REQUEST, 4, None),
+        (ANTHROPIC_REQUEST, 0, 8),
+    ],
+    ids=["starts-part-way-in", "read-in-parts"],
+)
+def test_attributes_come_from_the_bytes_that_were_sent(
+    body: bytes,
+    position: int,
+    chunk_size: int | None,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A body read in parts, or from a position, is recorded from there.
+
+    What the SDK sends is the rest of the stream, so that is what the request
+    attributes are read from.
+    """
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint,
+                INVOKE_MODEL,
+                RecordingBody(body, position=position, chunk_size=chunk_size),
+            )
+
+    assert result.error is None
+    assert result.received == [ANTHROPIC_REQUEST]
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+
+
+def test_retried_request_sends_the_body_again_and_is_still_recorded(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A retry rereads the body, and the request attributes survive it."""
+    with local_bedrock([(500, ERROR_RESPONSE), (200, ANTHROPIC_RESPONSE)]) as (
+        endpoint
+    ):
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint, INVOKE_MODEL, RecordingBody(ANTHROPIC_REQUEST)
+            )
+
+    assert result.error is None
+    assert result.received == [ANTHROPIC_REQUEST, ANTHROPIC_REQUEST]
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+
+
+def test_request_failure_is_reported_unchanged(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A failed call raises what it always raised, and still reports the body.
+
+    The body has already been read when the call fails, so a failed span keeps
+    the request attributes the body held.
+    """
+    with local_bedrock([(403, ERROR_RESPONSE)]) as endpoint:
+        uninstrumented = call_bedrock(
+            endpoint, INVOKE_MODEL, RecordingBody(ANTHROPIC_REQUEST)
+        )
+
+    with local_bedrock([(403, ERROR_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            instrumented = call_bedrock(
+                endpoint, INVOKE_MODEL, RecordingBody(ANTHROPIC_REQUEST)
+            )
+
+    assert instrumented.error is not None
+    assert instrumented.error == uninstrumented.error
+    assert instrumented.calls == uninstrumented.calls
+    assert instrumented.received == uninstrumented.received
+    span = span_exporter.get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+
+
+#: A request body with a number larger than a float can hold: ``json.loads``
+#: turns ``1e1000`` into ``inf``, and ``int(inf)`` raises ``OverflowError``.
+OVERFLOWING_REQUEST = b'{"anthropic_version": "bedrock-2023-05-31", "max_tokens": 1e1000, "temperature": 0.3}'
+
+
+def test_overflowing_request_number_does_not_mask_the_provider_error(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A number too large for a float cannot replace what the provider raised.
+
+    The request extraction runs while the provider's exception is in flight, so
+    an unconvertible value has to be dropped rather than raised: the caller
+    gets the error it can act on, and the span still carries what it could read.
+    """
+    with local_bedrock([(403, ERROR_RESPONSE)]) as endpoint:
+        uninstrumented = call_bedrock(
+            endpoint, INVOKE_MODEL, RecordingBody(OVERFLOWING_REQUEST)
+        )
+
+    with local_bedrock([(403, ERROR_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            instrumented = call_bedrock(
+                endpoint, INVOKE_MODEL, RecordingBody(OVERFLOWING_REQUEST)
+            )
+
+    assert uninstrumented.error is not None
+    assert instrumented.error == uninstrumented.error
+    assert str(instrumented.error).startswith("ClientError")
+    span = span_exporter.get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS not in span.attributes
+
+
+def test_body_read_failure_is_reported_unchanged(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+) -> None:
+    """A body that fails to read raises the same error either way."""
+    broken = {"reads_before_failure": 1}
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        uninstrumented = call_bedrock(
+            endpoint, INVOKE_MODEL, _BreakingBody(ANTHROPIC_REQUEST, **broken)
+        )
+
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            instrumented = call_bedrock(
+                endpoint,
+                INVOKE_MODEL,
+                _BreakingBody(ANTHROPIC_REQUEST, **broken),
+            )
+
+    assert uninstrumented.error is not None
+    assert instrumented.error == uninstrumented.error
+
+
+@pytest.mark.vcr
+def test_embedding_request_body_is_recorded(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    """Embeddings read their request body the same way, and record it.
+
+    The response carries no embedding of its own, so the dimension count can
+    only have come from the request body the SDK read.
+    """
+    request_body = json.dumps(
+        {
+            "inputText": "Hello world",
+            "dimensions": 512,
+            "normalize": True,
+        }
+    ).encode()
+
+    response = bedrock_client.invoke_model(
+        modelId="amazon.titan-embed-text-v2:0",
+        body=RecordingBody(request_body),
+    )
+    response["body"].read()
+
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT]
+        == 512
+    )
+
+
+@pytest.mark.vcr
+def test_embedding_encoding_formats_come_from_the_request_body(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    """The Cohere body field the SDK read is the one recorded on the span."""
+    request_body = json.dumps(
+        {
+            "texts": ["Hello", "World"],
+            "input_type": "search_document",
+            "embedding_types": ["float"],
+        }
+    ).encode()
+
+    response = bedrock_client.invoke_model(
+        modelId="cohere.embed-english-v3",
+        body=RecordingBody(request_body),
+    )
+    response["body"].read()
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_ENCODING_FORMATS
+    ] == ("float",)
 
 
 def test_invoke_model_anthropic_tool_call_and_result(
@@ -1321,3 +1707,240 @@ def test_invoke_model_embedding_body_read_error(
     assert span.name == "embeddings amazon.titan-embed-text-v1"
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+
+@pytest.mark.parametrize("operation", OPERATIONS)
+def test_file_like_body_attributes_are_recorded_without_content(
+    operation: str,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """With capture disabled the request parameters are still recorded.
+
+    The body-derived attributes do not depend on content capture, while the
+    input messages and system instructions must not appear at all.
+    """
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="NO_CONTENT",
+        ):
+            result = call_bedrock(
+                endpoint, operation, RecordingBody(ANTHROPIC_REQUEST)
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in span.attributes
+
+
+@pytest.mark.parametrize("operation", OPERATIONS)
+def test_tool_definitions_stay_off_the_span_without_content(
+    operation: str,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A body carrying tools builds no tool definitions with content off.
+
+    The request parameters still come from the same body, so this is about
+    the content-bearing attributes only.
+    """
+    request = json.loads(ANTHROPIC_REQUEST)
+    request["tools"] = [
+        {
+            "name": "get_weather",
+            "description": "Get the weather for a city",
+            "input_schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        }
+    ]
+    response = (
+        ANTHROPIC_STREAM_RESPONSE
+        if operation == INVOKE_MODEL_STREAM
+        else ANTHROPIC_RESPONSE
+    )
+
+    with local_bedrock([(200, response)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="NO_CONTENT",
+        ):
+            result = call_bedrock(
+                endpoint,
+                operation,
+                RecordingBody(json.dumps(request).encode()),
+                drain=True,
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.parametrize("operation", OPERATIONS)
+def test_tool_definitions_are_recorded_when_content_is_enabled(
+    operation: str,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The same body does produce tool definitions with content on."""
+    request = json.loads(ANTHROPIC_REQUEST)
+    request["tools"] = [
+        {
+            "name": "get_weather",
+            "description": "Get the weather for a city",
+            "input_schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        }
+    ]
+    response = (
+        ANTHROPIC_STREAM_RESPONSE
+        if operation == INVOKE_MODEL_STREAM
+        else ANTHROPIC_RESPONSE
+    )
+
+    with local_bedrock([(200, response)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint,
+                operation,
+                RecordingBody(json.dumps(request).encode()),
+                drain=True,
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    tools = span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
+    assert tools[0]["name"] == "get_weather"
+
+
+def test_file_like_body_attributes_survive_a_provider_error(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A failed call keeps the request attributes the body held."""
+    with local_bedrock(
+        [(400, b'{"message": "ValidationException"}')]
+    ) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint, INVOKE_MODEL, RecordingBody(ANTHROPIC_REQUEST)
+            )
+
+    assert result.error is not None
+    span = span_exporter.get_finished_spans()[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+
+
+def test_file_like_embedding_body_attributes_survive_a_provider_error(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """A failed embedding call keeps the attributes the body held."""
+    request_body = json.dumps(
+        {"inputText": "Hello world", "dimensions": 512}
+    ).encode()
+    with local_bedrock(
+        [(400, b'{"message": "ValidationException"}')]
+    ) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint,
+                INVOKE_MODEL,
+                RecordingBody(request_body),
+                model_id="amazon.titan-embed-text-v2:0",
+            )
+
+    assert result.error is not None
+    span = span_exporter.get_finished_spans()[0]
+    assert span.name == "embeddings amazon.titan-embed-text-v2:0"
+    assert span.status.status_code == StatusCode.ERROR
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT]
+        == 512
+    )
+
+
+def test_returned_embedding_size_wins_over_the_requested_dimensions(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The vector the provider returned decides the dimension count.
+
+    A request may ask for a size the response does not honour; the span has to
+    report what came back, not what was asked for.
+    """
+    request_body = json.dumps(
+        {"inputText": "Hello world", "dimensions": 512}
+    ).encode()
+    response_body = json.dumps(
+        {"embedding": [0.1, 0.2], "inputTextTokenCount": 3}
+    ).encode()
+
+    with local_bedrock([(200, response_body)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint,
+                INVOKE_MODEL,
+                RecordingBody(request_body),
+                model_id="amazon.titan-embed-text-v2:0",
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT] == 2
+    )
