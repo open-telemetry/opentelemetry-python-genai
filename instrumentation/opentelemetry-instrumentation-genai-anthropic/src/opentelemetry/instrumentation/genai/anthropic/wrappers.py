@@ -504,17 +504,19 @@ class MessagesStreamWrapper(
         )
 
     def _scoped_helper(
-        self, name: str, helper: Callable[..., object]
-    ) -> Callable[..., object]:
+        self, name: str, helper: Callable[[], object]
+    ) -> Callable[[], object]:
         drain = self._drain_for(name)
 
+        # The SDK helpers take no arguments, so an invalid call raises here,
+        # before anything is drained.
         @functools.wraps(helper)
-        def scoped(*args: Any, **kwargs: Any) -> object:
+        def scoped() -> object:
             with self._reading():
                 if drain is None:
-                    return helper(*args, **kwargs)
+                    return helper()
                 drain()
-            return helper(*args, **kwargs)
+            return helper()
 
         return scoped
 
@@ -588,17 +590,18 @@ class AsyncMessagesStreamWrapper(
         )
 
     def _scoped_helper(
-        self, name: str, helper: Callable[..., Awaitable[object]]
-    ) -> Callable[..., Awaitable[object]]:
+        self, name: str, helper: Callable[[], Awaitable[object]]
+    ) -> Callable[[], Awaitable[object]]:
         drain = self._drain_for(name)
 
+        # See ``MessagesStreamWrapper._scoped_helper``.
         @functools.wraps(helper)
-        async def scoped(*args: Any, **kwargs: Any) -> object:
+        async def scoped() -> object:
             with self._reading():
                 if drain is None:
-                    return await helper(*args, **kwargs)
+                    return await helper()
                 await cast("Awaitable[None]", drain())
-            return await helper(*args, **kwargs)
+            return await helper()
 
         return scoped
 

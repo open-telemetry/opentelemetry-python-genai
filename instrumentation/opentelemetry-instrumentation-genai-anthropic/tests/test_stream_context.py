@@ -1406,6 +1406,64 @@ async def test_async_messages_stream_text_stream_close_before_read_closes_the_sd
     await client.close()
 
 
+def _chat_span(span_exporter) -> Any:
+    (chat,) = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    return chat
+
+
+@pytest.mark.parametrize("helper", _HELPERS)
+def test_sync_messages_stream_helper_rejects_arguments_before_reading(
+    span_exporter, instrument_no_content, helper
+) -> None:
+    """The SDK helpers take no arguments, so a bad call reads nothing."""
+    seen: list[trace.SpanContext] = []
+    client = _observed_client(seen)
+    with client.messages.stream(
+        model=_MODEL, max_tokens=100, messages=_MESSAGES
+    ) as stream:
+        read_before = len(seen)
+        with pytest.raises(TypeError, match="unexpected"):
+            getattr(stream, helper)(unexpected=True)
+        assert len(seen) == read_before
+        assert span_exporter.get_finished_spans() == ()
+
+        getattr(stream, helper)()
+        assert len(seen) > read_before
+    client.close()
+
+    assert _chat_span(span_exporter).status.status_code is not (
+        trace.StatusCode.ERROR
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("helper", _HELPERS)
+async def test_async_messages_stream_helper_rejects_arguments_when_called(
+    span_exporter, instrument_no_content, helper
+) -> None:
+    """A bad call raises when made, as the SDK's own coroutine function does."""
+    seen: list[trace.SpanContext] = []
+    client = _async_observed_client(seen)
+    async with client.messages.stream(
+        model=_MODEL, max_tokens=100, messages=_MESSAGES
+    ) as stream:
+        read_before = len(seen)
+        with pytest.raises(TypeError, match="unexpected"):
+            getattr(stream, helper)(unexpected=True)
+        assert len(seen) == read_before
+        assert span_exporter.get_finished_spans() == ()
+
+        await getattr(stream, helper)()
+        assert len(seen) > read_before
+    await client.close()
+
+    assert _chat_span(span_exporter).status.status_code is not (
+        trace.StatusCode.ERROR
+    )
+
+
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_sync_messages_stream_api_error")
 def test_sync_messages_stream_open_error_keeps_caller_span_current(
