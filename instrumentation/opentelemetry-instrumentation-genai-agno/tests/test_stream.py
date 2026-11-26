@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -1559,3 +1560,59 @@ def test_agent_arun_stream_keeps_the_run_provider(
     )
     assert input_tokens == 1052
     assert isinstance(input_tokens, int)
+
+
+def test_team_run_stream_usage_is_normalized_with_the_leader_provider(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """A real Team stream keeps the leader's provider when a member starts.
+
+    Team streams forward their members' events, so this drives the Team wrapper
+    itself rather than the shared mixin in isolation.
+    """
+    import agno.team
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+
+    if not hasattr(agno.team, "_run"):
+        pytest.skip(
+            "agno 2.x keeps Team dispatch in agno.team.team; the seam this "
+            "test drives is 3.x-only"
+        )
+
+    metrics_cls = _run_metrics_cls()
+    member = Agent(name="member-agent", model=MockModel(id="mock-model"))
+    team = Team(
+        name="test-usage-team",
+        members=[member],
+        model=MockModel(id="mock-model"),
+    )
+
+    def dispatch(*args: Any, **kwargs: Any) -> Any:
+        yield RunStartedEvent(run_id="leader", model_provider="Anthropic")
+        yield RunStartedEvent(
+            run_id="member",
+            parent_run_id="leader",
+            model_provider="OpenAI",
+        )
+        yield RunCompletedEvent(
+            run_id="leader",
+            metrics=metrics_cls(
+                input_tokens=12, cache_read_tokens=1000, output_tokens=3
+            ),
+        )
+
+    with patch("agno.team._run.run_dispatch", side_effect=dispatch):
+        list(team.run("hello team", stream=True))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "invoke_agent test-usage-team"
+    input_tokens = span.attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    )
+    output_tokens = span.attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+    )
+    assert (input_tokens, output_tokens) == (1012, 3)

@@ -2677,3 +2677,87 @@ def test_agent_arun_usage_keeps_cache_tokens_and_int_types(
     assert (input_tokens, output_tokens) == (1012, 0)
     assert isinstance(input_tokens, int)
     assert isinstance(output_tokens, int)
+
+
+def test_agent_continue_run_usage_keeps_cache_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """A continuation records the run's usage with the same normalization."""
+    import agno.agent
+    from agno.agent import RunOutput
+
+    if not hasattr(agno.agent, "_run"):
+        pytest.skip(
+            "agno 2.x continue_run needs a stored run and a requirements "
+            "argument; the dispatch seam this test drives is 3.x-only"
+        )
+    RunMetrics = _run_metrics_cls()
+    agent = Agent(
+        name="test-continue-usage-agent", model=MockModel(id="mock-model")
+    )
+    run_output = RunOutput(
+        content="continued",
+        model_provider="Anthropic",
+        metrics=RunMetrics(
+            input_tokens=12, output_tokens=3, cache_read_tokens=1000
+        ),
+    )
+
+    dispatch_target = (
+        "agno.agent._run.continue_run_dispatch"
+        if hasattr(agno.agent, "_run")
+        else "agno.agent.agent.Agent._continue_run"
+    )
+    with patch(dispatch_target, return_value=run_output):
+        agent.continue_run(run_id="run-1", session_id="sess-1")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    input_tokens = spans[0].attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    )
+    assert input_tokens == 1012
+    assert isinstance(input_tokens, int)
+
+
+def test_agent_acontinue_run_usage_keeps_cache_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """The async continuation records the same normalized usage."""
+    import agno.agent
+    from agno.agent import RunOutput
+
+    if not hasattr(agno.agent, "_run"):
+        pytest.skip(
+            "agno 2.x continue_run needs a stored run and a requirements "
+            "argument; the dispatch seam this test drives is 3.x-only"
+        )
+    RunMetrics = _run_metrics_cls()
+    agent = Agent(
+        name="test-acontinue-usage-agent", model=MockModel(id="mock-model")
+    )
+    run_output = RunOutput(
+        content="continued",
+        model_provider="Anthropic",
+        metrics=RunMetrics(
+            input_tokens=12, output_tokens=3, cache_read_tokens=1000
+        ),
+    )
+
+    dispatch_target = (
+        "agno.agent._run.acontinue_run_dispatch"
+        if hasattr(agno.agent, "_run")
+        else "agno.agent.agent.Agent._acontinue_run"
+    )
+    with patch(dispatch_target, new=AsyncMock(return_value=run_output)):
+        asyncio.run(agent.acontinue_run(run_id="run-1", session_id="sess-1"))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    input_tokens = spans[0].attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    )
+    assert input_tokens == 1012
+    assert isinstance(input_tokens, int)
