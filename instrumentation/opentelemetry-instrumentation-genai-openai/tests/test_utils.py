@@ -48,6 +48,11 @@ _REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 REASONING_MODEL = "gpt-5.1"
+# Chat models such as DEFAULT_MODEL are not served on /v1/completions.
+COMPLETION_MODEL = "gpt-3.5-turbo-instruct"
+TEXT_COMPLETION_OPERATION_NAME = (
+    GenAIAttributes.GenAiOperationNameValues.TEXT_COMPLETION.value
+)
 FETCH_RESPONSE_OPERATION_NAME = "fetch_response"
 # TODO: use the semconv constant once released in
 # opentelemetry-semantic-conventions. Added to the GenAI semantic conventions
@@ -73,6 +78,7 @@ CACHEABLE_MESSAGES = [
     {"role": "user", "content": "Reply with OK only."},
 ]
 USER_ONLY_PROMPT = [{"role": "user", "content": "Say this is a test"}]
+COMPLETION_PROMPT = USER_ONLY_PROMPT[0]["content"]
 COMPACTED_INPUT = [
     *USER_ONLY_PROMPT,
     {
@@ -790,6 +796,14 @@ def format_simple_expected_output_message(
             ],
             "finish_reason": finish_reason,
         }
+    ]
+
+
+def format_text_output_messages(*texts: str):
+    # Finish reasons are reported in gen_ai.response.finish_reasons only.
+    return [
+        {"role": "assistant", "parts": [{"type": "text", "content": text}]}
+        for text in texts
     ]
 
 
