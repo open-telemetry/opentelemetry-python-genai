@@ -70,3 +70,100 @@ class AgentScenario(Scenario):
                 ),
             ):
                 agent.run("hello conformance world")
+
+
+class AgentUsageScenario(Scenario):
+    """Conformance scenario: an agent run that reports token usage."""
+
+    expected_spans = {"invoke_agent": 1}
+    expected_metrics = ("gen_ai.invoke_agent.duration",)
+
+    def run(
+        self,
+        *,
+        tracer_provider: TracerProvider,
+        meter_provider: MeterProvider,
+        logger_provider: LoggerProvider,
+        vcr: Any,
+    ) -> None:
+        from agno.agent import RunOutput
+
+        from opentelemetry.instrumentation.genai.agno.utils import (
+            _run_metrics_cls,
+        )
+
+        metrics_cls = _run_metrics_cls()
+        with instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            agent = Agent(
+                name="test-conformance-usage-agent",
+                model=MockModel(id="mock-model"),
+                session_id="session-conformance-usage",
+            )
+            run_output = RunOutput(
+                content="Conformance usage back!",
+                model_provider="Anthropic",
+                metrics=metrics_cls(
+                    input_tokens=12,
+                    output_tokens=8,
+                    cache_read_tokens=1000,
+                ),
+            )
+            with patch(
+                "agno.agent._run.run_dispatch", return_value=run_output
+            ):
+                agent.run("hello conformance usage")
+
+
+class AgentEventStreamScenario(Scenario):
+    """Conformance scenario: an agent event stream that reports token usage."""
+
+    expected_spans = {"invoke_agent": 1}
+    expected_metrics = ("gen_ai.invoke_agent.duration",)
+
+    def run(
+        self,
+        *,
+        tracer_provider: TracerProvider,
+        meter_provider: MeterProvider,
+        logger_provider: LoggerProvider,
+        vcr: Any,
+    ) -> None:
+        from agno.agent import RunCompletedEvent, RunStartedEvent
+
+        from opentelemetry.instrumentation.genai.agno.utils import (
+            _run_metrics_cls,
+        )
+
+        metrics_cls = _run_metrics_cls()
+
+        def dispatch(*args: Any, **kwargs: Any) -> Any:
+            yield RunStartedEvent(model_provider="Anthropic")
+            yield RunCompletedEvent(
+                metrics=metrics_cls(
+                    input_tokens=12,
+                    output_tokens=8,
+                    cache_read_tokens=1000,
+                )
+            )
+
+        with instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            agent = Agent(
+                name="test-conformance-event-stream-agent",
+                model=MockModel(id="mock-model"),
+                session_id="session-conformance-stream",
+            )
+            with patch("agno.agent._run.run_dispatch", side_effect=dispatch):
+                for _ in agent.run("hello conformance stream", stream=True):
+                    pass
