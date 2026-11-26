@@ -42,6 +42,9 @@ from opentelemetry.instrumentation.genai.anthropic._raw_response import (
 from opentelemetry.instrumentation.genai.anthropic.wrappers import (
     AsyncMessagesStreamWrapper,
 )
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -58,7 +61,11 @@ from .conftest import (
     UNSET_SENTINELS,
     assert_multimodal_input,
     assert_unset_sampling_attributes_omitted,
+    incomplete_text_stream_sse_body,
+    incomplete_thinking_text_stream_sse_body,
+    local_anthropic_sse_server,
     multimodal_input_message,
+    partial_tool_use_stream_sse_body,
     unset_sampling_kwargs,
 )
 
@@ -731,7 +738,7 @@ async def test_async_messages_stream_api_error(
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_async_messages_stream_interrupted_mid_iteration")
 @pytest.mark.parametrize("capture_content", [True, False])
-@pytest.mark.parametrize("fail_after", [0, 1, 3])
+@pytest.mark.parametrize("fail_after", [0, 1, 3, 4])
 @pytest.mark.parametrize(
     "error_type", [ConnectionError, asyncio.CancelledError]
 )
@@ -752,6 +759,8 @@ async def test_async_messages_stream_interrupted_mid_iteration(
     )
     model = "claude-haiku-4-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
+    snapshot = None
+    before_error = None
 
     with pytest.raises(
         error_type, match="connection reset during stream"
@@ -766,9 +775,16 @@ async def test_async_messages_stream_interrupted_mid_iteration(
             )
             monkeypatch.setattr(stream, "stream", delegate)
             async for _ in stream:
-                pass
+                if not capture_content:
+                    assert not stream._self_block_states
+                snapshot = stream.current_message_snapshot
+                before_error = snapshot.model_dump()
+                assert snapshot.stop_reason is None
+                assert span_exporter.get_finished_spans() == ()
 
     assert raised.value is delegate.error
+    if snapshot is not None:
+        assert snapshot.model_dump() == before_error
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
@@ -780,9 +796,17 @@ async def test_async_messages_stream_interrupted_mid_iteration(
     )
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == expected_error
     assert span.status.status_code == StatusCode.ERROR
-    assert (
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
-    )
+    if fail_after:
+        # A snapshot was adopted before the error, so the response counts as
+        # an incomplete early exit, the same as a caller-closed stream.
+        assert span.attributes[
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        ] == ("error",)
+    else:
+        assert (
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+            not in span.attributes
+        )
     if fail_after:
         assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
         assert isinstance(
@@ -790,7 +814,7 @@ async def test_async_messages_stream_interrupted_mid_iteration(
         )
     else:
         assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
-    has_output = capture_content and fail_after == 3
+    has_output = capture_content and fail_after >= 3
     if has_output:
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
@@ -798,6 +822,7 @@ async def test_async_messages_stream_interrupted_mid_iteration(
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "content": "Hello."}],
+                "finish_reason": "error",
             }
         ]
     else:
@@ -806,26 +831,66 @@ async def test_async_messages_stream_interrupted_mid_iteration(
 
 @pytest.mark.asyncio
 @pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream_closed_early_by_caller")
+@pytest.mark.parametrize(
+    "capture_fixture", ["instrument_no_content", "instrument_with_content"]
+)
+@pytest.mark.parametrize("stop_at", ["message_start", "text", "message_delta"])
 async def test_async_messages_stream_closed_early_by_caller(
-    span_exporter, async_anthropic_client, instrument_no_content
+    request, span_exporter, async_anthropic_client, capture_fixture, stop_at
 ):
-    """Caller-closing AsyncMessages.stream early finalizes without error."""
+    """Closing preserves SDK data and records the latest reported usage."""
+    request.getfixturevalue(capture_fixture)
     model = "claude-haiku-4-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
+    output_tokens = 5 if stop_at == "message_delta" else 2
+    finish_reason = "stop" if stop_at == "message_delta" else "error"
 
     async with async_anthropic_client.messages.stream(
         model=model,
         max_tokens=100,
         messages=messages,
     ) as stream:
-        await anext(stream)
+        async for event in stream:
+            if capture_fixture == "instrument_no_content":
+                assert not stream._self_block_states
+            if event.type == stop_at:
+                break
+        snapshot = stream.current_message_snapshot
+        before_close = snapshot.model_dump()
+        assert snapshot.usage.output_tokens == output_tokens
+        assert span_exporter.get_finished_spans() == ()
         await stream.close()
 
+    assert snapshot.model_dump() == before_close
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert ErrorAttributes.ERROR_TYPE not in span.attributes
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == output_tokens
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        finish_reason,
+    )
+    if (
+        capture_fixture == "instrument_with_content"
+        and stop_at != "message_start"
+    ):
+        assert _load_span_messages(
+            span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        ) == [
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Hello."}],
+                "finish_reason": finish_reason,
+            }
+        ]
+    else:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.asyncio
@@ -851,6 +916,40 @@ async def test_async_messages_stream_user_exception(
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_create_streaming")
+@pytest.mark.parametrize("consume_start", [False, True])
+async def test_async_messages_create_streaming_early_exit_preserves_usage(
+    span_exporter,
+    async_anthropic_client,
+    instrument_no_content,
+    consume_start,
+):
+    async with await async_anthropic_client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        stream=True,
+    ) as stream:
+        if consume_start:
+            event = await anext(stream)
+            assert event.type == "message_start"
+            assert event.message.usage.output_tokens == 6
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    if consume_start:
+        assert attrs[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
+        assert attrs[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+            "error",
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in attrs
+        assert GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in attrs
 
 
 @pytest.mark.asyncio
@@ -995,6 +1094,99 @@ async def test_async_messages_create_omits_tool_definitions_without_content(
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
     assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+async def test_async_messages_stream_early_exit_marks_incomplete_tool_use(
+    span_exporter, instrument_with_content
+):
+    def respond(_request):
+        return _http_lib.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=partial_tool_use_stream_sse_body(),
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+
+    received = ""
+    try:
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[
+                {"role": "user", "content": "What is the weather in SF?"}
+            ],
+            tools=[_WEATHER_TOOL],
+        ) as stream:
+            async for event in stream:
+                if getattr(event, "type", None) != "input_json":
+                    continue
+                received += event.partial_json
+                if len(received) >= 15:
+                    break
+    finally:
+        await client.close()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert received == '{"city": "Chica'
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 0
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "arguments": '{"city": "Chica',
+                    "name": "get_weather",
+                    "id": "toolu_A",
+                    "type": "tool_call",
+                }
+            ],
+            "finish_reason": "error",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_without_content_does_not_buffer_blocks(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    async with async_anthropic_client.messages.stream(
+        model="claude-haiku-4-5",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        async for _ in stream:
+            assert not stream._self_block_states
+        assert stream.current_message_snapshot.content[0].text == "Hello."
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("stop",)
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in spans[0].attributes
 
 
 @pytest.mark.asyncio
@@ -1268,8 +1460,10 @@ async def test_async_messages_create_stream_propagation_error(
     assert isinstance(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
     )
-    assert (
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    # A snapshot was adopted before the error, so the response counts as an
+    # incomplete early exit, the same as a caller-closed stream.
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
     )
     if capture_content:
         assert _load_span_messages(
@@ -1278,6 +1472,7 @@ async def test_async_messages_create_stream_propagation_error(
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "content": "Hello!"}],
+                "finish_reason": "error",
             }
         ]
     else:
@@ -2355,6 +2550,112 @@ async def test_async_raw_response_proxy_hooks_stack_over_one_response():
 @pytest.mark.asyncio
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_async_messages_stream")
+@pytest.mark.parametrize("read_events_first", [False, True])
+async def test_async_messages_text_stream_early_exit_captures_partial_text(
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_content,
+    read_events_first,
+):
+    async with async_anthropic_client.messages.stream(
+        model="claude-haiku-4-5",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        if read_events_first:
+            async for event in stream:
+                if event.type == "content_block_start":
+                    break
+        async for text in stream.text_stream:
+            break
+        assert text == "Hello."
+        snapshot = stream.current_message_snapshot
+        before_close = snapshot.model_dump()
+        assert snapshot.stop_reason is None
+        assert snapshot.usage.output_tokens == 2
+
+    assert snapshot.model_dump() == before_close
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 2
+    assert _load_span_messages(
+        spans[0], GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "Hello."}],
+            "finish_reason": "error",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _has_thinking_param,
+    reason="anthropic SDK too old to support 'thinking' parameter",
+)
+@pytest.mark.parametrize("use_beta", [False, True])
+async def test_async_messages_text_stream_early_exit_preserves_thinking(
+    span_exporter: InMemorySpanExporter,
+    instrument_with_content: AnthropicInstrumentor,
+    use_beta: bool,
+) -> None:
+    if use_beta and not _beta_supported:
+        pytest.skip("anthropic SDK does not support beta.messages")
+    thinking = "Reasoning before the answer."
+    text = "The answer."
+    body = incomplete_thinking_text_stream_sse_body(
+        thinking=thinking, text=text
+    )
+    with local_anthropic_sse_server(body) as base_url:
+        client = AsyncAnthropic(
+            api_key="test_anthropic_api_key", base_url=base_url
+        )
+        try:
+            messages = client.beta.messages if use_beta else client.messages
+            async with messages.stream(
+                model="claude-sonnet-4-20250514",
+                max_tokens=100,
+                thinking={"type": "enabled", "budget_tokens": 16},
+                messages=[{"role": "user", "content": "Calculate 2 + 2."}],
+            ) as stream:
+                async for received_text in stream.text_stream:
+                    break
+                snapshot: Message = stream.current_message_snapshot
+                before_close = snapshot.model_dump()
+                assert snapshot.stop_reason is None
+                assert snapshot.usage.output_tokens == 0
+                assert [
+                    block.thinking
+                    for block in snapshot.content
+                    if block.type == "thinking"
+                ] == [thinking]
+                assert received_text == text
+        finally:
+            await client.close()
+
+    assert snapshot.model_dump() == before_close
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 0
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "reasoning", "content": thinking},
+                {"type": "text", "content": text},
+            ],
+            "finish_reason": "error",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
 async def test_async_messages_stream_text_stream_records_response(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
@@ -2396,6 +2697,121 @@ async def test_async_messages_stream_text_stream_records_response(
     assert output_messages[0]["parts"] == [
         {"type": "text", "content": "Hello."}
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_text_stream_early_exit_preserves_snapshot_and_content(
+    span_exporter, instrument_with_content
+):
+    text = "partial response"
+    with local_anthropic_sse_server(
+        incomplete_text_stream_sse_body(text)
+    ) as base_url:
+        client = AsyncAnthropic(
+            api_key="test_anthropic_api_key",
+            base_url=base_url,
+        )
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Continue."}],
+        ) as stream:
+            async for received in stream.text_stream:
+                break
+            snapshot = stream.current_message_snapshot
+            output_tokens = snapshot.usage.output_tokens
+        await client.close()
+
+    assert received == text
+
+    assert snapshot.usage.output_tokens == output_tokens == 0
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 0
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": text}],
+            "finish_reason": "error",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_accessor_transition_preserves_text(
+    span_exporter, instrument_with_content
+):
+    text = "partial response"
+    with local_anthropic_sse_server(
+        incomplete_text_stream_sse_body(text)
+    ) as base_url:
+        client = AsyncAnthropic(
+            api_key="test_anthropic_api_key",
+            base_url=base_url,
+        )
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Continue."}],
+        ) as stream:
+            await stream.__anext__()
+            await stream.__anext__()
+            async for received in stream.text_stream:
+                break
+            snapshot = stream.current_message_snapshot
+            output_tokens = snapshot.usage.output_tokens
+        await client.close()
+
+    assert received == text
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": text}],
+            "finish_reason": "error",
+        }
+    ]
+    assert snapshot.usage.output_tokens == output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_without_content_capture_does_not_accumulate_text(
+    span_exporter, instrument_no_content
+):
+    text = "x" * 100_000
+    with local_anthropic_sse_server(
+        incomplete_text_stream_sse_body(text)
+    ) as base_url:
+        client = AsyncAnthropic(
+            api_key="test_anthropic_api_key",
+            base_url=base_url,
+        )
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Continue."}],
+        ) as stream:
+            await stream.__anext__()
+            await stream.__anext__()
+            await stream.__anext__()
+            assert stream._self_block_states == {}
+        await client.close()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in spans[0].attributes
 
 
 @pytest.mark.asyncio
@@ -2540,8 +2956,10 @@ async def test_async_messages_stream_text_stream_user_exception(
     assert isinstance(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
     )
-    assert (
-        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    # A snapshot was adopted before the error, so the response counts as an
+    # incomplete early exit, the same as a caller-closed stream.
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
     )
     if capture_content:
         assert _load_span_messages(
@@ -2550,6 +2968,7 @@ async def test_async_messages_stream_text_stream_user_exception(
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "content": "Hello."}],
+                "finish_reason": "error",
             }
         ]
     else:
