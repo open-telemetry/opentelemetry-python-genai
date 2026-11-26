@@ -1,0 +1,1 @@
+Run `MessageStream` text and final-message helpers and raw-response body iteration inside the inference span, restoring the caller's context between chunks.
