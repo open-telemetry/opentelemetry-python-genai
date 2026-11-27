@@ -1,0 +1,1 @@
+`interactions.create` emits one span per automatically continued call, with usage and output from every continuation request, and no longer fails `with_raw_response` / `with_streaming_response` calls.
