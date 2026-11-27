@@ -83,7 +83,6 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
     ) -> None:
         super().__init__(stream, invocation)
         self._self_invocation = invocation
-        invocation.suspend()
         self._self_outputs: list[OutputMessage] = []
         self._self_result_usage: dict[str, Any] | None = None
         self._self_result_error: Error | None = None
@@ -215,6 +214,7 @@ def _wrap_query(handler: TelemetryHandler) -> Any:
         invocation = handler.invoke_local_agent(
             request_model=options.model if options else None,
             agent_name=DEFAULT_AGENT_NAME,
+            _attach_to_context=False,
         )
         prompt = kwargs.get("prompt")
         if isinstance(prompt, str) and invocation.should_capture_content:

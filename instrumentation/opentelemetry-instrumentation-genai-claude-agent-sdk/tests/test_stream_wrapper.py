@@ -538,6 +538,35 @@ def test_caller_context_restored_between_reads(
     assert agent.parent.span_id == caller_id
 
 
+def test_caller_context_kept_while_stream_is_idle(
+    span_exporter, tracer_provider, instrument_claude_agent_sdk
+) -> None:
+    # The agent span is only current while a chunk is read: it must not leak
+    # into the caller's context after query() returns, after the stream is
+    # drained, or after a read raises.
+    tracer = tracer_provider.get_tracer("test")
+    seen: list[int] = []
+
+    async def _run() -> int:
+        with tracer.start_as_current_span("caller") as caller:
+            caller_id = caller.get_span_context().span_id
+            stream = open_stream(single_turn())
+            seen.append(trace.get_current_span().get_span_context().span_id)
+            async for _ in stream:
+                pass
+            seen.append(trace.get_current_span().get_span_context().span_id)
+            with pytest.raises(Exception, match="transport broke"):
+                async for _ in open_stream(single_turn(), fail_after=2):
+                    pass
+            seen.append(trace.get_current_span().get_span_context().span_id)
+            return caller_id
+
+    caller_id = anyio.run(_run)
+
+    assert seen == [caller_id, caller_id, caller_id]
+    assert len(agent_spans(span_exporter)) == 2
+
+
 def test_caller_exception_inside_context_finalizes_agent_span(
     span_exporter, tracer_provider, instrument_claude_agent_sdk
 ) -> None:
