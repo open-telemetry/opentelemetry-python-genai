@@ -23,7 +23,10 @@ from claude_agent_sdk.types import (
 )
 from wrapt import wrap_function_wrapper
 
-from opentelemetry.instrumentation.utils import unwrap
+from opentelemetry.instrumentation.utils import (
+    is_instrumentation_enabled,
+    unwrap,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.stream import AsyncStreamWrapper
@@ -205,7 +208,9 @@ def _wrap_query(handler: TelemetryHandler) -> Any:
         kwargs: dict[str, Any],
     ) -> Any:
         options = kwargs.get("options")
-        if _native_tracing_enabled(options):
+        if not is_instrumentation_enabled() or _native_tracing_enabled(
+            options
+        ):
             return wrapped(*args, **kwargs)
         invocation = handler.invoke_local_agent(
             request_model=options.model if options else None,

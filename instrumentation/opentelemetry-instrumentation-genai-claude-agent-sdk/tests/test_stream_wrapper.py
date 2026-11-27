@@ -20,6 +20,7 @@ from claude_agent_sdk.types import ClaudeAgentOptions
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
+from opentelemetry.instrumentation.utils import suppress_instrumentation
 from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.util.genai._conversation_context import (
     with_conversation_id,
@@ -176,6 +177,21 @@ def test_native_tracing_without_exporter_still_instruments(
     run_query(single_turn(), options=options)
 
     assert len(agent_spans(span_exporter)) == 1
+
+
+def test_suppressed_query_emits_no_telemetry(
+    span_exporter, metric_reader, instrument_claude_agent_sdk
+) -> None:
+    async def _run() -> list[Any]:
+        with suppress_instrumentation():
+            return [message async for message in open_stream(single_turn())]
+
+    messages = anyio.run(_run)
+
+    # The suppressed call still returns the SDK stream; only telemetry is off.
+    assert len(messages) == len(single_turn())
+    assert span_exporter.get_finished_spans() == ()
+    assert metric_reader.get_metrics_data() is None
 
 
 def test_session_id_reported_as_conversation_id(
