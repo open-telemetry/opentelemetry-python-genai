@@ -703,32 +703,43 @@ class _CreateStreamMixin(_InteractionStreamMixin):
 
     _self_invocation: InferenceInvocation | RemoteAgentInvocation
     _self_hop_usages: list[Usage]
-    _self_completed_hop_parts: list[MessagePart]
+    _self_closed_hop_parts: list[MessagePart]
 
     def _process_completed_interaction(self, interaction: Interaction) -> None:
         super()._process_completed_interaction(interaction)
         if interaction.usage is not None:
             self._self_hop_usages.append(interaction.usage)
+        self._close_hop(interaction)
+
+    def _process_other_event(self, chunk: InteractionSSEEvent) -> None:
+        # A hop resumed from a mid-hop checkpoint starts without the dropped
+        # hop ever completing.
+        if _get_field(chunk, "event_type") == "interaction.created":
+            self._close_hop(None)
+
+    def _close_hop(self, completed: Interaction | None) -> None:
+        """Keep the hop's output apart from the next hop's reused indices."""
         if not self._self_capture_content:
             return
         try:
-            # A hop's completion may also carry its steps; they repeat the
-            # streamed output, so they stand in only when nothing streamed.
-            self._self_completed_hop_parts.extend(
-                self._self_content.parts()
-                or _interaction_content_parts(interaction)
-            )
+            parts = self._self_content.parts()
+            if not parts and completed is not None:
+                # A hop's completion may also carry its steps; they repeat
+                # the streamed output, so they stand in only when nothing
+                # streamed.
+                parts = _interaction_content_parts(completed)
+            self._self_closed_hop_parts.extend(parts)
         except Exception:  # pylint: disable=broad-exception-caught
             # Same as a failed accumulation: drop the captured output.
             self._self_capture_content = False
-            self._self_completed_hop_parts = []
+            self._self_closed_hop_parts = []
             _logger.debug(
                 "Failed to rebuild interaction stream content", exc_info=True
             )
         self._self_content = _StreamedContent()
 
     def _streamed_parts(self) -> list[MessagePart]:
-        return [*self._self_completed_hop_parts, *super()._streamed_parts()]
+        return [*self._self_closed_hop_parts, *super()._streamed_parts()]
 
     def _record_interaction(
         self, interaction: Interaction, streamed_parts: list[MessagePart]
@@ -747,11 +758,11 @@ class _CreateStreamMixin(_InteractionStreamMixin):
 
     def _on_stream_error(self, error: BaseException) -> None:
         _apply_usage(self._self_invocation, self._self_hop_usages)
-        # Only completed hops: output after the last one's completion is
-        # regenerated when the caller resumes from its continuation token.
-        if self._self_capture_content and self._self_completed_hop_parts:
+        # Only closed hops: output after the last hop boundary is regenerated
+        # when the caller resumes from its continuation token.
+        if self._self_capture_content and self._self_closed_hop_parts:
             self._self_invocation.output_messages = _streamed_output_messages(
-                self._self_completed_hop_parts
+                self._self_closed_hop_parts
             )
         super()._on_stream_error(error)
 
@@ -768,7 +779,7 @@ class InteractionsStreamWrapper(
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_hop_usages = []
-        self._self_completed_hop_parts = []
+        self._self_closed_hop_parts = []
         self._init_stream_state(telemetry_handler)
 
 
@@ -784,7 +795,7 @@ class AsyncInteractionsStreamWrapper(
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_hop_usages = []
-        self._self_completed_hop_parts = []
+        self._self_closed_hop_parts = []
         self._init_stream_state(telemetry_handler)
 
 
@@ -1303,6 +1314,13 @@ def _start_interactions_invocation(
     invocation.tool_definitions = _maybe_get_tool_definitions(
         _get_field(request, "tools")
     )
+    # Raw-response streams are returned unparsed, never reaching the stream
+    # wrapper that would otherwise flag the request.
+    if (
+        isinstance(invocation, InferenceInvocation)
+        and _get_field(request, "stream") is True
+    ):
+        invocation.request_stream = True
     _apply_interaction_request_attributes(invocation, request)
 
     if telemetry_handler.should_capture_content():

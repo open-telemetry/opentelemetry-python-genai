@@ -147,6 +147,26 @@ def _function_call_step(index: int) -> list[dict[str, Any]]:
 
 
 def _sse(hop: dict[str, Any]) -> bytes:
+    if "checkpoint" in hop:
+        # The hop streams up to a checkpoint, then the connection drops before
+        # its completion event.
+        ending = [
+            {
+                "event_type": "interaction.status_update",
+                "interaction_id": hop["id"],
+                "status": "in_progress",
+                "continuation_token": hop["checkpoint"],
+            }
+        ]
+    else:
+        ending = [
+            {
+                "event_type": "interaction.completed",
+                "interaction": _interaction(
+                    hop, with_steps=hop.get("completion_steps", False)
+                ),
+            }
+        ]
     events = [
         {
             "event_type": "interaction.created",
@@ -157,17 +177,27 @@ def _sse(hop: dict[str, Any]) -> bytes:
             },
         },
         *hop.get("step_events", _text_step(0, hop["text"])),
-        {
-            "event_type": "interaction.completed",
-            "interaction": _interaction(
-                hop, with_steps=hop.get("completion_steps", False)
-            ),
-        },
+        *ending,
     ]
     return "".join(
         f"event: {event['event_type']}\ndata: {json.dumps(event)}\n\n"
         for event in events
     ).encode()
+
+
+class _DroppedStream(httpx.SyncByteStream, httpx.AsyncByteStream):
+    """A response body whose connection drops after ``data`` is sent."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self._data
+        raise httpx.ReadError("connection dropped")
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._data
+        raise httpx.ReadError("connection dropped")
 
 
 class _Server:
@@ -193,11 +223,12 @@ class _Server:
             )
         hop = self._hops[index]
         if body.get("stream"):
-            return httpx.Response(
-                200,
-                headers={"content-type": "text/event-stream"},
-                content=_sse(hop),
-            )
+            headers = {"content-type": "text/event-stream"}
+            if "checkpoint" in hop:
+                return httpx.Response(
+                    200, headers=headers, stream=_DroppedStream(_sse(hop))
+                )
+            return httpx.Response(200, headers=headers, content=_sse(hop))
         return httpx.Response(200, json=_interaction(hop, with_steps=True))
 
 
@@ -450,6 +481,59 @@ _HOP_LAYOUTS = {
 }
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_stream_keeps_output_across_checkpoint_resume(
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+    logger_provider: LoggerProvider,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+) -> None:
+    # The first hop drops after a checkpoint, so it never completes; the SDK
+    # resumes from the checkpoint in a new hop that reuses step index 0.
+    server = _Server(
+        hops=[
+            {
+                **_HOPS[0],
+                "checkpoint": "checkpoint-1",
+                "step_events": _text_step(0, "Hello"),
+            },
+            {
+                **_HOPS[1],
+                "step_events": [*_thought_step(0), *_text_step(1, " world")],
+            },
+        ]
+    )
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        await _create(
+            server,
+            asynchronous,
+            model="gemini-2.5-flash",
+            input="Say hello",
+            stream=True,
+        )
+
+    assert len(server.requests) == 2
+    assert server.requests[1]["continuation_token"] == "checkpoint-1"
+    span = _only_span(span_exporter)
+    assert span.status.status_code == StatusCode.UNSET
+    attributes = span.attributes
+    assert attributes is not None
+    output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert [message["role"] for message in output] == ["assistant"]
+    assert output[0]["parts"] == (
+        {"type": "text", "content": "Hello"},
+        {"type": "text", "content": " world"},
+    )
+
+
 @pytest.mark.parametrize("step_deltas", [True, False])
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
@@ -579,6 +663,51 @@ async def test_raw_response_records_request_only_span(
     assert span.name == "chat gemini-2.5-flash"
     assert span.status.status_code == StatusCode.UNSET
     assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in attributes
+    assert GenAIAttributes.GEN_AI_RESPONSE_ID not in attributes
+    assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in attributes
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("accessor", ["raw", "streaming"])
+@pytest.mark.asyncio
+async def test_raw_stream_response_records_request_stream(
+    instrumented: None,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+    accessor: str,
+) -> None:
+    server = _Server()
+    params = {
+        "model": "gemini-2.5-flash",
+        "input": "Say hello",
+        "stream": True,
+    }
+    if asynchronous:
+        async with _async_client(server) as client:
+            interactions = client.aio.interactions
+            if accessor == "raw":
+                response = await interactions.with_raw_response.create(
+                    **params
+                )
+                await response.close()
+            else:
+                async with interactions.with_streaming_response.create(
+                    **params
+                ):
+                    pass
+    else:
+        with _sync_client(server) as client:
+            interactions = client.interactions
+            if accessor == "raw":
+                interactions.with_raw_response.create(**params).close()
+            else:
+                with interactions.with_streaming_response.create(**params):
+                    pass
+
+    assert len(server.requests) == 1
+    attributes = _only_span(span_exporter).attributes
+    assert attributes is not None
+    assert attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
     assert GenAIAttributes.GEN_AI_RESPONSE_ID not in attributes
 
 
