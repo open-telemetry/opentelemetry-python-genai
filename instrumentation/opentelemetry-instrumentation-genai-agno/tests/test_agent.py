@@ -2521,6 +2521,92 @@ def test_agent_run_records_token_usage(
     assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3
 
 
+def test_agent_run_keeps_an_explicit_zero_input_count(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """A reported input count of 0 is a value, not a missing attribute.
+
+    agno reports cache reads outside ``input_tokens``, so a fully cached prompt
+    can legitimately arrive as 0 input plus a non-zero output.
+    """
+    from agno.agent import RunOutput
+
+    RunMetrics = _run_metrics_cls()
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        metrics=RunMetrics(input_tokens=0, output_tokens=3),
+    )
+
+    with _patch_agent_run(run_output):
+        agent.run("hello world")
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 0
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 3
+
+
+def test_agent_run_all_zero_usage_records_no_token_attributes(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """All-zero metrics mean agno reported nothing, so neither attribute is set."""
+    from agno.agent import RunOutput
+
+    RunMetrics = _run_metrics_cls()
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        metrics=RunMetrics(input_tokens=0, output_tokens=0),
+    )
+
+    with _patch_agent_run(run_output):
+        agent.run("hello world")
+
+    span = span_exporter.get_finished_spans()[0]
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+
+
+def test_agent_run_per_model_details_keep_an_explicit_zero_input_count(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """The per-model layout already kept the zero; the aggregate layout must too."""
+    pytest.importorskip("agno.metrics")
+    from agno.agent import RunOutput
+    from agno.metrics import ModelMetrics
+
+    RunMetrics = _run_metrics_cls()
+
+    agent = Agent(name="test-usage-agent", model=MockModel(id="mock-model"))
+    run_output = RunOutput(
+        content="hello back",
+        model_provider="OpenAI",
+        metrics=RunMetrics(
+            input_tokens=0,
+            output_tokens=3,
+            details={
+                "model": [
+                    ModelMetrics(
+                        provider="OpenAI", input_tokens=0, output_tokens=3
+                    )
+                ]
+            },
+        ),
+    )
+
+    with _patch_agent_run(run_output):
+        agent.run("hello world")
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 0
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 3
+
+
 @pytest.mark.parametrize(
     "provider",
     ["Anthropic", "AwsBedrock", "VertexAI", "AzureFoundry"],

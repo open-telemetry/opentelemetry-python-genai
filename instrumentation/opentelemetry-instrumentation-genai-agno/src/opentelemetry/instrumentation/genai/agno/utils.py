@@ -105,15 +105,23 @@ def total_input_tokens(
     Azure AI Foundry, and inside it for OpenAI, Azure and Gemini. An
     unrecognized or missing provider is left unsummed rather than guessed at.
 
-    A zero total means agno had nothing to report, so it returns ``None``
-    rather than recording ``0`` on the span.
+    Returns ``None`` only when agno reported no counts at all. An explicit
+    zero is a count: a fully cached prompt can arrive as 0 input alongside a
+    non-zero output, and dropping the attribute there would hide it.
+    ``record_token_usage`` is what suppresses a wholly empty metric set.
     """
+    if (
+        input_tokens is None
+        and cache_read_input_tokens is None
+        and cache_write_input_tokens is None
+    ):
+        return None
     total = input_tokens or 0
     if _normalize_provider(provider) in _CACHE_TOKENS_OUTSIDE_INPUT:
         total += (cache_read_input_tokens or 0) + (
             cache_write_input_tokens or 0
         )
-    return total or None
+    return total
 
 
 def record_token_usage(

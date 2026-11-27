@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 from agno.agent import Agent
@@ -17,8 +17,53 @@ from opentelemetry.instrumentation.genai.agno import AgnoInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
+
+
+def _agent_span_attributes(report: LiveCheckReport) -> dict[str, Any]:
+    """The attributes weaver saw on the run's ``invoke_agent`` span, by name."""
+    for entry in report["samples"]:
+        span = entry.get("span")
+        if span is None:
+            continue
+        attributes: dict[str, Any] = {
+            attribute["name"]: attribute["value"]
+            for attribute in span.get("attributes", [])
+        }
+        if attributes.get("gen_ai.operation.name") == "invoke_agent":
+            return attributes
+    raise AssertionError("weaver reported no invoke_agent span")
+
+
+class UsageScenario(Scenario):
+    """A scenario whose span must carry the normalized integer usage counts.
+
+    The base validator only counts spans and checks metric names, so a run
+    that lost its usage attributes, or folded the cached prompt tokens
+    wrongly, still passes it. These assertions read the span that weaver saw.
+    """
+
+    expected_usage: ClassVar[dict[str, int]] = {
+        "gen_ai.usage.input_tokens": 1012,
+        "gen_ai.usage.output_tokens": 8,
+    }
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        attributes = _agent_span_attributes(report)
+        for name, expected in self.expected_usage.items():
+            assert name in attributes, (
+                f"{name} missing from the invoke_agent span; saw "
+                f"{sorted(attributes)}"
+            )
+            value = attributes[name]
+            assert isinstance(value, int) and not isinstance(value, bool), (
+                f"{name} must be an integer count, weaver saw {value!r} "
+                f"({type(value).__name__})"
+            )
+            assert value == expected, f"{name} is {value}, expected {expected}"
 
 
 class AgentScenario(Scenario):
@@ -72,7 +117,7 @@ class AgentScenario(Scenario):
                 agent.run("hello conformance world")
 
 
-class AgentUsageScenario(Scenario):
+class AgentUsageScenario(UsageScenario):
     """Conformance scenario: an agent run that reports token usage."""
 
     expected_spans = {"invoke_agent": 1}
@@ -120,7 +165,7 @@ class AgentUsageScenario(Scenario):
                 agent.run("hello conformance usage")
 
 
-class AgentEventStreamScenario(Scenario):
+class AgentEventStreamScenario(UsageScenario):
     """Conformance scenario: an agent event stream that reports token usage."""
 
     expected_spans = {"invoke_agent": 1}
