@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import mimetypes
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import openai
@@ -39,6 +39,9 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import decode_base64, image_from_url
+
+if TYPE_CHECKING:
+    from openai.resources.completions import AsyncCompletions, Completions
 
 _OpenAIOmit = getattr(openai, "Omit", None)
 
@@ -156,20 +159,19 @@ def _openai_response_format_to_output_type(response_format_type: str) -> str:
     return response_format_type
 
 
-def create_chat_invocation(
+def _create_inference_invocation(
     handler: TelemetryHandler,
-    kwargs,
+    kwargs: Mapping[str, Any],
     client_instance,
-    capture_content: bool,
+    operation_name: str,
 ) -> InferenceInvocation:
-    # pylint: disable=too-many-branches
-
     address, port = get_server_address_and_port(client_instance)
     invocation = handler.inference(
         GenAIAttributes.GenAiProviderNameValues.OPENAI.value,
         request_model=kwargs.get("model", ""),
         server_address=address if address else None,
         server_port=port if port else None,
+        operation_name=operation_name,
         _attach_to_context=False,
     )
     invocation.temperature = get_value(kwargs.get("temperature"))
@@ -195,6 +197,24 @@ def create_chat_invocation(
         # Only add non default, meaningful values
         if isinstance(choice_count, int) and choice_count != 1:
             invocation.request_choice_count = choice_count
+
+    return invocation
+
+
+def create_chat_invocation(
+    handler: TelemetryHandler,
+    kwargs,
+    client_instance,
+    capture_content: bool,
+) -> InferenceInvocation:
+    # pylint: disable=too-many-branches
+
+    invocation = _create_inference_invocation(
+        handler,
+        kwargs,
+        client_instance,
+        GenAIAttributes.GenAiOperationNameValues.CHAT.value,
+    )
 
     if (
         response_format := get_value(kwargs.get("response_format"))
@@ -238,6 +258,85 @@ def create_chat_invocation(
             kwargs.get("tools")
         )
     return invocation
+
+
+def create_completion_invocation(
+    handler: TelemetryHandler,
+    kwargs: Mapping[str, Any],
+    client_instance: Completions | AsyncCompletions,
+) -> InferenceInvocation:
+    invocation = _create_inference_invocation(
+        handler,
+        kwargs,
+        client_instance,
+        GenAIAttributes.GenAiOperationNameValues.TEXT_COMPLETION.value,
+    )
+    if invocation.should_capture_content:
+        invocation.input_messages = _prompt_to_input_messages(
+            kwargs.get("prompt")
+        )
+    return invocation
+
+
+def _prompt_to_input_messages(
+    prompt: str | list[str] | Iterable[int] | Iterable[Iterable[int]] | None,
+) -> list[InputMessage]:
+    # Token-id prompts carry no text. Only a list is walked: the SDK accepts
+    # any iterable and consumes it itself, after this runs.
+    if isinstance(prompt, str):
+        prompts = [prompt]
+    elif isinstance(prompt, list):
+        prompts = [item for item in prompt if isinstance(item, str)]
+    else:
+        return []
+    return [
+        InputMessage(role=Role.USER.value, parts=[TextPart(content=text)])
+        for text in prompts
+    ]
+
+
+def set_completion_response(
+    invocation: InferenceInvocation,
+    *,
+    response_id: str | None,
+    system_fingerprint: str | None,
+    usage: CompletionUsage | None,
+    finish_reasons: Sequence[str],
+    texts: Sequence[str] | None,
+) -> None:
+    """Record a legacy completion's response, streamed or not.
+
+    ``texts`` holds the generated text of each choice, or None when content
+    is not captured.
+    """
+    invocation.response_id = response_id
+    if finish_reasons:
+        invocation.finish_reasons = [
+            map_finish_reason(finish_reason)
+            for finish_reason in finish_reasons
+        ]
+    if usage is not None:
+        set_chat_usage(invocation=invocation, usage=usage)
+    if system_fingerprint is not None:
+        set_system_fingerprint(invocation, system_fingerprint)
+    if texts is not None:
+        invocation.output_messages = [
+            OutputMessage(
+                role=Role.ASSISTANT.value, parts=[TextPart(content=text)]
+            )
+            for text in texts
+        ]
+
+
+def set_system_fingerprint(
+    invocation: InferenceInvocation, system_fingerprint: str
+) -> None:
+    invocation.attributes[
+        OpenAIAttributes.OPENAI_RESPONSE_SYSTEM_FINGERPRINT
+    ] = system_fingerprint
+    invocation.metric_attributes[
+        OpenAIAttributes.OPENAI_RESPONSE_SYSTEM_FINGERPRINT
+    ] = system_fingerprint
 
 
 def get_value(v: Any):

@@ -41,6 +41,7 @@ from .conformance.responses_streaming import ResponsesStreamingScenario
 from .conformance.responses_tool_calling import (
     ResponsesToolCallingScenario,
 )
+from .conformance.text_completion import TextCompletionScenario
 from .conformance.tool_calling import ToolCallingScenario
 
 
@@ -49,6 +50,7 @@ from .conformance.tool_calling import ToolCallingScenario
     [
         InferenceScenario(),
         InferenceStreamingScenario(),
+        TextCompletionScenario(),
         ChatCompletionsMultimodalScenario(),
         ResponsesMultimodalScenario(),
         EmbeddingScenario(),

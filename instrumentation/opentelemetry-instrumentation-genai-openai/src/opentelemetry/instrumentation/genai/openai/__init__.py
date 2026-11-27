@@ -76,9 +76,11 @@ from opentelemetry.util.genai.handler import (
 from .patch import (
     async_chat_completions_create_v_new,
     async_chat_completions_stream,
+    async_completions_create,
     async_embeddings_create,
     chat_completions_create_v_new,
     chat_completions_stream,
+    completions_create,
     embeddings_create,
 )
 from .patch_responses import (
@@ -188,6 +190,18 @@ class OpenAIInstrumentor(BaseInstrumentor):
             self._active(async_chat_completions_create_v_new(handler)),
         )
 
+        wrap_function_wrapper(
+            "openai.resources.completions",
+            "Completions.create",
+            self._active(completions_create(handler)),
+        )
+
+        wrap_function_wrapper(
+            "openai.resources.completions",
+            "AsyncCompletions.create",
+            self._active(async_completions_create(handler)),
+        )
+
         # Add instrumentation for the embeddings API
         wrap_function_wrapper(
             "openai.resources.embeddings",
@@ -290,6 +304,8 @@ class OpenAIInstrumentor(BaseInstrumentor):
 
         unwrap(openai.resources.chat.completions.Completions, "create")
         unwrap(openai.resources.chat.completions.AsyncCompletions, "create")
+        unwrap(openai.resources.completions.Completions, "create")
+        unwrap(openai.resources.completions.AsyncCompletions, "create")
         unwrap(openai.resources.embeddings.Embeddings, "create")
         unwrap(openai.resources.embeddings.AsyncEmbeddings, "create")
         if self._parse_supported:
