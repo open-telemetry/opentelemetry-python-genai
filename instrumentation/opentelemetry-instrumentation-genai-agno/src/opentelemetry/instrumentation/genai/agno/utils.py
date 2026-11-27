@@ -6,15 +6,45 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
+from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
+    from agno.metrics import RunMetrics
+    from agno.workflow.types import WorkflowMetrics
+
+    def _run_metrics_cls() -> type[RunMetrics]:
+        """Return the agno class that carries token usage for a run."""
+        ...
+
+else:
+
+    @cache
+    def _run_metrics_cls() -> Any:
+        """Return the agno class that carries token usage for a run.
+
+        agno 3.0 moved ``agno.models.metrics.Metrics`` to
+        ``agno.metrics.RunMetrics``, so read the class from the module the
+        installed release ships. Deferred rather than imported at module scope
+        so this module stays importable before agno is installed.
+        """
+        try:
+            from agno.metrics import RunMetrics
+        except ImportError:  # agno < 3.0
+            from agno.models.metrics import Metrics as RunMetrics
+
+        return RunMetrics
+
 
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
+)
+from opentelemetry.util.genai.invocation import (
+    LocalAgentInvocation,
+    WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
@@ -36,6 +66,134 @@ def safe_int(val: Any) -> int | None:
         return int(val)
     except (ValueError, TypeError):
         return None
+
+
+# agno reports cache reads and writes outside ``input_tokens`` for the
+# Anthropic-shaped model classes: Anthropic itself, Bedrock, and the Vertex AI
+# and Azure AI Foundry classes, which inherit the Anthropic ``_get_metrics``
+# while carrying their own provider string. OpenAI, Azure and Gemini fold the
+# cached part into ``input_tokens``, so adding it there would count the same
+# tokens twice. A new provider that inherits the Anthropic accounting belongs
+# in this set.
+_CACHE_TOKENS_OUTSIDE_INPUT = frozenset(
+    {"anthropic", "awsbedrock", "vertexai", "azurefoundry"}
+)
+
+
+def _normalize_provider(provider: str | None) -> str | None:
+    """Reduce agno's provider string to the shape the lookup uses.
+
+    agno sets ``provider`` on each model class ("Anthropic", "AwsBedrock"), and
+    falls back to ``"{name} ({id})"`` when a model leaves it unset.
+    """
+    if not provider:
+        return None
+    name = provider.split(" (")[0]
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def total_input_tokens(
+    input_tokens: int | None,
+    cache_read_input_tokens: int | None,
+    cache_write_input_tokens: int | None,
+    provider: str | None = None,
+) -> int | None:
+    """Fold agno's cached prompt tokens into ``gen_ai.usage.input_tokens``.
+
+    Whether the cached tokens belong in the sum depends on the provider: agno
+    keeps them outside ``input_tokens`` for Anthropic, Bedrock, Vertex AI and
+    Azure AI Foundry, and inside it for OpenAI, Azure and Gemini. An
+    unrecognized or missing provider is left unsummed rather than guessed at.
+
+    Returns ``None`` only when agno reported no counts at all. An explicit
+    zero is a count: a fully cached prompt can arrive as 0 input alongside a
+    non-zero output, and dropping the attribute there would hide it.
+    ``record_token_usage`` is what suppresses a wholly empty metric set.
+    """
+    if (
+        input_tokens is None
+        and cache_read_input_tokens is None
+        and cache_write_input_tokens is None
+    ):
+        return None
+    total = input_tokens or 0
+    if _normalize_provider(provider) in _CACHE_TOKENS_OUTSIDE_INPUT:
+        total += (cache_read_input_tokens or 0) + (
+            cache_write_input_tokens or 0
+        )
+    return total
+
+
+def record_token_usage(
+    invocation: LocalAgentInvocation | WorkflowInvocation,
+    metrics: RunMetrics | WorkflowMetrics | None,
+    provider: str | None = None,
+) -> None:
+    """Record agno run metrics as ``gen_ai.usage.*`` on an invocation.
+
+    ``provider`` is agno's ``RunOutput.model_provider``; it decides whether the
+    cached prompt tokens sit outside ``input_tokens``. When the metrics carry a
+    per-model ``details`` breakdown, each entry is normalized with its own
+    provider instead, because the aggregate sums every model in the run while
+    ``model_provider`` names only the primary one. Workflow results carry a
+    ``WorkflowMetrics`` with no token fields, and workflow invocations carry no
+    ``input_tokens``, so both are left alone.
+    """
+    if not isinstance(invocation, LocalAgentInvocation) or not isinstance(
+        metrics, _run_metrics_cls()
+    ):
+        return
+    input_tokens = _run_input_tokens(metrics, provider)
+    output_tokens = safe_int(metrics.output_tokens)
+    if not any((input_tokens, output_tokens)):
+        # All-zero metrics mean agno reported nothing, not that the run used
+        # no tokens.
+        return
+    if input_tokens is not None:
+        invocation.input_tokens = input_tokens
+    if output_tokens is not None:
+        invocation.output_tokens = output_tokens
+
+
+def _run_input_tokens(metrics: RunMetrics, provider: str | None) -> int | None:
+    """The run's input tokens, with cached prompt tokens folded in per model."""
+    per_model = _per_model_input_tokens(getattr(metrics, "details", None))
+    if per_model is not None:
+        return per_model
+    return total_input_tokens(
+        safe_int(metrics.input_tokens),
+        safe_int(metrics.cache_read_tokens),
+        safe_int(metrics.cache_write_tokens),
+        provider,
+    )
+
+
+def _per_model_input_tokens(details: Any) -> int | None:
+    """Sum each model's input tokens, normalizing with that model's provider."""
+    if not isinstance(details, dict):
+        return None
+    typed = cast("dict[str, Any]", details)
+    if not typed:
+        return None
+    total = 0
+    counted = False
+    for entries in typed.values():
+        if not isinstance(entries, (list, tuple)):
+            continue
+        for entry in cast("Sequence[Any]", entries):
+            input_tokens = safe_int(getattr(entry, "input_tokens", None))
+            cache_read = safe_int(getattr(entry, "cache_read_tokens", None))
+            cache_write = safe_int(getattr(entry, "cache_write_tokens", None))
+            if input_tokens is None and cache_read is None:
+                continue
+            counted = True
+            total += input_tokens or 0
+            if (
+                _normalize_provider(getattr(entry, "provider", None))
+                in _CACHE_TOKENS_OUTSIDE_INPUT
+            ):
+                total += (cache_read or 0) + (cache_write or 0)
+    return total if counted else None
 
 
 def safe_float(val: Any) -> float | None:

@@ -62,6 +62,7 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     format_content,
     format_retrieval_document,
     prepare_tool_definitions,
+    record_token_usage,
     resolve_embedder_provider,
     safe_int,
 )
@@ -867,6 +868,11 @@ def _set_invocation_output(
     session_id = getattr(result, "session_id", None)
     if session_id:
         invocation.conversation_id = str(session_id)
+    record_token_usage(
+        invocation,
+        getattr(result, "metrics", None),
+        getattr(result, "model_provider", None),
+    )
 
 
 def _start_agent_invocation(

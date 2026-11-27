@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +17,7 @@ from agno.team import Team
 from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
+from opentelemetry.instrumentation.genai.agno.utils import _run_metrics_cls
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -767,6 +769,142 @@ def test_agent_stream_no_llm_client_metrics(
     assert "gen_ai.client.operation.time_per_output_chunk" not in metric_names
 
 
+def test_agent_stream_keeps_the_run_provider_for_completion_usage(
+    instrument_agno, span_exporter
+) -> None:
+    """The completion event's usage is normalized with the run's provider.
+
+    ``RunCompletedEvent`` carries the metrics but not ``model_provider``; that
+    is on ``RunStartedEvent``, so the wrapper has to carry it across chunks.
+    """
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(name="test-provider-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunStartedEvent(model_provider="Anthropic")
+        yield RunCompletedEvent(
+            metrics=metrics_cls(
+                input_tokens=12, cache_read_tokens=1040, output_tokens=8
+            )
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 1052
+
+
+def test_agent_stream_keeps_the_leader_provider_when_a_member_starts(
+    instrument_agno, span_exporter
+) -> None:
+    """A nested member's start event must not hijack the leader's provider.
+
+    Team streams forward member events; with the provider held as a single
+    value, a member starting on a different provider replaced it and the
+    leader's completion was then normalized with the wrong one.
+    """
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(name="test-nested-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunStartedEvent(run_id="leader", model_provider="Anthropic")
+        yield RunStartedEvent(
+            run_id="member",
+            parent_run_id="leader",
+            model_provider="OpenAI",
+        )
+        yield RunCompletedEvent(
+            run_id="leader",
+            metrics=metrics_cls(
+                input_tokens=12, cache_read_tokens=1000, output_tokens=5
+            ),
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 1012
+
+
+def test_agent_stream_records_a_zero_output_count(
+    instrument_agno, span_exporter
+) -> None:
+    """A run that reports no output tokens reports zero, not nothing."""
+    from agno.agent import RunCompletedEvent
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(name="test-zero-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunCompletedEvent(
+            metrics=metrics_cls(input_tokens=12, output_tokens=0)
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 0
+
+
+def test_agent_stream_normalizes_each_model_in_a_mixed_run(
+    instrument_agno, span_exporter
+) -> None:
+    """Token usage is normalized per model, using each model's own provider.
+
+    ``RunMetrics.input_tokens`` sums every model in the run while
+    ``model_provider`` names only the primary one, so folding the aggregate
+    with that single provider double counts a cached OpenAI prompt.
+    """
+    pytest.importorskip("agno.metrics")
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+    from agno.metrics import ModelMetrics
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(name="test-mixed-agent", model=MockModel(id="mock-model"))
+    details = {
+        "model": [
+            ModelMetrics(
+                provider="Anthropic",
+                input_tokens=12,
+                cache_read_tokens=1000,
+                output_tokens=5,
+            ),
+            ModelMetrics(
+                provider="OpenAI",
+                input_tokens=1000,
+                cache_read_tokens=800,
+                output_tokens=5,
+            ),
+        ]
+    }
+
+    def fake_stream(*args, **kwargs):
+        yield RunStartedEvent(model_provider="Anthropic")
+        yield RunCompletedEvent(
+            metrics=metrics_cls(
+                input_tokens=1012,
+                cache_read_tokens=1800,
+                output_tokens=10,
+                details=details,
+            )
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 2012
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 10
+
+
 def test_workflow_stream_step_completed_event_preserves_final_content(
     instrument_agno_content_capture, span_exporter
 ) -> None:
@@ -1305,3 +1443,176 @@ def test_tool_aexecute_closed_while_tool_is_pending_fails_the_span(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
+
+
+def test_agent_run_stream_records_usage_from_completed_event(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that stream usage includes cached prompt tokens (Anthropic)."""
+    from dataclasses import dataclass
+
+    RunMetrics = _run_metrics_cls()
+
+    @dataclass
+    class FakeCompletedChunk:
+        content: str = "done"
+        event: str = "RunCompletedEvent"
+        metrics: RunMetrics | None = None
+        model_provider: str | None = "Anthropic"
+
+    agent = Agent(
+        name="test-stream-usage-agent", model=MockModel(id="mock-model")
+    )
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk delta"
+        yield FakeCompletedChunk(
+            metrics=RunMetrics(
+                input_tokens=12,
+                output_tokens=3,
+                cache_read_tokens=1000,
+                cache_write_tokens=40,
+            )
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello stream", stream=True))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1052
+    )
+    assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3
+
+
+def test_agent_run_stream_does_not_double_count_openai_cached_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """OpenAI stream usage already counts the cached part in input_tokens."""
+    from dataclasses import dataclass
+
+    RunMetrics = _run_metrics_cls()
+
+    @dataclass
+    class FakeCompletedChunk:
+        content: str = "done"
+        event: str = "RunCompletedEvent"
+        metrics: RunMetrics | None = None
+        model_provider: str | None = "OpenAI"
+
+    agent = Agent(
+        name="test-stream-usage-agent", model=MockModel(id="mock-model")
+    )
+
+    def fake_stream(*args, **kwargs):
+        yield FakeCompletedChunk(
+            metrics=RunMetrics(
+                input_tokens=1000,
+                output_tokens=3,
+                cache_read_tokens=800,
+            )
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello stream", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1000
+    )
+
+
+def test_agent_arun_stream_keeps_the_run_provider(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """The async stream wrapper normalizes usage with the run's provider."""
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+
+    metrics_cls = _run_metrics_cls()
+    agent = Agent(
+        name="test-async-provider-agent", model=MockModel(id="mock-model")
+    )
+
+    async def fake_astream(*args, **kwargs):
+        yield RunStartedEvent(model_provider="Anthropic")
+        yield RunCompletedEvent(
+            metrics=metrics_cls(
+                input_tokens=12, cache_read_tokens=1040, output_tokens=8
+            )
+        )
+
+    async def _run() -> None:
+        with _patch_agent_astream(fake_astream):
+            async for _ in agent.arun("hello", stream=True):
+                pass
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    input_tokens = spans[0].attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    )
+    assert input_tokens == 1052
+    assert isinstance(input_tokens, int)
+
+
+def test_team_run_stream_usage_is_normalized_with_the_leader_provider(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """A real Team stream keeps the leader's provider when a member starts.
+
+    Team streams forward their members' events, so this drives the Team wrapper
+    itself rather than the shared mixin in isolation.
+    """
+    import agno.team
+    from agno.agent import RunCompletedEvent, RunStartedEvent
+
+    if not hasattr(agno.team, "_run"):
+        pytest.skip(
+            "agno 2.x keeps Team dispatch in agno.team.team; the seam this "
+            "test drives is 3.x-only"
+        )
+
+    metrics_cls = _run_metrics_cls()
+    member = Agent(name="member-agent", model=MockModel(id="mock-model"))
+    team = Team(
+        name="test-usage-team",
+        members=[member],
+        model=MockModel(id="mock-model"),
+    )
+
+    def dispatch(*args: Any, **kwargs: Any) -> Any:
+        yield RunStartedEvent(run_id="leader", model_provider="Anthropic")
+        yield RunStartedEvent(
+            run_id="member",
+            parent_run_id="leader",
+            model_provider="OpenAI",
+        )
+        yield RunCompletedEvent(
+            run_id="leader",
+            metrics=metrics_cls(
+                input_tokens=12, cache_read_tokens=1000, output_tokens=3
+            ),
+        )
+
+    with patch("agno.team._run.run_dispatch", side_effect=dispatch):
+        list(team.run("hello team", stream=True))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "invoke_agent test-usage-team"
+    input_tokens = span.attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    )
+    output_tokens = span.attributes.get(
+        GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+    )
+    assert (input_tokens, output_tokens) == (1012, 3)
