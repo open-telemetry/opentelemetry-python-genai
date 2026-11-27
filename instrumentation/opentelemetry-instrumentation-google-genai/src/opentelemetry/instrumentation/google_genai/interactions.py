@@ -33,6 +33,7 @@ try:
     from google.genai._interactions.types.step import Step
 
     _HAS_INTERACTIONS = True
+    _STREAMS_ON_TRUTHY = True
 except ImportError:
     try:
         # Google GenAI >= 2.9.0
@@ -57,8 +58,10 @@ except ImportError:
         )
 
         _HAS_INTERACTIONS = True
+        _STREAMS_ON_TRUTHY = False
     except ImportError:
         _HAS_INTERACTIONS = False
+        _STREAMS_ON_TRUTHY = False
 
         # Placeholders for older versions where interactions are not supported
         class InteractionsResource:
@@ -1280,6 +1283,27 @@ def _apply_interaction_request_attributes(
         )
 
 
+# The strings a pydantic bool field accepts as true, compared case-insensitively.
+_TRUE_STREAM_STRINGS = frozenset({"1", "true", "yes", "on", "t", "y"})
+
+
+def _requests_stream(value: object) -> bool:
+    """Whether the SDK sends a create request with this ``stream`` as streaming.
+
+    Google GenAI >= 2.9.0 validates ``stream`` as a pydantic bool and rejects
+    other values before sending; older SDKs stream on any truthy value.
+    """
+    if _STREAMS_ON_TRUTHY:
+        return bool(value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    if isinstance(value, str):
+        return value.lower() in _TRUE_STREAM_STRINGS
+    return False
+
+
 def _start_interactions_invocation(
     telemetry_handler: TelemetryHandler,
     instance: InteractionsResource | AsyncInteractionsResource,
@@ -1316,9 +1340,8 @@ def _start_interactions_invocation(
     )
     # Raw-response streams are returned unparsed, never reaching the stream
     # wrapper that would otherwise flag the request.
-    if (
-        isinstance(invocation, InferenceInvocation)
-        and _get_field(request, "stream") is True
+    if isinstance(invocation, InferenceInvocation) and _requests_stream(
+        _get_field(request, "stream")
     ):
         invocation.request_stream = True
     _apply_interaction_request_attributes(invocation, request)
@@ -1346,10 +1369,10 @@ def _record_interrupted_hops(
         return
     if partial.usage is not None:
         _apply_usage(invocation, [partial.usage])
-    if telemetry_handler.should_capture_content():
-        invocation.output_messages = _interactions_response_to_messages(
-            partial, finish_reason=None
-        )
+    if telemetry_handler.should_capture_content() and (
+        parts := _interaction_content_parts(partial)
+    ):
+        invocation.output_messages = _streamed_output_messages(parts)
 
 
 def _create_instrumented_interactions_create(

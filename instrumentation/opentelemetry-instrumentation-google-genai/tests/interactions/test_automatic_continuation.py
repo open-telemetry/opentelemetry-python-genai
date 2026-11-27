@@ -6,6 +6,8 @@
 google-genai >= 2.34 resumes a generation that hit the per-request decode
 limit by sending further requests ("hops") inside one ``create()`` call. These
 tests drive the real SDK over a mock transport so its continuation loop runs.
+Tests that need automatic continuation skip on older SDKs; the raw-response
+tests run on every SDK that has the Interactions API.
 """
 
 from __future__ import annotations
@@ -27,6 +29,9 @@ from google.genai.types import HttpOptions
 from opentelemetry.instrumentation.google_genai import (
     GoogleGenAiSdkInstrumentor,
 )
+from opentelemetry.instrumentation.google_genai.interactions import (
+    _HAS_INTERACTIONS,
+)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -40,12 +45,33 @@ from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 
+if not _HAS_INTERACTIONS:
+    pytest.skip("This SDK has no Interactions API", allow_module_level=True)
+
 try:
+    # Google GenAI >= 2.34.0
     from google.genai.errors import ContinuationInterruptedError
+
+    _HAS_CONTINUATION = True
 except ImportError:
-    pytest.skip(
-        "This SDK has no automatic continuation", allow_module_level=True
-    )
+    _HAS_CONTINUATION = False
+
+    class ContinuationInterruptedError(Exception):
+        pass
+
+
+try:
+    # Google GenAI >= 2.9.0 validates `stream` as a boolean; older SDKs
+    # stream on any truthy value.
+    import google.genai._gaos.interactions  # noqa: F401
+
+    _SDK_VALIDATES_STREAM = True
+except ImportError:
+    _SDK_VALIDATES_STREAM = False
+
+requires_continuation = pytest.mark.skipif(
+    not _HAS_CONTINUATION, reason="This SDK has no automatic continuation"
+)
 
 _HOPS: list[dict[str, Any]] = [
     {
@@ -89,12 +115,15 @@ def _interaction(hop: dict[str, Any], *, with_steps: bool) -> dict[str, Any]:
     if "continuation_token" in hop:
         interaction["continuation_token"] = hop["continuation_token"]
     if with_steps:
-        interaction["steps"] = [
-            {
-                "type": "model_output",
-                "content": [{"type": "text", "text": hop["text"]}],
-            }
-        ]
+        interaction["steps"] = hop.get(
+            "steps",
+            [
+                {
+                    "type": "model_output",
+                    "content": [{"type": "text", "text": hop["text"]}],
+                }
+            ],
+        )
     return interaction
 
 
@@ -317,6 +346,7 @@ def _assert_summed_usage(span: ReadableSpan) -> None:
         assert type(attributes[name]) is int, name
 
 
+@requires_continuation
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.asyncio
@@ -371,6 +401,7 @@ async def test_two_hops_produce_one_span_with_summed_usage(
         assert text == "Hello world"
 
 
+@requires_continuation
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.asyncio
@@ -410,6 +441,53 @@ async def test_interrupted_continuation_keeps_completed_hops(
     assert output[0]["parts"] == ({"type": "text", "content": "Hello"},)
 
 
+@requires_continuation
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_interrupted_continuation_records_tool_call_only_output(
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+    logger_provider: LoggerProvider,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+) -> None:
+    tool_call = {
+        "type": "function_call",
+        "id": "call-1",
+        "name": "get_weather",
+        "arguments": {"city": "Paris"},
+    }
+    server = _Server(fail_from=1, hops=[{**_HOPS[0], "steps": [tool_call]}])
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        with pytest.raises(ContinuationInterruptedError):
+            await _create(
+                server,
+                asynchronous,
+                model="gemini-2.5-flash",
+                input="What is the weather in Paris?",
+            )
+
+    attributes = _only_span(span_exporter).attributes
+    assert attributes is not None
+    output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert [message["role"] for message in output] == ["assistant"]
+    assert output[0]["parts"] == (
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+        },
+    )
+
+
+@requires_continuation
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.asyncio
@@ -481,6 +559,7 @@ _HOP_LAYOUTS = {
 }
 
 
+@requires_continuation
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
 async def test_stream_keeps_output_across_checkpoint_resume(
@@ -488,6 +567,7 @@ async def test_stream_keeps_output_across_checkpoint_resume(
     meter_provider: MeterProvider,
     logger_provider: LoggerProvider,
     span_exporter: InMemorySpanExporter,
+    content_mode: str,
     asynchronous: bool,
 ) -> None:
     # The first hop drops after a checkpoint, so it never completes; the SDK
@@ -510,7 +590,7 @@ async def test_stream_keeps_output_across_checkpoint_resume(
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
-        content_capture="SPAN_ONLY",
+        content_capture=content_mode,
     ):
         await _create(
             server,
@@ -526,6 +606,9 @@ async def test_stream_keeps_output_across_checkpoint_resume(
     assert span.status.status_code == StatusCode.UNSET
     attributes = span.attributes
     assert attributes is not None
+    if content_mode == "NO_CONTENT":
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+        return
     output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert [message["role"] for message in output] == ["assistant"]
     assert output[0]["parts"] == (
@@ -534,6 +617,7 @@ async def test_stream_keeps_output_across_checkpoint_resume(
     )
 
 
+@requires_continuation
 @pytest.mark.parametrize("step_deltas", [True, False])
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
@@ -542,6 +626,7 @@ async def test_stream_keeps_each_hop_output_when_completion_carries_steps(
     meter_provider: MeterProvider,
     logger_provider: LoggerProvider,
     span_exporter: InMemorySpanExporter,
+    content_mode: str,
     asynchronous: bool,
     step_deltas: bool,
 ) -> None:
@@ -556,7 +641,7 @@ async def test_stream_keeps_each_hop_output_when_completion_carries_steps(
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
-        content_capture="SPAN_ONLY",
+        content_capture=content_mode,
     ):
         await _create(
             server,
@@ -569,6 +654,9 @@ async def test_stream_keeps_each_hop_output_when_completion_carries_steps(
     assert len(server.requests) == 2
     attributes = _only_span(span_exporter).attributes
     assert attributes is not None
+    if content_mode == "NO_CONTENT":
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+        return
     output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert [message["role"] for message in output] == ["assistant"]
     assert output[0]["parts"] == (
@@ -577,6 +665,7 @@ async def test_stream_keeps_each_hop_output_when_completion_carries_steps(
     )
 
 
+@requires_continuation
 @pytest.mark.parametrize("layout", sorted(_HOP_LAYOUTS))
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
@@ -585,6 +674,7 @@ async def test_stream_keeps_each_hop_output_when_step_indices_repeat(
     meter_provider: MeterProvider,
     logger_provider: LoggerProvider,
     span_exporter: InMemorySpanExporter,
+    content_mode: str,
     asynchronous: bool,
     layout: str,
 ) -> None:
@@ -600,7 +690,7 @@ async def test_stream_keeps_each_hop_output_when_step_indices_repeat(
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
-        content_capture="SPAN_ONLY",
+        content_capture=content_mode,
     ):
         await _create(
             server,
@@ -613,6 +703,9 @@ async def test_stream_keeps_each_hop_output_when_step_indices_repeat(
     assert len(server.requests) == 2
     attributes = _only_span(span_exporter).attributes
     assert attributes is not None
+    if content_mode == "NO_CONTENT":
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+        return
     output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert [message["role"] for message in output] == ["assistant"]
     assert output[0]["parts"] == tuple(expected_parts)
@@ -667,20 +760,27 @@ async def test_raw_response_records_request_only_span(
     assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in attributes
 
 
+@pytest.mark.parametrize("stream_value", [True, 1, "true", False, 0, "false"])
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("accessor", ["raw", "streaming"])
 @pytest.mark.asyncio
-async def test_raw_stream_response_records_request_stream(
+async def test_raw_response_records_request_stream(
     instrumented: None,
     span_exporter: InMemorySpanExporter,
     asynchronous: bool,
     accessor: str,
+    stream_value: object,
 ) -> None:
+    streaming = (
+        stream_value in (True, 1, "true")
+        if _SDK_VALIDATES_STREAM
+        else bool(stream_value)
+    )
     server = _Server()
     params = {
         "model": "gemini-2.5-flash",
         "input": "Say hello",
-        "stream": True,
+        "stream": stream_value,
     }
     if asynchronous:
         async with _async_client(server) as client:
@@ -707,10 +807,14 @@ async def test_raw_stream_response_records_request_stream(
     assert len(server.requests) == 1
     attributes = _only_span(span_exporter).attributes
     assert attributes is not None
-    assert attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
+    if streaming:
+        assert attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
+    else:
+        assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in attributes
     assert GenAIAttributes.GEN_AI_RESPONSE_ID not in attributes
 
 
+@requires_continuation
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
 async def test_stream_closed_early_ends_span(
@@ -748,6 +852,7 @@ async def test_stream_closed_early_ends_span(
     assert ERROR_TYPE not in attributes
 
 
+@requires_continuation
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
 async def test_untyped_content_blocks_are_recorded_as_text(
