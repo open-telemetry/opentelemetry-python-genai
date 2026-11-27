@@ -448,6 +448,83 @@ async def test_async_completion_stream_closed_early(
     )
 
 
+_OUT_OF_ORDER_CHUNKS = [
+    _completion([(1, "Hi", None)]),
+    _completion([(0, "This is a test.", "stop")]),
+]
+
+
+def test_completion_stream_closed_before_first_choice_arrives(
+    span_exporter, instrument_with_content
+):
+    stream = _client(_sse_handler(_OUT_OF_ORDER_CHUNKS)).completions.create(
+        **_STREAM_KWARGS
+    )
+
+    assert next(stream).choices[0].index == 1
+    stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+        format_text_output_messages("Hi"),
+    )
+
+
+def test_completion_stream_keeps_choice_with_empty_text(
+    span_exporter, instrument_with_content
+):
+    stream = _client(
+        _sse_handler([_completion([(0, "", None)])] + _OUT_OF_ORDER_CHUNKS)
+    ).completions.create(**_STREAM_KWARGS)
+
+    assert next(stream).choices[0].text == ""
+    stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+        format_text_output_messages(""),
+    )
+
+
+def test_completion_stream_response_closed_early(
+    span_exporter, instrument_with_content
+):
+    stream = _client(_sse_handler(_CHUNKS)).completions.create(
+        **_STREAM_KWARGS
+    )
+
+    next(stream)
+    stream.response.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+        format_text_output_messages("This is"),
+    )
+
+
+@pytest.mark.asyncio()
+async def test_async_completion_stream_response_closed_early(
+    span_exporter, instrument_with_content
+):
+    stream = await _async_client(_sse_handler(_CHUNKS)).completions.create(
+        **_STREAM_KWARGS
+    )
+
+    await anext(stream)
+    await stream.response.aclose()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+        format_text_output_messages("This is"),
+    )
+
+
 def test_completion_stream_caller_error(
     span_exporter, instrument_with_content
 ):
