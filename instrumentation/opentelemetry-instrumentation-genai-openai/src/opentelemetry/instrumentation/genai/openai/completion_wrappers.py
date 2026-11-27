@@ -14,8 +14,11 @@ from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    finalize_on_aclose,
+    finalize_on_close,
 )
 
+from ._raw_response import _http_lib
 from .chat_buffers import ChoiceBuffer
 from .utils import set_completion_response
 
@@ -91,7 +94,13 @@ class _CompletionStreamMixin:
                 for buffer in buffers
                 if buffer.finish_reason is not None
             ],
-            texts=["".join(buffer.text_content) for buffer in buffers]
+            # Buffers are allocated up to the highest index seen, so one with
+            # no chunks belongs to a choice that never arrived.
+            texts=[
+                "".join(buffer.text_content)
+                for buffer in buffers
+                if buffer.text_content
+            ]
             if self._self_capture_content
             else None,
         )
@@ -114,6 +123,16 @@ class CompletionStreamWrapper(
         super().__init__(stream, invocation=invocation)
         self._init_state(invocation, capture_content)
 
+    @property
+    def response(self) -> _http_lib.Response:
+        # A caller can close this HTTP response instead of the stream, so
+        # that close has to finalize telemetry too.
+        return finalize_on_close(
+            self._self_stream.response,
+            self._finalize_success,
+            execution_context=self._execution_context,
+        )
+
 
 class AsyncCompletionStreamWrapper(
     _CompletionStreamMixin,
@@ -127,6 +146,15 @@ class AsyncCompletionStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._init_state(invocation, capture_content)
+
+    @property
+    def response(self) -> _http_lib.Response:
+        # See CompletionStreamWrapper.response.
+        return finalize_on_aclose(
+            self._self_stream.response,
+            self._finalize_success,
+            execution_context=self._execution_context,
+        )
 
 
 __all__ = [
