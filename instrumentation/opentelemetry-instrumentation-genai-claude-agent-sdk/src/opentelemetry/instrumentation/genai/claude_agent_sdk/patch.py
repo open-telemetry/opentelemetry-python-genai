@@ -71,7 +71,7 @@ def _native_tracing_enabled(options: ClaudeAgentOptions | None) -> bool:
     return (
         env.get("CLAUDE_CODE_ENABLE_TELEMETRY") == "1"
         and env.get("CLAUDE_CODE_ENHANCED_TELEMETRY_BETA") == "1"
-        and env.get("OTEL_TRACES_EXPORTER", "none") != "none"
+        and (env.get("OTEL_TRACES_EXPORTER") or "none") != "none"
     )
 
 

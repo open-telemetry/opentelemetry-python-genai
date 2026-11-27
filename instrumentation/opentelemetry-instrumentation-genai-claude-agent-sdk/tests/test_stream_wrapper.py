@@ -179,6 +179,23 @@ def test_native_tracing_without_exporter_still_instruments(
     assert len(agent_spans(span_exporter)) == 1
 
 
+def test_native_tracing_with_empty_exporter_still_instruments(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # An empty exporter means unset: the CLI exports nothing, so the span has
+    # to come from this instrumentation.
+    options = ClaudeAgentOptions(
+        env={
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+            "OTEL_TRACES_EXPORTER": "",
+        }
+    )
+    run_query(single_turn(), options=options)
+
+    assert len(agent_spans(span_exporter)) == 1
+
+
 def test_suppressed_query_emits_no_telemetry(
     span_exporter, metric_reader, instrument_claude_agent_sdk
 ) -> None:
