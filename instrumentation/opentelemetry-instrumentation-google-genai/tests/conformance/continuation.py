@@ -94,6 +94,11 @@ class ContinuationScenario(_ContinuationScenario):
 class ContinuationStreamingScenario(_ContinuationScenario):
     cassette = "interactions_continuation_streaming_conformance.yaml"
     stream = True
+    expected_metrics = (
+        *_ContinuationScenario.expected_metrics,
+        "gen_ai.client.operation.time_to_first_chunk",
+        "gen_ai.client.operation.time_per_output_chunk",
+    )
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)

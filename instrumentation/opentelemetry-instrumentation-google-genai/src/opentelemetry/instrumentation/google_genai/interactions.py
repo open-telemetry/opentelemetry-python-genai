@@ -230,12 +230,14 @@ def _apply_interaction_response_attributes(
         invocation.finish_reasons = [finish_reason]
 
     if telemetry_handler.should_capture_content():
-        messages = _interactions_response_to_messages(
-            response, finish_reason=None
-        )
-        if streamed_parts and not _has_content(messages):
-            messages = _streamed_output_messages(streamed_parts)
-        invocation.output_messages = messages
+        if streamed_parts:
+            invocation.output_messages = _streamed_output_messages(
+                streamed_parts
+            )
+        else:
+            invocation.output_messages = _interactions_response_to_messages(
+                response, finish_reason=None
+            )
 
 
 def _apply_usage(
@@ -610,8 +612,9 @@ def _apply_fetched_interaction_attributes(
 class _InteractionStreamMixin:
     """Event handling shared by the interaction stream wrappers.
 
-    A completion event carries the interaction's metadata but no steps, so the
-    output is rebuilt from the ``step.start`` / ``step.delta`` events.
+    A completion event usually carries the interaction's metadata but no
+    steps, so the output is rebuilt from the ``step.start`` / ``step.delta``
+    events.
     """
 
     _self_invocation: Any
@@ -709,7 +712,12 @@ class _CreateStreamMixin(_InteractionStreamMixin):
         if not self._self_capture_content:
             return
         try:
-            self._self_completed_hop_parts.extend(self._self_content.parts())
+            # A hop's completion may also carry its steps; they repeat the
+            # streamed output, so they stand in only when nothing streamed.
+            self._self_completed_hop_parts.extend(
+                self._self_content.parts()
+                or _interaction_content_parts(interaction)
+            )
         except Exception:  # pylint: disable=broad-exception-caught
             # Same as a failed accumulation: drop the captured output.
             self._self_capture_content = False
@@ -938,6 +946,21 @@ class _StreamedContent:
             if text := _step_content_text(payload) + "".join(entry["text"]):
                 parts.append(TextPart(content=text))
         return parts
+
+
+def _interaction_content_parts(interaction: Interaction) -> list[MessagePart]:
+    """The parts of an interaction's own steps, without empty placeholders."""
+    if not interaction.steps:
+        return []
+    messages = _interactions_response_to_messages(
+        interaction, finish_reason=None
+    )
+    return [
+        part
+        for message in messages
+        for part in message.parts
+        if not isinstance(part, TextPart) or part.content
+    ]
 
 
 def _streamed_output_messages(parts: list[MessagePart]) -> list[OutputMessage]:

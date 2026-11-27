@@ -159,7 +159,9 @@ def _sse(hop: dict[str, Any]) -> bytes:
         *hop.get("step_events", _text_step(0, hop["text"])),
         {
             "event_type": "interaction.completed",
-            "interaction": _interaction(hop, with_steps=False),
+            "interaction": _interaction(
+                hop, with_steps=hop.get("completion_steps", False)
+            ),
         },
     ]
     return "".join(
@@ -275,6 +277,9 @@ def _assert_summed_usage(span: ReadableSpan) -> None:
         GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS: 25,
         GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS: 12,
         GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 10,
+        GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 4,
+        "gen_ai.usage.text.input_tokens": 25,
+        "gen_ai.usage.text.output_tokens": 12,
     }
     for name, value in expected.items():
         assert attributes[name] == value, name
@@ -443,6 +448,49 @@ _HOP_LAYOUTS = {
         ],
     ),
 }
+
+
+@pytest.mark.parametrize("step_deltas", [True, False])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_stream_keeps_each_hop_output_when_completion_carries_steps(
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+    logger_provider: LoggerProvider,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+    step_deltas: bool,
+) -> None:
+    # Each hop's completion event carries that hop's steps, with or without
+    # the step events streamed before it.
+    hops = [{**hop, "completion_steps": True} for hop in _HOPS]
+    if not step_deltas:
+        hops = [{**hop, "step_events": []} for hop in hops]
+    server = _Server(hops=hops)
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        await _create(
+            server,
+            asynchronous,
+            model="gemini-2.5-flash",
+            input="Say hello",
+            stream=True,
+        )
+
+    assert len(server.requests) == 2
+    attributes = _only_span(span_exporter).attributes
+    assert attributes is not None
+    output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert [message["role"] for message in output] == ["assistant"]
+    assert output[0]["parts"] == (
+        {"type": "text", "content": "Hello"},
+        {"type": "text", "content": " world"},
+    )
 
 
 @pytest.mark.parametrize("layout", sorted(_HOP_LAYOUTS))
