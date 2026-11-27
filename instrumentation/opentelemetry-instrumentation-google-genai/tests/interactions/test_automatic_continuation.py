@@ -98,6 +98,54 @@ def _interaction(hop: dict[str, Any], *, with_steps: bool) -> dict[str, Any]:
     return interaction
 
 
+def _text_step(index: int, text: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "event_type": "step.start",
+            "index": index,
+            "step": {"type": "model_output"},
+        },
+        {
+            "event_type": "step.delta",
+            "index": index,
+            "delta": {"type": "text", "text": text},
+        },
+        {"event_type": "step.stop", "index": index},
+    ]
+
+
+def _thought_step(index: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "event_type": "step.start",
+            "index": index,
+            "step": {"type": "thought"},
+        },
+        {
+            "event_type": "step.delta",
+            "index": index,
+            "delta": {"type": "thought_signature", "signature": "c2ln"},
+        },
+        {"event_type": "step.stop", "index": index},
+    ]
+
+
+def _function_call_step(index: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "event_type": "step.start",
+            "index": index,
+            "step": {
+                "type": "function_call",
+                "id": "call-1",
+                "name": "get_weather",
+                "arguments": {"city": "Paris"},
+            },
+        },
+        {"event_type": "step.stop", "index": index},
+    ]
+
+
 def _sse(hop: dict[str, Any]) -> bytes:
     events = [
         {
@@ -108,17 +156,7 @@ def _sse(hop: dict[str, Any]) -> bytes:
                 "model": "gemini-2.5-flash",
             },
         },
-        {
-            "event_type": "step.start",
-            "index": 0,
-            "step": {"type": "model_output"},
-        },
-        {
-            "event_type": "step.delta",
-            "index": 0,
-            "delta": {"type": "text", "text": hop["text"]},
-        },
-        {"event_type": "step.stop", "index": 0},
+        *hop.get("step_events", _text_step(0, hop["text"])),
         {
             "event_type": "interaction.completed",
             "interaction": _interaction(hop, with_steps=False),
@@ -133,9 +171,14 @@ def _sse(hop: dict[str, Any]) -> bytes:
 class _Server:
     """Answers each hop in turn; a hop past ``fail_from`` gets a 400."""
 
-    def __init__(self, fail_from: int | None = None) -> None:
+    def __init__(
+        self,
+        fail_from: int | None = None,
+        hops: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.requests: list[dict[str, Any]] = []
         self._fail_from = fail_from
+        self._hops = hops if hops is not None else _HOPS
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -146,7 +189,7 @@ class _Server:
                 400,
                 json={"error": {"code": 400, "message": "bad hop"}},
             )
-        hop = _HOPS[index]
+        hop = self._hops[index]
         if body.get("stream"):
             return httpx.Response(
                 200,
@@ -295,9 +338,10 @@ async def test_two_hops_produce_one_span_with_summed_usage(
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.asyncio
-async def test_interrupted_continuation_keeps_completed_hop_usage(
+async def test_interrupted_continuation_keeps_completed_hops(
     instrumented: None,
     span_exporter: InMemorySpanExporter,
+    content_mode: str,
     asynchronous: bool,
     stream: bool,
 ) -> None:
@@ -322,6 +366,12 @@ async def test_interrupted_continuation_keeps_completed_hop_usage(
     )
     assert attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10
     assert attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    if content_mode == "NO_CONTENT":
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+        return
+    output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert [message["role"] for message in output] == ["assistant"]
+    assert output[0]["parts"] == ({"type": "text", "content": "Hello"},)
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -365,6 +415,75 @@ async def test_disabled_continuation_records_one_span_per_call(
             attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
             == hop["usage"]["total_output_tokens"]
         )
+
+
+# Each continuation hop numbers its steps from 0 again, so the second hop
+# reuses indices the first hop already used.
+_HOP_LAYOUTS = {
+    "text_then_thought": (
+        _text_step(0, "Hello"),
+        [*_thought_step(0), *_text_step(1, " world")],
+        [
+            {"type": "text", "content": "Hello"},
+            {"type": "text", "content": " world"},
+        ],
+    ),
+    "tool_call_then_text": (
+        [*_text_step(0, "Checking."), *_function_call_step(1)],
+        _text_step(0, "Sunny."),
+        [
+            {"type": "text", "content": "Checking."},
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "get_weather",
+                "arguments": {"city": "Paris"},
+            },
+            {"type": "text", "content": "Sunny."},
+        ],
+    ),
+}
+
+
+@pytest.mark.parametrize("layout", sorted(_HOP_LAYOUTS))
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_stream_keeps_each_hop_output_when_step_indices_repeat(
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+    logger_provider: LoggerProvider,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+    layout: str,
+) -> None:
+    first, second, expected_parts = _HOP_LAYOUTS[layout]
+    server = _Server(
+        hops=[
+            {**_HOPS[0], "step_events": first},
+            {**_HOPS[1], "step_events": second},
+        ]
+    )
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        await _create(
+            server,
+            asynchronous,
+            model="gemini-2.5-flash",
+            input="What is the weather in Paris?",
+            stream=True,
+        )
+
+    assert len(server.requests) == 2
+    attributes = _only_span(span_exporter).attributes
+    assert attributes is not None
+    output = attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert [message["role"] for message in output] == ["assistant"]
+    assert output[0]["parts"] == tuple(expected_parts)
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

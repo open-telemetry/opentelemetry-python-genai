@@ -23,6 +23,10 @@ from opentelemetry.test_util_genai.conformance import (
     run_conformance,
 )
 
+from .conformance.continuation import (
+    ContinuationScenario,
+    ContinuationStreamingScenario,
+)
 from .conformance.embedding import EmbeddingScenario
 from .conformance.fetch_response import FetchResponseScenario
 from .conformance.generate_content import GenerateContentScenario
@@ -44,6 +48,8 @@ from .conformance.tool_calling import ToolCallingScenario
         FetchResponseScenario(),
         GenerateContentServerToolCallingScenario(),
         InteractionsServerToolCallingScenario(),
+        ContinuationScenario(),
+        ContinuationStreamingScenario(),
     ],
     ids=lambda s: type(s).__name__,
 )

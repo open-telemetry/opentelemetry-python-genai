@@ -660,9 +660,12 @@ class _InteractionStreamMixin:
     ) -> None:
         raise NotImplementedError
 
+    def _streamed_parts(self) -> list[MessagePart]:
+        return self._self_content.parts()
+
     def _record_response(self) -> None:
         try:
-            streamed_parts = self._self_content.parts()
+            streamed_parts = self._streamed_parts()
         except Exception:  # pylint: disable=broad-exception-caught
             # Same as a failed accumulation: drop the captured output.
             streamed_parts = []
@@ -691,16 +694,33 @@ class _CreateStreamMixin(_InteractionStreamMixin):
 
     With automatic continuation, each hop ends in its own completion event
     carrying that hop's usage, so usage is summed over all of them and the rest
-    is taken from the last one.
+    is taken from the last one. Each hop also numbers its steps from 0 again,
+    so a hop's output is rebuilt when it completes and kept apart from the next.
     """
 
     _self_invocation: InferenceInvocation | RemoteAgentInvocation
     _self_hop_usages: list[Usage]
+    _self_completed_hop_parts: list[MessagePart]
 
     def _process_completed_interaction(self, interaction: Interaction) -> None:
         super()._process_completed_interaction(interaction)
         if interaction.usage is not None:
             self._self_hop_usages.append(interaction.usage)
+        if not self._self_capture_content:
+            return
+        try:
+            self._self_completed_hop_parts.extend(self._self_content.parts())
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Same as a failed accumulation: drop the captured output.
+            self._self_capture_content = False
+            self._self_completed_hop_parts = []
+            _logger.debug(
+                "Failed to rebuild interaction stream content", exc_info=True
+            )
+        self._self_content = _StreamedContent()
+
+    def _streamed_parts(self) -> list[MessagePart]:
+        return [*self._self_completed_hop_parts, *super()._streamed_parts()]
 
     def _record_interaction(
         self, interaction: Interaction, streamed_parts: list[MessagePart]
@@ -719,6 +739,12 @@ class _CreateStreamMixin(_InteractionStreamMixin):
 
     def _on_stream_error(self, error: BaseException) -> None:
         _apply_usage(self._self_invocation, self._self_hop_usages)
+        # Only completed hops: output after the last one's completion is
+        # regenerated when the caller resumes from its continuation token.
+        if self._self_capture_content and self._self_completed_hop_parts:
+            self._self_invocation.output_messages = _streamed_output_messages(
+                self._self_completed_hop_parts
+            )
         super()._on_stream_error(error)
 
 
@@ -734,6 +760,7 @@ class InteractionsStreamWrapper(
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_hop_usages = []
+        self._self_completed_hop_parts = []
         self._init_stream_state(telemetry_handler)
 
 
@@ -749,6 +776,7 @@ class AsyncInteractionsStreamWrapper(
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_hop_usages = []
+        self._self_completed_hop_parts = []
         self._init_stream_state(telemetry_handler)
 
 
@@ -1266,14 +1294,21 @@ def _start_interactions_invocation(
     return invocation
 
 
-def _record_interrupted_usage(
+def _record_interrupted_hops(
     invocation: InferenceInvocation | RemoteAgentInvocation,
+    telemetry_handler: TelemetryHandler,
     error: ContinuationInterruptedError,
 ) -> None:
+    """Record the hops that completed before automatic continuation failed."""
     partial = error.partial_interaction
-    if partial is not None and partial.usage is not None:
-        # The hops that completed before the failure were billed.
+    if partial is None:
+        return
+    if partial.usage is not None:
         _apply_usage(invocation, [partial.usage])
+    if telemetry_handler.should_capture_content():
+        invocation.output_messages = _interactions_response_to_messages(
+            partial, finish_reason=None
+        )
 
 
 def _create_instrumented_interactions_create(
@@ -1302,7 +1337,7 @@ def _create_instrumented_interactions_create(
             try:
                 response = wrapped(*args, **kwargs)
             except ContinuationInterruptedError as exc:
-                _record_interrupted_usage(invocation, exc)
+                _record_interrupted_hops(invocation, telemetry_handler, exc)
                 raise
             if _is_unparsed_response(response):
                 invocation.stop()
@@ -1348,7 +1383,7 @@ def _create_instrumented_async_interactions_create(
             try:
                 response = await wrapped(*args, **kwargs)
             except ContinuationInterruptedError as exc:
-                _record_interrupted_usage(invocation, exc)
+                _record_interrupted_hops(invocation, telemetry_handler, exc)
                 raise
             if _is_unparsed_response(response):
                 invocation.stop()
