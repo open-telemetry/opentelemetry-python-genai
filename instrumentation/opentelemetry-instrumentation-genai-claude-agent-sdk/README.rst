@@ -6,8 +6,11 @@ OpenTelemetry Claude Agent SDK Instrumentation
 .. |pypi| image:: https://badge.fury.io/py/opentelemetry-instrumentation-genai-claude-agent-sdk.svg
    :target: https://pypi.org/project/opentelemetry-instrumentation-genai-claude-agent-sdk/
 
-This library allows tracing LLM requests made by the
+This library allows tracing the runs started by the
 `Claude Agent SDK <https://github.com/anthropics/claude-agent-sdk-python>`_.
+
+Each ``query()`` stream is reported as one ``invoke_agent`` span. Only
+``claude_agent_sdk.query`` is instrumented today; ``ClaudeSDKClient`` is not.
 
 Installation
 ------------
@@ -29,10 +32,10 @@ Check out the `manual example <examples/manual>`_ for more details.
 
 .. code-block:: python
 
+    import claude_agent_sdk
+    from claude_agent_sdk import ClaudeAgentOptions, AgentDefinition, AssistantMessage, TextBlock
     from opentelemetry.instrumentation.genai.claude_agent_sdk import ClaudeAgentSDKInstrumentor
-    from claude_agent_sdk import ClaudeAgentOptions, AgentDefinition, AssistantMessage, TextBlock, query
 
-    # Instrument Claude Agent SDK
     ClaudeAgentSDKInstrumentor().instrument()
 
     # Use Claude Agent SDK as normal
@@ -50,7 +53,7 @@ Check out the `manual example <examples/manual>`_ for more details.
             },
         )
 
-        async for message in query(
+        async for message in claude_agent_sdk.query(
             prompt="Hello, Claude!",
             options=options,
         ):
@@ -88,6 +91,25 @@ pass ``None`` to use the environment setting (default: ``NO_CONTENT``):
     ClaudeAgentSDKInstrumentor().instrument(
         content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT,
     )
+
+
+Claude Code built-in tracing
+****************************
+
+The Claude Code CLI used by ``claude-agent-sdk`` ships its own
+`OpenTelemetry tracing <https://code.claude.com/docs/en/agent-sdk/observability>`_,
+disabled by default. When it's enabled, this instrumentation doesn't report
+``query()`` calls to avoid duplicate spans.
+
+To use the built-in tracing instead, uninstall this package::
+
+    pip uninstall opentelemetry-instrumentation-genai-claude-agent-sdk
+
+If the package is installed as a dependency of something else, disable it with
+``OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=claude-agent-sdk`` instead.
+
+The built-in tracing partially follows GenAI semantic conventions, doesn't emit
+GenAI metrics, log events and doesn't support upload hooks.
 
 
 References

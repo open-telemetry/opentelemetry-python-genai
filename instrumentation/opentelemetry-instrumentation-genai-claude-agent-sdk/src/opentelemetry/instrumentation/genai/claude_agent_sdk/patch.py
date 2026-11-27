@@ -1,2 +1,247 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
+"""Instrumentation for ``claude_agent_sdk.query``."""
+
+from __future__ import annotations
+
+import importlib
+import os
+from collections.abc import AsyncIterator
+from typing import Any
+
+from claude_agent_sdk.types import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    Message,
+    ResultMessage,
+    SystemMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
+from wrapt import wrap_function_wrapper
+
+from opentelemetry.instrumentation.utils import (
+    is_instrumentation_enabled,
+    unwrap,
+)
+from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.invocation import LocalAgentInvocation
+from opentelemetry.util.genai.stream import AsyncStreamWrapper
+from opentelemetry.util.genai.types import (
+    Error,
+    InputMessage,
+    MessagePart,
+    OutputMessage,
+    ReasoningPart,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
+)
+
+DEFAULT_AGENT_NAME = "claude-agent-sdk"
+
+_FINISH_REASONS = {
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "max_tokens": "length",
+    "tool_use": "tool_call",
+}
+
+
+def _finish_reason(stop_reason: str) -> str:
+    return _FINISH_REASONS.get(stop_reason, stop_reason)
+
+
+def _input_tokens(usage: dict[str, Any]) -> int | None:
+    components = [
+        usage.get("input_tokens"),
+        usage.get("cache_read_input_tokens"),
+        usage.get("cache_creation_input_tokens"),
+    ]
+    if all(component is None for component in components):
+        return None
+    return sum(component or 0 for component in components)
+
+
+def _native_tracing_enabled(options: ClaudeAgentOptions | None) -> bool:
+    env = {**os.environ, **(options.env if options else {})}
+    return (
+        env.get("CLAUDE_CODE_ENABLE_TELEMETRY") == "1"
+        and env.get("CLAUDE_CODE_ENHANCED_TELEMETRY_BETA") == "1"
+        and (env.get("OTEL_TRACES_EXPORTER") or "none") != "none"
+    )
+
+
+class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Message]):
+    def __init__(
+        self,
+        stream: AsyncIterator[Message],
+        invocation: LocalAgentInvocation,
+    ) -> None:
+        super().__init__(stream, invocation)
+        self._self_invocation = invocation
+        self._self_outputs: list[OutputMessage] = []
+        self._self_result_usage: dict[str, Any] | None = None
+        self._self_result_error: Error | None = None
+        self._self_sdk_session_seen = False
+
+    def _process_chunk(self, chunk: Message) -> None:
+        # Sub-agent messages are skipped until sub-agents get their own spans.
+        if isinstance(chunk, AssistantMessage):
+            if chunk.parent_tool_use_id is None:
+                self._handle_assistant(chunk)
+        elif isinstance(chunk, UserMessage):
+            if chunk.parent_tool_use_id is None:
+                self._handle_user(chunk)
+        elif isinstance(chunk, ResultMessage):
+            self._handle_result(chunk)
+        elif isinstance(chunk, SystemMessage):
+            self._handle_system(chunk)
+
+    def _set_conversation_id(self, session_id: str) -> None:
+        # The first SDK session id wins; the init message and the result agree.
+        if self._self_sdk_session_seen:
+            return
+        self._self_invocation.conversation_id = session_id
+        self._self_sdk_session_seen = True
+
+    def _handle_system(self, chunk: SystemMessage) -> None:
+        if chunk.subtype != "init":
+            return
+        session_id = chunk.data.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            self._set_conversation_id(session_id)
+
+    def _handle_assistant(self, chunk: AssistantMessage) -> None:
+        parts: list[MessagePart] = []
+        for block in chunk.content:
+            if isinstance(block, TextBlock) and block.text:
+                if self._self_invocation.should_capture_content:
+                    parts.append(TextPart(content=block.text))
+            elif isinstance(block, ThinkingBlock) and block.thinking:
+                if self._self_invocation.should_capture_content:
+                    parts.append(ReasoningPart(content=block.thinking))
+            elif isinstance(block, ToolUseBlock):
+                if self._self_invocation.should_capture_content:
+                    parts.append(
+                        ToolCallRequestPart(
+                            arguments=block.input,
+                            name=block.name,
+                            id=block.id,
+                        )
+                    )
+        if parts:
+            self._self_outputs.append(
+                OutputMessage(role="assistant", parts=parts)
+            )
+
+    def _handle_user(self, chunk: UserMessage) -> None:
+        parts: list[MessagePart] = []
+        if isinstance(chunk.content, list):
+            for block in chunk.content:
+                if isinstance(block, ToolResultBlock):
+                    if self._self_invocation.should_capture_content:
+                        parts.append(
+                            ToolCallResponsePart(
+                                response=block.content,
+                                id=block.tool_use_id,
+                            )
+                        )
+        if parts:
+            self._self_outputs.append(OutputMessage(role="tool", parts=parts))
+
+    def _handle_result(self, chunk: ResultMessage) -> None:
+        if chunk.session_id:
+            self._set_conversation_id(chunk.session_id)
+        if chunk.usage:
+            self._self_result_usage = dict(chunk.usage)
+        # ``stop_reason`` only exists in newer SDK releases.
+        stop_reason = getattr(chunk, "stop_reason", None)
+        if stop_reason:
+            self._self_invocation.finish_reasons = [
+                _finish_reason(stop_reason)
+            ]
+        if chunk.is_error:
+            # Failed API calls are reported with subtype "success". The
+            # per-error text is user data, so only the type reaches the status.
+            error_type = (
+                chunk.subtype if chunk.subtype != "success" else "_OTHER"
+            )
+            self._self_result_error = Error(
+                message=error_type, type=error_type
+            )
+
+    def _apply_usage(self) -> None:
+        usage = self._self_result_usage
+        if usage is not None:
+            self._self_invocation.input_tokens = _input_tokens(usage)
+            self._self_invocation.output_tokens = usage.get("output_tokens")
+
+    def _apply_output(self) -> None:
+        if self._self_outputs:
+            self._self_invocation.output_messages = self._self_outputs
+            self._self_outputs = []
+
+    def _on_stream_end(self) -> None:
+        self._apply_usage()
+        self._apply_output()
+        if self._self_result_error is not None:
+            self._self_invocation.fail(self._self_result_error)
+        else:
+            self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._apply_usage()
+        self._apply_output()
+        self._self_invocation.fail(error)
+
+
+def _wrap_query(handler: TelemetryHandler) -> Any:
+    def wrapper(
+        wrapped: Any,
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        options = kwargs.get("options")
+        if not is_instrumentation_enabled() or _native_tracing_enabled(
+            options
+        ):
+            return wrapped(*args, **kwargs)
+        invocation = handler.invoke_local_agent(
+            request_model=options.model if options else None,
+            agent_name=DEFAULT_AGENT_NAME,
+            _attach_to_context=False,
+        )
+        prompt = kwargs.get("prompt")
+        if isinstance(prompt, str) and invocation.should_capture_content:
+            invocation.input_messages = [
+                InputMessage(role="user", parts=[TextPart(content=prompt)])
+            ]
+        try:
+            stream = wrapped(*args, **kwargs)
+        except BaseException as exc:
+            # Argument binding happens here, so a bad call still owns the span.
+            invocation.fail(exc)
+            raise
+        return ClaudeAgentStreamWrapper(stream, invocation)
+
+    return wrapper
+
+
+_TARGET_MODULES = ("claude_agent_sdk.query", "claude_agent_sdk")
+
+
+def instrument(handler: TelemetryHandler) -> None:
+    for module_name in _TARGET_MODULES:
+        wrap_function_wrapper(module_name, "query", _wrap_query(handler))
+
+
+def uninstrument() -> None:
+    # Pass the module object: `claude_agent_sdk.query` as a dotted string
+    # resolves to the function, which shadows the submodule.
+    for module_name in _TARGET_MODULES:
+        unwrap(importlib.import_module(module_name), "query")
