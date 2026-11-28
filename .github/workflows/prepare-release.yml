@@ -13,6 +13,7 @@ on:
         - opentelemetry-instrumentation-google-genai
         - opentelemetry-instrumentation-genai-langchain
         - opentelemetry-instrumentation-genai-llama-index
+        - opentelemetry-instrumentation-genai-ollama
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-instrumentation-genai-portkey
@@ -30,7 +31,7 @@ permissions:
   contents: read
 
 env:
-  UV_FROZEN: "true"
+  UV_LOCKED: "true"
 
 run-name: "Prepare release${{ inputs.package && format(': {0}', inputs.package) || ' (all)' }}"
 
@@ -86,7 +87,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
       - name: Prepare selected packages for release
         run: |
@@ -101,7 +102,7 @@ jobs:
       - name: Configure CLA-approved git bot
         run: .github/scripts/use-cla-approved-github-bot.sh
 
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         id: otelbot-token
         with:
           client-id: ${{ vars.OTELBOT_CLIENT_ID }}

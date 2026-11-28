@@ -21,6 +21,7 @@ from opentelemetry.util.genai.environment_variables import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
@@ -45,11 +46,12 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
             SimpleLogRecordProcessor(self.log_exporter)
         )
 
-    def _make_handler(self, hook=None):
+    def _make_handler(self, hook=None, content_capturing_mode=None):
         return TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
             completion_hook=hook,
+            content_capturing_mode=content_capturing_mode,
         )
 
     def test_hook_called_on_stop(self):
@@ -164,6 +166,12 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
             stamped_record.attributes.get("gen_ai.input_messages_ref"),
             "s3://bucket/inputs.json",
         )
+        self.assertEqual(
+            self.log_exporter.get_finished_logs()[0].log_record.attributes[
+                "gen_ai.input_messages_ref"
+            ],
+            "s3://bucket/inputs.json",
+        )
 
     def test_workflow_hook_called_on_stop_with_messages(self):
         hook = MagicMock()
@@ -275,6 +283,39 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         kwargs = hook.on_completion.call_args.kwargs
         self.assertIsNotNone(kwargs["span"])
 
+    def test_retrieval_hook_not_called(self):
+        hook = MagicMock()
+        handler = self._make_handler(hook)
+
+        invocation = handler.retrieval(data_source_id="ds-1")
+        self.assertFalse(invocation.should_capture_content)
+        invocation.query_text = "search query"
+        invocation.stop()
+
+        failed_inv = handler.retrieval(data_source_id="ds-1")
+        failed_inv.fail(RuntimeError("retrieval failed"))
+
+        hook.on_completion.assert_not_called()
+
+    def test_embedding_and_tool_hook_not_called(self):
+        hook = MagicMock()
+        handler = self._make_handler(hook)
+
+        emb_inv = handler.embedding("openai", request_model="text-embedding-3")
+        self.assertFalse(emb_inv.should_capture_content)
+        emb_inv.stop()
+
+        tool_inv = handler.tool("get_weather")
+        self.assertFalse(tool_inv.should_capture_content)
+        tool_inv.arguments = {"city": "Paris"}
+        tool_inv.tool_result = "sunny"
+        tool_inv.stop()
+
+        failed_tool_inv = handler.tool("get_weather")
+        failed_tool_inv.fail(RuntimeError("tool failed"))
+
+        hook.on_completion.assert_not_called()
+
     def test_remote_agent_hook_called_on_stop_with_messages(self):
         hook = MagicMock()
         handler = self._make_handler(hook)
@@ -363,6 +404,28 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
                 self.assertEqual(
                     handler.should_capture_content(), expected_content_capture
                 )
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "NO_CONTENT"},
+    )
+    def test_programmatic_content_mode_overrides_environment(self):
+        handler = self._make_handler(
+            content_capturing_mode=ContentCapturingMode.SPAN_ONLY
+        )
+
+        self.assertTrue(handler.should_capture_content())
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+    )
+    def test_programmatic_no_content_overrides_environment(self):
+        handler = self._make_handler(
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT
+        )
+
+        self.assertFalse(handler.should_capture_content())
 
     @patch.dict(
         os.environ,

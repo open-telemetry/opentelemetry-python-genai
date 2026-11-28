@@ -1,0 +1,50 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen2.5:0.5b",
+        "stream": false,
+        "messages": [],
+        "tools": []
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '64'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/chat
+  response:
+    body:
+      string: |-
+        {
+          "model": "qwen2.5:0.5b",
+          "created_at": "2026-10-29T15:20:22.6504334Z",
+          "message": {
+            "role": "assistant",
+            "content": ""
+          },
+          "done": true,
+          "done_reason": "load"
+        }
+    headers:
+      content-length:
+      - '145'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 29 Oct 2026 15:20:22 GMT
+    status:
+      code: 200
+      message: OK
+version: 1

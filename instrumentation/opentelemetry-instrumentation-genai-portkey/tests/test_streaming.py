@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -197,8 +196,8 @@ def test_sync_chat_streaming_basic(
             in span.attributes
         )
 
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert len(output_messages) == 1
         assert output_messages[0]["parts"][0]["content"] == "Hello world!"
@@ -281,8 +280,8 @@ async def test_async_chat_streaming_basic(
             == 4
         )
 
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert output_messages[0]["parts"][0]["content"] == "Async streaming."
 
@@ -432,7 +431,11 @@ async def test_async_streaming_caller_error_in_context_manager(
 )
 @pytest.mark.asyncio
 async def test_async_streaming_midstream_sdk_error(
-    tracer_provider, logger_provider, meter_provider, span_exporter
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    log_exporter,
 ):
     with instrument(
         PortkeyInstrumentor(),
@@ -476,6 +479,14 @@ async def test_async_streaming_midstream_sdk_error(
             span.attributes.get(ErrorAttributes.ERROR_TYPE)
             == "ConnectionResetError"
         )
+
+        (event,) = [
+            log.log_record
+            for log in log_exporter.get_finished_logs()
+            if log.log_record.event_name == "gen_ai.client.inference.exception"
+        ]
+        assert event.attributes["exception.type"] == "ConnectionResetError"
+        assert event.span_id == span.context.span_id
 
 
 def test_sync_prompt_streaming(
@@ -550,8 +561,8 @@ def test_sync_prompt_streaming(
             == 3
         )
 
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert output_messages[0]["parts"][0]["content"] == "Prompt stream."
 
@@ -633,8 +644,8 @@ def test_sync_streaming_tool_calls_multi_chunk(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert len(output_messages) == 1
         part = output_messages[0]["parts"][0]
@@ -684,8 +695,8 @@ def test_sync_streaming_no_finish_reason_defaults_to_stop(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.UNSET
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert output_messages[0]["finish_reason"] == "stop"
 

@@ -644,7 +644,8 @@ async def test_task_cancellation_finalizes_tool_once(
             await asyncio.gather(task, return_exceptions=True)
 
     assert handler._invocation_manager._invocations == {}
-    assert other_errors == []
+    # langchain-core >= 1.7.5 reports the cancellation to callbacks itself.
+    assert other_errors in ([], errors)
     handler.on_tool_error(errors[0], run_id=run_id)
     (tool_span,) = _spans(span_exporter, _LC_SCOPE)
     (http,) = _spans(span_exporter, _HTTP_SCOPE)

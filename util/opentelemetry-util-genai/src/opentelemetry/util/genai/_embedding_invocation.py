@@ -16,12 +16,11 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
 )
 from opentelemetry.util.genai.completion_hook import (
-    CompletionHook,
     _NoOpCompletionHook,
 )
 from opentelemetry.util.genai.utils import ContentCapturingMode
@@ -33,7 +32,7 @@ CLIENT_EMBEDDING_CONTEXT_KEY: Final[str] = (
 
 
 @dataclass
-class EmbeddingData(_ContextData):
+class EmbeddingData(ContextData):
     """Typed data passed from inner embedding invocations to the outer invocation."""
 
     provider_name: str | None = None
@@ -52,12 +51,13 @@ class EmbeddingInvocation(GenAIInvocation):
     Use handler.embedding(provider) rather than constructing this directly.
     """
 
+    _exception_event_name = "gen_ai.client.embeddings.exception"
+
     def __init__(
         self,
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         provider: str,
         *,
         request_model: str | None = None,
@@ -90,7 +90,7 @@ class EmbeddingInvocation(GenAIInvocation):
             tracer,
             instruments,
             logger,
-            completion_hook,
+            _NoOpCompletionHook(),
             operation_name=_operation_name,
             span_name=f"{_operation_name} {request_model}"
             if request_model
@@ -163,12 +163,12 @@ class EmbeddingInvocation(GenAIInvocation):
     def input_tokens(self, value: int | None) -> None:
         self._data.usage_input_tokens = value
 
-    def enrich_from_context(self, data: EmbeddingData) -> None:
+    def _enrich_from_context(self, data: EmbeddingData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values.
         """
-        self._data.merge(data, overwrite=False)
+        self._merge_context_data(self._data, data)
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
@@ -188,22 +188,11 @@ class EmbeddingInvocation(GenAIInvocation):
     def _get_metric_token_counts(self) -> dict[str, int]:
         if self._data.usage_input_tokens is not None:
             return {
-                GenAI.GenAiTokenTypeValues.INPUT.value: (
-                    self._data.usage_input_tokens
-                )
+                GenAI.GenAiTokenTypeValues.INPUT.value: self._data.usage_input_tokens
             }
         return {}
 
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-        ctx_data = get_value(
-            CLIENT_EMBEDDING_CONTEXT_KEY, context=self._span_context
-        )
-        if isinstance(ctx_data, EmbeddingData):
-            self.enrich_from_context(ctx_data)
-        self._data.attributes = self.attributes
-        self._data.metric_attributes = self.metric_attributes
+    def _get_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
             (
                 GenAI.GEN_AI_PROVIDER_NAME,
@@ -226,9 +215,21 @@ class EmbeddingInvocation(GenAIInvocation):
             (GenAI.GEN_AI_RESPONSE_MODEL, self._data.response_model),
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self._data.usage_input_tokens),
         )
-        attributes: dict[str, AttributeValue] = {
+        return {
             key: value for key, value in optional_attrs if value is not None
         }
+
+    def _apply_finish(self, error: Error | None = None) -> None:
+        if error is not None:
+            self._apply_error_attributes(error)
+        ctx_data = get_value(
+            CLIENT_EMBEDDING_CONTEXT_KEY, context=self._span_context
+        )
+        if isinstance(ctx_data, EmbeddingData):
+            self._enrich_from_context(ctx_data)
+        self._data.attributes = self.attributes
+        self._data.metric_attributes = self.metric_attributes
+        attributes = self._get_attributes()
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._record_client_metrics()
@@ -246,7 +247,6 @@ class SuppressedEmbeddingInvocation(EmbeddingInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         provider: str,
         *,
         request_model: str | None = None,
@@ -260,7 +260,6 @@ class SuppressedEmbeddingInvocation(EmbeddingInvocation):
             tracer,
             instruments,
             logger,
-            _NoOpCompletionHook(),
             provider,
             request_model=request_model,
             server_address=server_address,

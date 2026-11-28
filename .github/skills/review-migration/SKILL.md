@@ -259,8 +259,9 @@ async `def`, `Stream` / `AsyncStream` wrappers).
 For each distinct GenAI semconv operation the migrated package emits (`chat`,
 `embeddings`, `execute_tool`, `invoke_agent`, `invoke_workflow`,
 `create_agent`, …) there should be at least one happy-path scenario file under
-`tests/conformance/<op>.py` driven by `run_conformance(...)`. More
-scenarios per operation are fine but never required.
+`tests/conformance/<op>.py` driven by `run_conformance(...)`. New attributes, content-part
+types, modes, and streaming variants must be exercised by scenarios; extend an existing
+scenario when practical rather than requiring a separate file for each variant.
 
 | Operation | Scenario file | Status |
 |---|---|---|
@@ -272,7 +273,7 @@ or `uv run tox -e py312-test-instrumentation-genai-<lib>` fails.
 
 | Asset | Required content | Status |
 |---|---|---|
-| `README.rst` | install snippet, usage snippet importing from `opentelemetry.instrumentation.genai.<lib>`, pointer to `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` and the util-genai README, pointer to `tests/conformance/` (no `examples/`) | |
+| `README.rst` | install snippet, usage snippet importing from `opentelemetry.instrumentation.genai.<lib>`, pointer to `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` and the util-genai README, pointers to `tests/conformance/` and minimal usage examples | |
 | `src/opentelemetry/instrumentation/genai/<lib>/__init__.py` module docstring | usage example using the new module path; configuration section listing the env vars users actually need | |
 
 Render only rows that are missing/wrong/stale (e.g. README still imports

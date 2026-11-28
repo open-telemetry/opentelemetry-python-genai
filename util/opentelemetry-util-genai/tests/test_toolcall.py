@@ -48,7 +48,6 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
     ToolCallResponsePart,
 )
-from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 
 def _make_handler() -> TelemetryHandler:
@@ -287,7 +286,7 @@ def _make_span_exporter_and_handler():
     {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
 )
 def test_arguments_dict_serialized_to_json():
-    """dict arguments are JSON-serialized onto the span attribute."""
+    """dict arguments are recorded as structured AnyValue onto the span attribute."""
     span_exporter, handler = _make_span_exporter_and_handler()
     invocation = handler.tool("get_weather")
     invocation.arguments = {"location": "Paris", "unit": "celsius"}
@@ -295,9 +294,10 @@ def test_arguments_dict_serialized_to_json():
 
     attrs = span_exporter.get_finished_spans()[0].attributes
     assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS in attrs
-    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == gen_ai_json_dumps(
-        {"location": "Paris", "unit": "celsius"}
-    )
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == {
+        "location": "Paris",
+        "unit": "celsius",
+    }
 
 
 @patch.dict(
@@ -320,14 +320,14 @@ def test_arguments_str_passed_through():
     {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
 )
 def test_arguments_int_serialized_to_json():
-    """int arguments are serialized to JSON string."""
+    """int arguments are recorded directly."""
     span_exporter, handler = _make_span_exporter_and_handler()
     invocation = handler.tool("counter")
     invocation.arguments = 42
     invocation.stop()
 
     attrs = span_exporter.get_finished_spans()[0].attributes
-    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == "42"
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == 42
 
 
 @patch.dict(
@@ -346,7 +346,7 @@ def test_unconverted_objects_serialized():
     invocation.stop()
 
     attrs = span_exporter.get_finished_spans()[0].attributes
-    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == '{"k":"v"}'
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == {"k": "v"}
     assert attrs[GenAI.GEN_AI_TOOL_CALL_RESULT] == "1.5"
 
 
@@ -362,7 +362,7 @@ def test_non_finite_floats_not_recorded_as_invalid_json():
     invocation.stop()
 
     attrs = span_exporter.get_finished_spans()[0].attributes
-    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == '{"a":1}'
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == {"a": 1}
     assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
 
 
@@ -498,7 +498,7 @@ def test_tool_content_not_on_span_with_completion_hook():
         tracer_provider=tracer_provider, completion_hook=mock_hook
     )
     invocation = handler.tool("get_weather")
-    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content is False
     invocation.arguments = {"city": "Paris"}
     invocation.tool_result = "sunny"
     invocation.stop()
@@ -508,6 +508,7 @@ def test_tool_content_not_on_span_with_completion_hook():
     attrs = finished[0].attributes or {}
     assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
     assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
+    mock_hook.on_completion.assert_not_called()
 
 
 @patch.dict(
@@ -522,13 +523,11 @@ def test_direct_invocation_instantiation_falls_back_to_env():
     meter_provider = MeterProvider()
     meter = meter_provider.get_meter(__name__)
     mock_logger = MagicMock()
-    mock_hook = MagicMock(spec=CompletionHook)
 
     invocation = ToolInvocation(
         tracer=tracer,
         instruments=_Instruments(meter),
         logger=mock_logger,
-        completion_hook=mock_hook,
         name="direct_tool",
     )
     assert invocation.should_capture_content is True
@@ -549,7 +548,6 @@ def _invocation_with_exporter():
         tracer=tracer_provider.get_tracer(__name__),
         instruments=_Instruments(MeterProvider().get_meter(__name__)),
         logger=MagicMock(),
-        completion_hook=MagicMock(spec=CompletionHook),
         name="ctx_tool",
     )
     return invocation, span_exporter

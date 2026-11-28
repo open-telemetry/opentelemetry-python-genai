@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.context import Context, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -20,9 +21,10 @@ from opentelemetry.trace import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
+    _is_active_completion_hook,
     _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
@@ -87,7 +89,7 @@ CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
 
 
 @dataclass
-class InferenceData(_ContextData):
+class InferenceData(ContextData):
     """Typed data passed from inner inference invocations to the outer invocation."""
 
     conversation_id: str | None = None
@@ -146,7 +148,7 @@ class InferenceInvocation(GenAIInvocation):
     Use handler.inference(provider) rather than constructing this directly.
     """
 
-    _records_stream_telemetry = True
+    _exception_event_name = "gen_ai.client.inference.exception"
 
     # Set once the invocation is handed to a stream wrapper.
     _request_stream: bool | None = None
@@ -595,6 +597,11 @@ class InferenceInvocation(GenAIInvocation):
 
     @property
     def prompt_variables(self) -> Mapping[str, object] | None:
+        """Variables passed to the prompt template.
+
+        Recorded as the structured ``gen_ai.prompt.variables`` attribute when
+        content capturing is enabled.
+        """
         return self.data.prompt_variable
 
     @prompt_variables.setter
@@ -851,7 +858,7 @@ class InferenceInvocation(GenAIInvocation):
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
-    def enrich_from_context(self, data: InferenceData) -> None:
+    def _enrich_from_context(self, data: InferenceData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
@@ -863,7 +870,7 @@ class InferenceInvocation(GenAIInvocation):
         prompt_variable = self.data.prompt_variable
         tool_definitions = self.data.tool_definitions
 
-        self.data.merge(data, overwrite=False)
+        self._merge_context_data(self.data, data)
 
         if data.capture_content:
             self.data.input_messages = (
@@ -924,7 +931,7 @@ class InferenceInvocation(GenAIInvocation):
             CLIENT_INFERENCE_CONTEXT_KEY, context=self._span_context
         )
         if isinstance(ctx_data, InferenceData):
-            self.enrich_from_context(ctx_data)
+            self._enrich_from_context(ctx_data)
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
         if self._request_stream is not None:
@@ -964,6 +971,9 @@ class InferenceInvocation(GenAIInvocation):
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
+        if _is_active_completion_hook(self._completion_hook):
+            # Hooks run before emission and may mutate the content models.
+            attributes = dict(BoundedAttributes(attributes=attributes))
         return LogRecord(
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from unittest import TestCase
 from unittest.mock import patch
@@ -250,8 +249,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
 
         spans = self._get_finished_spans()
         raw = spans[0].attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
-        self.assertIsInstance(raw, str)
-        self.assertEqual(json.loads(raw), docs)
+        self.assertEqual(raw, tuple(docs))
 
     @patch.dict(
         os.environ,
@@ -280,18 +278,16 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
                     invocation.stop()
 
                 span = self._get_finished_spans()[0]
-                raw = span.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
-                self.assertIsInstance(raw, str)
-                documents = json.loads(raw)
+                documents = span.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
                 self.assertEqual(
                     documents,
-                    [
+                    (
                         {"id": "doc-1", "score": 0.95},
                         {"id": "doc-2", "score": 0.0},
-                        {"id": "doc-3", "score": None},
-                        {"id": None, "score": 0.5},
-                        {"id": None, "score": None},
-                    ],
+                        {"id": "doc-3"},
+                        {"score": 0.5},
+                        {},
+                    ),
                 )
                 self.assertIsInstance(documents[0]["id"], str)
                 self.assertIsInstance(documents[0]["score"], float)
@@ -302,6 +298,46 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
                     )
                 else:
                     self.assertEqual(span.status.status_code, StatusCode.UNSET)
+
+    @patch.dict(
+        os.environ,
+        {
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY",
+        },
+    )
+    def test_typed_documents_omit_non_finite_scores(self) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        for failed in (False, True):
+            for score in (float("nan"), float("inf"), float("-inf"), 0.0):
+                with self.subTest(failed=failed, score=score):
+                    self.span_exporter.clear()
+                    invocation = handler.retrieval()
+                    invocation.documents = [
+                        RetrievalDocument(id="doc", score=score),
+                        RetrievalDocument(score=score),
+                    ]
+                    if failed:
+                        invocation.fail(ValueError("retrieval failed"))
+                    else:
+                        invocation.stop()
+
+                    span = self._get_finished_spans()[0]
+                    documents = span.attributes[
+                        GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
+                    ]
+                    expected_score = {"score": 0.0} if score == 0.0 else {}
+                    expected = (
+                        {"id": "doc", **expected_score},
+                        expected_score,
+                    )
+                    self.assertEqual(documents, expected)
+                    if score == 0.0:
+                        for document in documents:
+                            self.assertIsInstance(document["score"], float)
+                    self.assertEqual(
+                        span.status.status_code,
+                        StatusCode.ERROR if failed else StatusCode.UNSET,
+                    )
 
     @patch.dict(
         os.environ,
@@ -323,8 +359,44 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         raw = self._get_finished_spans()[0].attributes[
             GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
+        self.assertEqual(raw, (legacy, {"id": "typed"}))
+
+    @patch.dict(
+        os.environ,
+        {
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY",
+        },
+    )
+    def test_legacy_documents_keep_defensive_conversion(self) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.retrieval()
+        invocation.documents = [
+            {},
+            {
+                "id": "legacy",
+                "content": "text",
+                "metadata": {"source": "db", "invalid": object()},
+            },
+            RetrievalDocument(id="typed"),
+            RetrievalDocument(),
+        ]
+        invocation.stop()
+
+        raw = self._get_finished_spans()[0].attributes[
+            GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
         self.assertEqual(
-            json.loads(raw), [legacy, {"id": "typed", "score": None}]
+            raw,
+            (
+                {},
+                {
+                    "id": "legacy",
+                    "content": "text",
+                    "metadata": {"source": "db"},
+                },
+                {"id": "typed"},
+                {},
+            ),
         )
 
     @patch.dict(
@@ -342,7 +414,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
 
         empty, absent = self._get_finished_spans()
         self.assertEqual(
-            empty.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS], "[]"
+            empty.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS], ()
         )
         self.assertNotIn(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS, absent.attributes)
 

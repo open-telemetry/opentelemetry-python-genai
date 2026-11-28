@@ -71,22 +71,19 @@ class InvokeModelStreamingScenario(Scenario):
             content_capture="SPAN_ONLY",
         ):
             with vcr.use_cassette(
-                "test_invoke_model_stream_titan_conformance.yaml"
+                "test_invoke_model_stream_llama_conformance.yaml"
             ):
                 client = boto3.client(
                     "bedrock-runtime", region_name="us-east-1"
                 )
                 response = client.invoke_model_with_response_stream(
-                    modelId="amazon.titan-text-express-v1",
+                    modelId="meta.llama3-8b-instruct-v1:0",
                     body=json.dumps(
                         {
-                            "inputText": "Say this is a test",
-                            "textGenerationConfig": {
-                                "maxTokenCount": 10,
-                                "temperature": 0.8,
-                                "topP": 1.0,
-                                "stopSequences": ["|"],
-                            },
+                            "prompt": "Say this is a test",
+                            "max_gen_len": 10,
+                            "temperature": 0.8,
+                            "top_p": 0.9,
                         }
                     ),
                 )

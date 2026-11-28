@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 from unittest import mock
@@ -19,6 +18,18 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
+
+from ..conftest import (
+    _IMAGE_URL,
+    _NESTED_IMAGE_URL,
+    _PDF_URL,
+    _REAL_PDF_BYTES,
+    _REAL_PNG_BYTES,
+    multimodal_input_message,
+)
+
+_IMAGE_FILE_ID = "file_01Y2U724wHRo2D9zsfYpvQhK"
+_PDF_FILE_ID = "file_01Y6v8cAFmoHdUxx9G1vVdcJ"
 
 
 class MultimodalScenario(Scenario):
@@ -49,99 +60,35 @@ class MultimodalScenario(Scenario):
                 meter_provider=meter_provider,
                 content_capture="SPAN_ONLY",
             ):
+                msg = multimodal_input_message()
+                msg["content"].extend(
+                    [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "file",
+                                "file_id": _IMAGE_FILE_ID,
+                            },
+                        },
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "file",
+                                "file_id": _PDF_FILE_ID,
+                            },
+                        },
+                    ]
+                )
                 with vcr.use_cassette(
                     "test_chat_anthropic_multimodal_image_llm_call.yaml"
                 ):
                     Anthropic().messages.create(
-                        model="claude-sonnet-4-20250514",
+                        model="claude-sonnet-5-5",
                         max_tokens=100,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": "Describe these images.",
-                                    },
-                                    {
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": "image/png",
-                                            "data": "QUJD",
-                                        },
-                                    },
-                                    {
-                                        "type": "image",
-                                        "source": {
-                                            "type": "url",
-                                            "url": "https://example.com/image.png",
-                                        },
-                                    },
-                                    {
-                                        "type": "document",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": "application/pdf",
-                                            "data": "QUJD",
-                                        },
-                                    },
-                                    {
-                                        "type": "document",
-                                        "source": {
-                                            "type": "url",
-                                            "url": "https://example.com/document.pdf",
-                                        },
-                                    },
-                                    {
-                                        "type": "document",
-                                        "source": {
-                                            "type": "text",
-                                            "media_type": "text/plain",
-                                            "data": "Document text",
-                                        },
-                                    },
-                                    {
-                                        "type": "document",
-                                        "title": "Reference",
-                                        "context": "Use the nested content.",
-                                        "citations": {"enabled": True},
-                                        "source": {
-                                            "type": "content",
-                                            "content": [
-                                                {
-                                                    "type": "text",
-                                                    "text": "Nested text",
-                                                },
-                                                {
-                                                    "type": "image",
-                                                    "source": {
-                                                        "type": "url",
-                                                        "url": (
-                                                            "https://example.com/nested.png"
-                                                        ),
-                                                    },
-                                                },
-                                            ],
-                                        },
-                                    },
-                                    {
-                                        "type": "image",
-                                        "source": {
-                                            "type": "file",
-                                            "file_id": "file-image",
-                                        },
-                                    },
-                                    {
-                                        "type": "document",
-                                        "source": {
-                                            "type": "file",
-                                            "file_id": "file-document",
-                                        },
-                                    },
-                                ],
-                            }
-                        ],
+                        messages=[msg],
+                        extra_headers={
+                            "anthropic-beta": "files-api-2025-04-14"
+                        },
                     )
 
     def validate(self, report: LiveCheckReport) -> None:
@@ -154,9 +101,7 @@ class MultimodalScenario(Scenario):
         ]
         assert chat_spans, "no chat span emitted"
 
-        input_messages = json.loads(
-            _attr(chat_spans[0], "gen_ai.input.messages")
-        )
+        input_messages = _attr(chat_spans[0], "gen_ai.input.messages")
         assert len(input_messages) == 1
         assert input_messages[0]["role"] == "user"
 
@@ -170,31 +115,29 @@ class MultimodalScenario(Scenario):
             "type": "blob",
             "mime_type": "image/png",
             "modality": "image",
-            "content": "QUJD",
+            "content": _REAL_PNG_BYTES,
         }
         assert parts[2] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "image",
-            "uri": "https://example.com/image.png",
+            "uri": _IMAGE_URL,
         }
         assert parts[3] == {
             "type": "blob",
             "mime_type": "application/pdf",
             "modality": "document",
-            "content": "QUJD",
+            "content": _REAL_PDF_BYTES,
         }
         assert parts[4] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "document",
-            "uri": "https://example.com/document.pdf",
+            "uri": _PDF_URL,
         }
         assert parts[5] == {
             "type": "blob",
             "mime_type": "text/plain",
             "modality": "document",
-            "content": "RG9jdW1lbnQgdGV4dA==",
+            "content": b"Document text",
         }
         assert parts[6] == {
             "type": "text",
@@ -202,21 +145,18 @@ class MultimodalScenario(Scenario):
         }
         assert parts[7] == {
             "type": "uri",
-            "mime_type": None,
             "modality": "image",
-            "uri": "https://example.com/nested.png",
+            "uri": _NESTED_IMAGE_URL,
         }
         assert parts[8] == {
             "type": "file",
-            "mime_type": None,
             "modality": "image",
-            "file_id": "file-image",
+            "file_id": _IMAGE_FILE_ID,
         }
         assert parts[9] == {
             "type": "file",
-            "mime_type": None,
             "modality": "document",
-            "file_id": "file-document",
+            "file_id": _PDF_FILE_ID,
         }
 
 

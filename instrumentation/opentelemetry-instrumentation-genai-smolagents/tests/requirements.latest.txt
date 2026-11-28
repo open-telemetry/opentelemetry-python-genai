@@ -32,5 +32,5 @@
 smolagents[openai]~=1.26.0
 wrapt>=2.5.2
 
--e util/opentelemetry-util-genai
+-e util/opentelemetry-util-genai[wrapt]
 -e instrumentation/opentelemetry-instrumentation-genai-smolagents

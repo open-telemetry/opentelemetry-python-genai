@@ -12,6 +12,7 @@ on:
         - opentelemetry-instrumentation-google-genai
         - opentelemetry-instrumentation-genai-langchain
         - opentelemetry-instrumentation-genai-llama-index
+        - opentelemetry-instrumentation-genai-ollama
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-instrumentation-genai-portkey
@@ -26,7 +27,7 @@ permissions:
   contents: read
 
 env:
-  UV_FROZEN: "true"
+  UV_LOCKED: "true"
 
 run-name: "Prepare backport patch: ${{ inputs.package }}"
 
