@@ -1,0 +1,99 @@
+interactions:
+- request:
+    body: |-
+      {
+        "schemaVersion": "messages-v1",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "text": "Reply with exactly: Hello world!"
+              }
+            ]
+          }
+        ],
+        "inferenceConfig": {
+          "maxTokens": 24,
+          "temperature": 0
+        }
+      }
+    headers:
+      Content-Length:
+      - '179'
+      Content-Type:
+      - !!binary |
+        YXBwbGljYXRpb24vanNvbg==
+      User-Agent:
+      - !!binary |
+        Qm90bzMvMS40My4xMTcgbWQvQm90b2NvcmUjMS40My4xMTcgdWEvMi4xIG9zL2xpbnV4IzYuOC4w
+        LTEzOC1nZW5lcmljIG1kL2FyY2gjeDg2XzY0IGxhbmcvcHl0aG9uIzMuMTEuMTggbWQvcHlpbXBs
+        I0NQeXRob24gbS9iLGcsWixEIGNmZy9yZXRyeS1tb2RlI2xlZ2FjeSBCb3RvY29yZS8xLjQzLjEx
+        Nw==
+      X-Amz-Date:
+      - !!binary |
+        MjAyNjExMjNUMTAzNDMyWg==
+      X-Amzn-Bedrock-Accept:
+      - !!binary |
+        YXBwbGljYXRpb24vanNvbg==
+      amz-sdk-invocation-id:
+      - !!binary |
+        NjQwZjk2ZjgtMTZmMy00MjU1LWJkYTAtNmMxOTU5ZDdmMzYx
+      amz-sdk-request:
+      - !!binary |
+        YXR0ZW1wdD0x
+      authorization:
+      - Bearer test_aws_authorization
+      x-amz-security-token:
+      - test_aws_token
+    method: POST
+    uri: https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-micro-v1%3A0/invoke-with-response-stream
+  response:
+    body:
+      string: !!binary |
+        AAAAzAAAAEuoyUKrCzpldmVudC10eXBlBwAFY2h1bmsNOmNvbnRlbnQtdHlwZQcAEGFwcGxpY2F0
+        aW9uL2pzb24NOm1lc3NhZ2UtdHlwZQcABWV2ZW50eyJieXRlcyI6ImV5SnRaWE56WVdkbFUzUmhj
+        blFpT25zaWNtOXNaU0k2SW1GemMybHpkR0Z1ZENKOWZRPT0iLCJwIjoiYWJjZGVmZ2hpamtsbW5v
+        cHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QIn0ANHGfAAAA6wAAAEvbKLG/CzpldmVudC10eXBl
+        BwAFY2h1bmsNOmNvbnRlbnQtdHlwZQcAEGFwcGxpY2F0aW9uL2pzb24NOm1lc3NhZ2UtdHlwZQcA
+        BWV2ZW50eyJieXRlcyI6ImV5SmpiMjUwWlc1MFFteHZZMnRFWld4MFlTSTZleUprWld4MFlTSTZl
+        eUowWlhoMElqb2lTR1ZzYkc4aWZTd2lZMjl1ZEdWdWRFSnNiMk5yU1c1a1pYZ2lPakI5ZlE9PSIs
+        InAiOiJhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ekFCQyJ9x8FlsgAAAMAAAABLbTmvqgs6ZXZl
+        bnQtdHlwZQcABWNodW5rDTpjb250ZW50LXR5cGUHABBhcHBsaWNhdGlvbi9qc29uDTptZXNzYWdl
+        LXR5cGUHAAVldmVudHsiYnl0ZXMiOiJleUpqYjI1MFpXNTBRbXh2WTJ0VGRHOXdJanA3SW1OdmJu
+        UmxiblJDYkc5amEwbHVaR1Y0SWpvd2ZYMD0iLCJwIjoiYWJjZGVmZ2hpamtsbW5vcHFyc3R1diJ9
+        C+8QjQAAANQAAABL+Fme6As6ZXZlbnQtdHlwZQcABWNodW5rDTpjb250ZW50LXR5cGUHABBhcHBs
+        aWNhdGlvbi9qc29uDTptZXNzYWdlLXR5cGUHAAVldmVudHsiYnl0ZXMiOiJleUpqYjI1MFpXNTBR
+        bXh2WTJ0RVpXeDBZU0k2ZXlKa1pXeDBZU0k2ZXlKMFpYaDBJam9pSUhkdmNteGtJU0o5TENKamIy
+        NTBaVzUwUW14dlkydEpibVJsZUNJNk1YMTkiLCJwIjoiYWJjZGVmIn2myV9BAAAAzgAAAEvSCRHL
+        CzpldmVudC10eXBlBwAFY2h1bmsNOmNvbnRlbnQtdHlwZQcAEGFwcGxpY2F0aW9uL2pzb24NOm1l
+        c3NhZ2UtdHlwZQcABWV2ZW50eyJieXRlcyI6ImV5SmpiMjUwWlc1MFFteHZZMnRUZEc5d0lqcDdJ
+        bU52Ym5SbGJuUkNiRzlqYTBsdVpHVjRJam94ZlgwPSIsInAiOiJhYmNkZWZnaGlqa2xtbm9wcXJz
+        dHV2d3h5ekFCQ0RFRkdISUoifa34pcUAAAC1AAAAS1wLwBULOmV2ZW50LXR5cGUHAAVjaHVuaw06
+        Y29udGVudC10eXBlBwAQYXBwbGljYXRpb24vanNvbg06bWVzc2FnZS10eXBlBwAFZXZlbnR7ImJ5
+        dGVzIjoiZXlKdFpYTnpZV2RsVTNSdmNDSTZleUp6ZEc5d1VtVmhjMjl1SWpvaVpXNWtYM1IxY200
+        aWZYMD0iLCJwIjoiYWJjZGVmZ2hpamtsbW5vIn2S0vngAAAB8AAAAEsHRMSJCzpldmVudC10eXBl
+        BwAFY2h1bmsNOmNvbnRlbnQtdHlwZQcAEGFwcGxpY2F0aW9uL2pzb24NOm1lc3NhZ2UtdHlwZQcA
+        BWV2ZW50eyJieXRlcyI6ImV5SnRaWFJoWkdGMFlTSTZleUoxYzJGblpTSTZleUpwYm5CMWRGUnZh
+        MlZ1Y3lJNk55d2liM1YwY0hWMFZHOXJaVzV6SWpvMExDSmpZV05vWlZKbFlXUkpibkIxZEZSdmEy
+        VnVRMjkxYm5RaU9qQXNJbU5oWTJobFYzSnBkR1ZKYm5CMWRGUnZhMlZ1UTI5MWJuUWlPakI5TENK
+        dFpYUnlhV056SWpwN2ZTd2lkSEpoWTJVaU9udDlmU3dpWVcxaGVtOXVMV0psWkhKdlkyc3RhVzUy
+        YjJOaGRHbHZiazFsZEhKcFkzTWlPbnNpYVc1d2RYUlViMnRsYmtOdmRXNTBJam93TENKdmRYUndk
+        WFJVYjJ0bGJrTnZkVzUwSWpvd0xDSnBiblp2WTJGMGFXOXVUR0YwWlc1amVTSTZNakk0TENKbWFY
+        SnpkRUo1ZEdWTVlYUmxibU41SWpveE16WjlmUT09IiwicCI6ImFiY2RlZmdoaWprbG1ub3BxcnN0
+        dXZ3eHl6QUJDRCJ9ipr+ng==
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/vnd.amazon.eventstream
+      Date:
+      - Mon, 23 Nov 2026 10:34:33 GMT
+      Transfer-Encoding:
+      - chunked
+      X-Amzn-Bedrock-Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

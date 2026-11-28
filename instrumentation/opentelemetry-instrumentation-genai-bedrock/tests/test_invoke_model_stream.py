@@ -26,8 +26,62 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import (
     server_attributes as ServerAttributes,
 )
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import SpanKind, StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
+
+
+@pytest.mark.vcr
+def test_invoke_model_stream_nova_with_content(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    model_id = "amazon.nova-micro-v1:0"
+    response = bedrock_client.invoke_model_with_response_stream(
+        modelId=model_id,
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps(
+            {
+                "schemaVersion": "messages-v1",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": "Reply with exactly: Hello world!"}
+                        ],
+                    }
+                ],
+                "inferenceConfig": {"maxTokens": 24, "temperature": 0},
+            }
+        ),
+    )
+
+    assert list(response["body"])
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == f"chat {model_id}"
+    assert span.kind == SpanKind.CLIENT
+    assert span.status.status_code == StatusCode.UNSET
+    assert span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME] == "aws.bedrock"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model_id
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+    (output_message,) = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    assert output_message["role"] == "assistant"
+    assert output_message["parts"] == (
+        {"type": "text", "content": "Hello"},
+        {"type": "text", "content": " world!"},
+    )
+    input_tokens = span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS]
+    output_tokens = span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+    assert type(input_tokens) is int and input_tokens == 7
+    assert type(output_tokens) is int and output_tokens == 4
 
 
 def test_stream_wrapper_anthropic_messages(
