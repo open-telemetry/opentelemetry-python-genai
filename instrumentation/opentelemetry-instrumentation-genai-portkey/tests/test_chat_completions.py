@@ -1625,6 +1625,11 @@ _FINISH_REASONS = [
     ("TOOL_CALLS", "tool_call"),
     ("function_call", "tool_call"),
     ("STOP", "stop"),
+    ("tool_use", "tool_call"),
+    ("end_turn", "stop"),
+    ("stop_sequence", "stop"),
+    ("max_tokens", "length"),
+    ("MAX_TOKENS", "length"),
 ]
 
 

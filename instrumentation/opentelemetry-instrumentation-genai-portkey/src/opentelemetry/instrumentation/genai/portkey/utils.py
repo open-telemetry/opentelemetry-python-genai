@@ -89,14 +89,24 @@ def get_value(value: Any) -> Any:
     return value if value_is_set(value) else None
 
 
+# Without strict OpenAI compliance, Portkey forwards the provider's own
+# finish reason, e.g. ``TOOL_CALLS``, Anthropic's ``tool_use`` or Gemini's
+# ``MAX_TOKENS``. Keys are lowercased; the Anthropic entries match the
+# Anthropic instrumentation's ``normalize_finish_reason``.
+_FINISH_REASONS = {
+    "tool_calls": "tool_call",
+    "function_call": "tool_call",
+    "tool_use": "tool_call",
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "max_tokens": "length",
+}
+
+
 def map_finish_reason(finish_reason: object) -> str:
     """Map a Portkey finish reason to the GenAI semantic convention value."""
-    # Without strict OpenAI compliance, Portkey forwards provider-cased
-    # values such as ``TOOL_CALLS`` or ``STOP``.
     reason = str(finish_reason).lower()
-    if reason in ("tool_calls", "function_call"):
-        return "tool_call"
-    return reason
+    return _FINISH_REASONS.get(reason, reason)
 
 
 def is_streaming(kwargs: dict[str, Any]) -> bool:
