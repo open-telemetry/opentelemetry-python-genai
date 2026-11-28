@@ -653,7 +653,10 @@ def test_sync_streaming_tool_calls_multi_chunk(
         assert part["name"] == "get_weather"
         assert part["id"] == "call_abc"
         assert part["arguments"] == {"location": "Paris"}
-        assert output_messages[0]["finish_reason"] == "tool_calls"
+        assert output_messages[0]["finish_reason"] == "tool_call"
+        assert span.attributes[
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        ] == ("tool_call",)
 
 
 def test_sync_streaming_no_finish_reason_defaults_to_stop(

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Iterator
+from importlib.metadata import version
 from types import GeneratorType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -31,6 +32,8 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
+
+from .conformance.tool_calling import ToolCallingScenario
 
 _has_async_portkey = AsyncPortkey is not None
 
@@ -494,6 +497,9 @@ def test_sync_chat_completions_tools(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
+        assert span.attributes[
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        ] == ("tool_call",)
 
         tool_defs = span.attributes.get(
             GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
@@ -506,6 +512,7 @@ def test_sync_chat_completions_tools(
             GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert len(output_messages) == 1
+        assert output_messages[0]["finish_reason"] == "tool_call"
         parts = output_messages[0]["parts"]
         assert len(parts) == 1
         assert parts[0]["type"] == "tool_call"
@@ -1587,3 +1594,27 @@ def test_chat_completions_provider_mapping(
             span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
             == expected_provider
         )
+
+
+@pytest.mark.skipif(
+    int(version("portkey-ai").split(".")[0]) < 2,
+    reason="The cassette was recorded with portkey-ai 2.x responses.",
+)
+def test_tool_calling_cassette_records_semconv_finish_reasons(
+    tracer_provider, logger_provider, meter_provider, span_exporter, vcr
+):
+    # The recording keeps Portkey's provider-cased TOOL_CALLS and STOP values.
+    ToolCallingScenario().run(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        vcr=vcr,
+    )
+
+    tool_call_span, final_span = span_exporter.get_finished_spans()
+    assert tool_call_span.attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
+    assert final_span.attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("stop",)
