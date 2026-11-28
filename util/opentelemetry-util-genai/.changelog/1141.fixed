@@ -1,0 +1,1 @@
+Omit zero `gen_ai.usage.cache_read.input_tokens` and `gen_ai.usage.cache_write.input_tokens` on remote agent invocation spans, matching inference spans and the semconv "when available and non-zero" requirement.

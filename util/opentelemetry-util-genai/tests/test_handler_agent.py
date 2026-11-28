@@ -618,6 +618,18 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         assert attrs["gen_ai.usage.cache_write.input_tokens"] == 25
         assert attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 50
 
+    def test_zero_cache_token_attributes_omitted(self):
+        invocation = self.handler.invoke_remote_agent("openai")
+        invocation.input_tokens = 100
+        invocation.cache_write_input_tokens = 0
+        invocation.cache_read_input_tokens = 0
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 100
+        assert "gen_ai.usage.cache_write.input_tokens" not in attrs
+        assert GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in attrs
+
     def test_server_attributes(self):
         invocation = self.handler.invoke_remote_agent(
             "openai",

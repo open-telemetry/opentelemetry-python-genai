@@ -654,11 +654,12 @@ class RemoteAgentInvocation(AgentInvocation):
 
     def _get_usage_attributes(self) -> dict[str, AttributeValue]:
         attrs = super()._get_usage_attributes()
-        if self._data.usage_cache_write_input_tokens is not None:
+        # Cache tokens are recommended only when non-zero, as on inference spans.
+        if self._data.usage_cache_write_input_tokens:
             attrs[_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = (
                 self._data.usage_cache_write_input_tokens
             )
-        if self._data.usage_cache_read_input_tokens is not None:
+        if self._data.usage_cache_read_input_tokens:
             attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = (
                 self._data.usage_cache_read_input_tokens
             )
