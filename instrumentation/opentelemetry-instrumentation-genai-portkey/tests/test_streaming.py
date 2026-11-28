@@ -776,3 +776,113 @@ async def test_async_streaming_request_failure_records_span(
         assert (
             span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
         )
+
+
+_FINISH_REASONS = [
+    ("tool_calls", "tool_call"),
+    ("TOOL_CALLS", "tool_call"),
+    ("function_call", "tool_call"),
+    ("STOP", "stop"),
+]
+
+
+def _finish_chunks(raw: str) -> list[SimpleNamespace]:
+    def chunk(delta, finish_reason):
+        return SimpleNamespace(
+            id="stream-fr",
+            model="gpt-4o",
+            choices=[
+                SimpleNamespace(
+                    index=0, delta=delta, finish_reason=finish_reason
+                )
+            ],
+            usage=None,
+        )
+
+    return [
+        chunk(SimpleNamespace(role="assistant", content="Hi"), None),
+        chunk(SimpleNamespace(content=None), raw),
+    ]
+
+
+def _assert_finish_reason(span, expected: str, content_capture) -> None:
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        expected,
+    )
+    output_messages = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    if content_capture is None:
+        assert output_messages is None
+    else:
+        assert output_messages[0]["finish_reason"] == expected
+
+
+@pytest.mark.parametrize("content_capture", ["SPAN_ONLY", None])
+@pytest.mark.parametrize("raw, expected", _FINISH_REASONS)
+def test_sync_streaming_normalizes_finish_reason(
+    raw,
+    expected,
+    content_capture,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture=content_capture,
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        _setup_mock_stream(p, _MockSyncStream(_finish_chunks(raw)))
+
+        stream = p.chat.completions.create(
+            messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-4o",
+            stream=True,
+        )
+        for _ in stream:
+            pass
+
+        (span,) = span_exporter.get_finished_spans()
+        _assert_finish_reason(span, expected, content_capture)
+
+
+@pytest.mark.skipif(
+    not _has_async_portkey, reason="AsyncPortkey not available"
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_capture", ["SPAN_ONLY", None])
+@pytest.mark.parametrize("raw, expected", _FINISH_REASONS)
+async def test_async_streaming_normalizes_finish_reason(
+    raw,
+    expected,
+    content_capture,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture=content_capture,
+    ):
+        ap = AsyncPortkey(api_key="test_pk", provider="openai")
+        _setup_async_mock_stream(ap, _MockAsyncStream(_finish_chunks(raw)))
+
+        stream = await ap.chat.completions.create(
+            messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-4o",
+            stream=True,
+        )
+        async for _ in stream:
+            pass
+
+        (span,) = span_exporter.get_finished_spans()
+        _assert_finish_reason(span, expected, content_capture)

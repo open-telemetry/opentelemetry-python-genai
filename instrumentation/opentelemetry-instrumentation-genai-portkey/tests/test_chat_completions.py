@@ -1618,3 +1618,88 @@ def test_tool_calling_cassette_records_semconv_finish_reasons(
     assert final_span.attributes[
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
     ] == ("stop",)
+
+
+_FINISH_REASONS = [
+    ("tool_calls", "tool_call"),
+    ("TOOL_CALLS", "tool_call"),
+    ("function_call", "tool_call"),
+    ("STOP", "stop"),
+]
+
+
+def _assert_finish_reason(span, expected: str, content_capture) -> None:
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        expected,
+    )
+    output_messages = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    if content_capture is None:
+        assert output_messages is None
+    else:
+        assert output_messages[0]["finish_reason"] == expected
+
+
+@pytest.mark.parametrize("content_capture", ["SPAN_ONLY", None])
+@pytest.mark.parametrize("raw, expected", _FINISH_REASONS)
+def test_sync_chat_completions_normalizes_finish_reason(
+    raw,
+    expected,
+    content_capture,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture=content_capture,
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        _setup_mock_chat(p, _create_mock_chat_completion(finish_reason=raw))
+
+        p.chat.completions.create(
+            messages=[{"role": "user", "content": "Hi"}], model="gpt-4o"
+        )
+
+        (span,) = span_exporter.get_finished_spans()
+        _assert_finish_reason(span, expected, content_capture)
+
+
+@pytest.mark.skipif(
+    not _has_async_portkey, reason="AsyncPortkey not available"
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_capture", ["SPAN_ONLY", None])
+@pytest.mark.parametrize("raw, expected", _FINISH_REASONS)
+async def test_async_chat_completions_normalizes_finish_reason(
+    raw,
+    expected,
+    content_capture,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture=content_capture,
+    ):
+        ap = AsyncPortkey(api_key="test_pk", provider="openai")
+        _setup_async_mock_chat(
+            ap, _create_mock_chat_completion(finish_reason=raw)
+        )
+
+        await ap.chat.completions.create(
+            messages=[{"role": "user", "content": "Hi"}], model="gpt-4o"
+        )
+
+        (span,) = span_exporter.get_finished_spans()
+        _assert_finish_reason(span, expected, content_capture)
