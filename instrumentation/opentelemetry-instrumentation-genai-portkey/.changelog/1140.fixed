@@ -1,0 +1,1 @@
+Map finish reasons Portkey forwards from providers to the semconv values in `gen_ai.response.finish_reasons`: `tool_calls`/`function_call`/`tool_use` to `tool_call`, `end_turn`/`stop_sequence` to `stop`, `max_tokens` to `length`, and lowercase the rest (e.g. `STOP`).

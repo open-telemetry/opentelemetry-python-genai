@@ -89,6 +89,26 @@ def get_value(value: Any) -> Any:
     return value if value_is_set(value) else None
 
 
+# Without strict OpenAI compliance, Portkey forwards the provider's own
+# finish reason, e.g. ``TOOL_CALLS``, Anthropic's ``tool_use`` or Gemini's
+# ``MAX_TOKENS``. Keys are lowercased; the Anthropic entries match the
+# Anthropic instrumentation's ``normalize_finish_reason``.
+_FINISH_REASONS = {
+    "tool_calls": "tool_call",
+    "function_call": "tool_call",
+    "tool_use": "tool_call",
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "max_tokens": "length",
+}
+
+
+def map_finish_reason(finish_reason: object) -> str:
+    """Map a Portkey finish reason to the GenAI semantic convention value."""
+    reason = str(finish_reason).lower()
+    return _FINISH_REASONS.get(reason, reason)
+
+
 def is_streaming(kwargs: dict[str, Any]) -> bool:
     """Check whether the request is configured for streaming."""
     stream = kwargs.get("stream")
@@ -300,7 +320,9 @@ def _prepare_output_messages(
         return []
     output_messages: list[OutputMessage] = []
     for choice in choices:
-        finish_reason = get_property_value(choice, "finish_reason") or "stop"
+        finish_reason = map_finish_reason(
+            get_property_value(choice, "finish_reason") or "stop"
+        )
         parts: list[MessagePart] = []
         message = get_property_value(choice, "message")
         role = Role.ASSISTANT.value
@@ -324,7 +346,7 @@ def _prepare_output_messages(
             OutputMessage(
                 role=role,
                 parts=parts,
-                finish_reason=str(finish_reason),
+                finish_reason=finish_reason,
             )
         )
     return output_messages
@@ -463,7 +485,7 @@ def set_response_properties(
     choices = get_property_value(result, "choices")
     if choices is not None and isinstance(choices, Iterable):
         invocation.finish_reasons = [
-            str(fr)
+            map_finish_reason(fr)
             for choice in cast(Iterable[Any], choices)
             if (fr := get_property_value(choice, "finish_reason")) is not None
         ]

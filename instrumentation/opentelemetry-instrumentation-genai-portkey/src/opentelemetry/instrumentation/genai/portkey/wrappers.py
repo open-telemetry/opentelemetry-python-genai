@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from opentelemetry.instrumentation.genai.portkey.utils import (
     get_property_value,
+    map_finish_reason,
     set_usage_properties,
 )
 from opentelemetry.util.genai.invocation import InferenceInvocation
@@ -171,7 +172,9 @@ class _PortkeyStreamMixin:
             output_messages.append(
                 OutputMessage(
                     role=Role.ASSISTANT.value,
-                    finish_reason=choice.finish_reason or "stop",
+                    finish_reason=map_finish_reason(
+                        choice.finish_reason or "stop"
+                    ),
                     parts=parts,
                 )
             )
@@ -186,7 +189,7 @@ class _PortkeyStreamMixin:
     def _cleanup(self, error: BaseException | None = None) -> None:
         self._self_invocation.response_id = self._self_response_id
         self._self_invocation.finish_reasons = [
-            choice.finish_reason
+            map_finish_reason(choice.finish_reason)
             for choice in self._self_choice_buffers
             if choice.finish_reason
         ]
